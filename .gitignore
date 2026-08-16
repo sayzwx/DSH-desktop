@@ -1,0 +1,19 @@
+# 依赖
+node_modules/
+
+# 运行日志
+*.log
+
+# 本地环境变量 / 密钥（不要入库）
+.env
+
+# 独立工程：Wallpaper Engine 壁纸（非桌面端 UI 本体）
+wallpaper-engine/
+
+# 系统杂物
+.DS_Store
+Thumbs.db
+
+# Python 缓存
+__pycache__/
+*.pyc

@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' file:;" />
+  <title>DeepSeek Harness · 深空观测站</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <video id="bgvideo" autoplay muted loop playsinline poster="bg.jpg" src="bg-animated.mp4"></video>
+  <canvas id="bgfx"></canvas>
+
+  <aside class="dock" id="dock" hidden>
+    <div class="dock-head">
+      <span class="dock-title" id="dockTitle">GitHub</span>
+      <button class="mini-btn dock-close" id="dockClose" type="button" title="关闭侧边栏">✕</button>
+    </div>
+    <div class="dock-body" id="dockBody"></div>
+  </aside>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="logo">
+      <div class="logo-mark">DSH</div>
+      <div class="logo-text">
+        <strong>观测站</strong>
+        <span>DeepSeek Harness</span>
+      </div>
+    </div>
+    <nav>
+      <button class="nav-btn active" data-page="dashboard">
+        <span class="nav-icon">◉</span><span class="nav-label">仪表盘</span>
+      </button>
+      <button class="nav-btn" data-page="chat">
+        <span class="nav-icon">✉</span><span class="nav-label">对话</span>
+      </button>
+      <button class="nav-btn" data-page="logs">
+        <span class="nav-icon">≋</span><span class="nav-label">实时日志</span>
+      </button>
+      <button class="nav-btn" data-page="results">
+        <span class="nav-icon">✦</span><span class="nav-label">结果查看</span>
+      </button>
+      <button class="nav-btn" data-page="settings">
+        <span class="nav-icon">☾</span><span class="nav-label">设置与主题</span>
+      </button>
+      <div class="nav-divider"></div>
+      <button class="nav-btn dock-btn" data-dock="github">
+        <span class="nav-icon">🐙</span><span class="nav-label">GitHub</span>
+      </button>
+      <button class="nav-btn dock-btn" data-dock="mcp">
+        <span class="nav-icon">🔌</span><span class="nav-label">MCP 工具</span>
+      </button>
+      <button class="nav-btn dock-btn" data-dock="skill">
+        <span class="nav-icon">🧠</span><span class="nav-label">技能</span>
+      </button>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="status-pill" id="statusPill"><span class="dot"></span><span id="statusText">未运行</span></div>
+      <button class="mini-btn" id="openWebBtn" disabled>打开 Web UI (:3080)</button>
+    </div>
+  </aside>
+
+  <main class="content">
+    <section class="page active" id="page-dashboard">
+      <div class="cosmic-title">
+        <h1>深空观测台</h1>
+        <p class="subtitle">深空观测站主控台 · DeepSeek Harness 星际通讯终端</p>
+      </div>
+
+      <div class="card-row">
+        <div class="card" id="statusCard">
+          <div class="card-title">⚡ 服务状态</div>
+          <div class="big-status" id="bigStatus">未运行</div>
+          <div class="meta" id="metaInfo">正在与深空建立连接…</div>
+        </div>
+        <div class="card actions-card">
+          <div class="card-title">🚀 发射控制</div>
+          <button class="primary-btn" id="startBtn">启动 Harness</button>
+          <button class="danger-btn" id="stopBtn" disabled>停止 Harness</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">📊 深空数据</div>
+        <div class="row-actions" style="margin-top:10px">
+          <span class="meta" id="usageMeta" style="margin:0;flex:1">正在读取使用数据…</span>
+          <button class="mini-btn" id="refreshUsageBtn">刷新</button>
+        </div>
+        <div class="usage-grid" id="usageGrid"></div>
+        <div class="usage-charts" id="usageCharts"></div>
+        <div class="usage-table-wrap">
+          <table class="tbl">
+            <thead>
+              <tr><th>会话</th><th>轮次</th><th>输入 Tokens</th><th>缓存读取</th><th>输出 Tokens</th><th>状态</th></tr>
+            </thead>
+            <tbody id="usageTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="page" id="page-logs">
+      <div class="page-head">
+        <div class="cosmic-title">
+          <h1>实时信号流</h1>
+          <p class="subtitle">监测来自深空的每一个信号</p>
+        </div>
+        <div class="head-actions">
+          <label class="check"><input type="checkbox" id="followLog" checked /> 自动滚动</label>
+          <button class="mini-btn" id="clearLog">清空</button>
+        </div>
+      </div>
+      <pre class="log-view" id="logView"></pre>
+    </section>
+
+    <section class="page" id="page-results">
+      <div class="cosmic-title">
+        <h1>星图档案</h1>
+        <p class="subtitle">DSH_HOME: <code id="resultsHome"></code> · 会话与结果数据目录</p>
+      </div>
+      <div class="card">
+        <table class="tbl">
+          <thead>
+            <tr><th>名称</th><th>类型</th><th>修改时间</th><th>路径</th></tr>
+          </thead>
+          <tbody id="resultsBody">
+            <tr><td colspan="4" class="empty">正在扫描星域…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="page" id="page-chat">
+      <div class="chat-shell" id="chatShell" style="display:none">
+        <aside class="chat-sessions" id="chatSessionsPanel">
+          <div class="chat-sessions-head">
+            <span class="cs-label">星际会话</span>
+            <div class="cs-head-actions">
+              <button class="mini-btn" id="chatNewSession">＋ 新会话</button>
+              <button class="mini-btn cs-collapse" id="chatCollapseSessions" title="收起历史面板">«</button>
+            </div>
+          </div>
+          <div class="chat-sessions-list" id="chatSessions"></div>
+        </aside>
+        <button class="chat-collapsed-bar" id="chatCollapsedBar" hidden title="展开历史面板">☰</button>
+        <div class="chat-main">
+          <div class="chat-messages" id="chatMessages"></div>
+          <div class="chat-drafts" id="chatDrafts" hidden></div>
+          <div class="chat-toolbar" id="chatToolbar">
+            <div class="ct-model" id="ctModel">
+              <button class="ct-model-btn" id="ctModelBtn" type="button" title="选择模型">
+                <span class="ct-model-icon">◉</span><span class="ct-model-name" id="ctModelName">模型…</span><span class="ct-caret">▾</span>
+              </button>
+              <div class="ct-model-panel" id="ctModelPanel" hidden></div>
+            </div>
+            <div class="ct-ws" id="ctWs">
+              <button class="ct-ws-btn" id="ctWsBtn" type="button" title="工作区：筛选会话 / 新会话归属">
+                <span class="ct-ws-icon">◈</span><span class="ct-ws-name" id="ctWsName">全部</span><span class="ct-caret">▾</span>
+              </button>
+              <div class="ct-ws-panel" id="ctWsPanel" hidden></div>
+            </div>
+            <div class="ct-effort" id="ctEffortRow" hidden>
+              <span class="ct-effort-label">推理</span>
+              <div class="ct-effort-seg" id="ctEffortSeg"></div>
+            </div>
+            <div class="ct-status" id="ctStatus">
+              <span class="ct-status-dot idle" id="ctStatusDot"></span>
+              <span id="ctStatusText">空闲</span>
+            </div>
+            <button class="ct-other" id="ctOtherRunning" hidden></button>
+          </div>
+          <div class="chat-input-row">
+            <textarea id="chatInput" rows="1" placeholder="向深空发送信号…（Enter 发送 / 可粘贴图片）"></textarea>
+            <button class="primary-btn" id="chatSend">发送</button>
+            <button class="danger-btn" id="chatCancel" disabled>停止</button>
+          </div>
+        </div>
+      </div>
+      <div class="chat-placeholder" id="chatPlaceholder">
+        <div class="chat-ph-icon">✉</div>
+        <p>通讯链路未建立</p>
+        <p class="meta">启动 Harness 后，即可与深空智能体对话</p>
+        <button class="primary-btn" id="chatStartBtn">启动 Harness</button>
+      </div>
+    </section>
+
+    <section class="page" id="page-settings">
+      <div class="cosmic-title">
+        <h1>观测站配置</h1>
+        <p class="subtitle">分模块配置 · 点击模块标题展开 / 收起</p>
+      </div>
+
+      <div class="settings-modules">
+
+        <div class="settings-module open" data-module="theme">
+          <div class="settings-module-head">
+            <span class="sm-icon">🌌</span>
+            <span class="sm-title">星域主题</span>
+            <span class="sm-chevron">▾</span>
+          </div>
+          <div class="settings-module-body">
+            <div class="sm-row">
+              <label class="sm-label" for="themeSelect">主题</label>
+              <select id="themeSelect" class="sm-select">
+                <option value="dark">深空</option>
+                <option value="aurora">极光</option>
+                <option value="comet">彗星金</option>
+                <option value="custom">自定义</option>
+              </select>
+            </div>
+            <div class="custom-row" id="customColorRow" hidden>
+              <label>主色 <input type="color" id="accentColor" value="#00D4AA" /></label>
+              <label>背景 <input type="color" id="bgColor" value="#0A0E1A" /></label>
+              <button class="mini-btn" id="applyCustom">应用自定义</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-module" data-module="plugins">
+          <div class="settings-module-head">
+            <span class="sm-icon">🔌</span>
+            <span class="sm-title">插件与 Agent 模式</span>
+            <span class="sm-chevron">▾</span>
+          </div>
+          <div class="settings-module-body">
+            <div class="meta">harness 当前挂载的插件（agent preset）与说明；可点击查看内容，并添加你自己的注释。</div>
+            <div class="sm-row">
+              <label class="sm-label" for="defaultPresetSelect">默认 Agent 模式</label>
+              <select id="defaultPresetSelect" class="sm-select"></select>
+              <button class="mini-btn" id="applyDefaultPresetBtn">保存</button>
+            </div>
+            <div class="preset-list" id="presetList"><div class="empty">尚未连接 harness</div></div>
+            <div class="plugin-catalog">
+              <div class="meta" style="margin-top:16px">完整插件目录（部署仓库共 <span id="pluginCatalogCount">…</span> 个插件包）</div>
+              <div class="sm-row">
+                <label class="sm-label" for="pluginSearch">搜索</label>
+                <input id="pluginSearch" class="sm-input" type="text" placeholder="输入插件名 / 功能关键词…" />
+              </div>
+              <div id="pluginCatalogList"><div class="empty">正在扫描…</div></div>
+              <button class="mini-btn" id="pluginCatalogMore" hidden>显示更多</button>
+            </div>
+            <div class="plugin-ns">
+              <div class="meta">插件配置域（来自 harness 设置描述，含功能备注）</div>
+              <div id="pluginNsList"><div class="empty">尚未连接 harness</div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-module" data-module="models">
+          <div class="settings-module-head">
+            <span class="sm-icon">🧠</span>
+            <span class="sm-title">模型配置</span>
+            <span class="sm-chevron">▾</span>
+          </div>
+          <div class="settings-module-body">
+            <div class="sm-row">
+              <label class="sm-label" for="providerSelect">提供商</label>
+              <select id="providerSelect" class="sm-select"></select>
+            </div>
+            <div class="provider-stats" id="providerStats"></div>
+            <div class="model-group-list" id="modelGroupList"></div>
+            <div class="row-actions">
+              <button class="mini-btn" id="refreshModelsBtn">刷新</button>
+              <button class="mini-btn" id="openSettingsDocBtn">打开配置文档</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-module" data-module="comm">
+          <div class="settings-module-head">
+            <span class="sm-icon">📡</span>
+            <span class="sm-title">星际通讯配置</span>
+            <span class="sm-chevron">▾</span>
+          </div>
+          <div class="settings-module-body">
+            <div class="meta">Harness 目录: <code id="harnessDir"></code></div>
+            <div class="env-box">
+              <div class="env-title">API 密钥（DeepSeek 官方模型路由）</div>
+              <input type="password" id="apiKey" placeholder="DEEPSEEK_API_KEY（粘贴后自动保存）" />
+              <div class="env-help" id="apiKeyStatus">密钥写入 <code>~/.dsh/.env</code> 并同步到 Harness 凭据服务，不经过任何网络。</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-module" data-module="about">
+          <div class="settings-module-head">
+            <span class="sm-icon">🛰</span>
+            <span class="sm-title">关于观测站</span>
+            <span class="sm-chevron">▾</span>
+          </div>
+          <div class="settings-module-body">
+            <div class="meta">
+              <p>DeepSeek Harness (<code>dsh</code>) 是 DeepSeek 的开源 agent harness，一切皆插件，由 Cordis 驱动。</p>
+              <p>本观测站通过 Electron 封装：一键启停 <code>pnpm dsh web</code>、实时日志、结果浏览、动态星空主题。</p>
+              <p>仓库: <code>C:\Users\mjsx\DeepSeek-Harness</code>（可通过环境变量 <code>DSH_HARNESS_DIR</code> 覆盖）</p>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+  </main>
+
+  <footer class="statusbar">
+    <div class="sb-left">
+      <span class="sb-dot" id="sbDot"></span>
+      <span id="sbStatus">系统待命</span>
+    </div>
+    <div class="sb-right">
+      <span id="sbTime">T+ 00:00:00</span>
+      <span class="sb-sep">·</span>
+      <span id="sbPort">端口 :3080</span>
+    </div>
+  </footer>
+
+  <!-- 主题化模态框（替换原生 confirm/alert） -->
+  <div class="modal-overlay" id="modalOverlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal-title" id="modalTitle">确认</div>
+      <div class="modal-body" id="modalBody"></div>
+      <div class="modal-actions">
+        <button class="mini-btn" id="modalCancel" type="button">取消</button>
+        <button class="primary-btn" id="modalOk" type="button">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="starfield.js"></script>
+  <script src="settings.js"></script>
+  <script src="dashboard.js"></script>
+  <script src="dock.js"></script>
+  <script src="app.js"></script>
+  <script src="chat.js"></script>
+</body>
+</html>
