@@ -1,4 +1,4 @@
-# DeepSeek Harness 桌面端（DSH Desktop）
+﻿# DeepSeek Harness 桌面端（DSH Desktop）
 
 基于 Electron 的 [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeek-Harness) 桌面端 UI——「深空观测站」。
 
@@ -56,11 +56,14 @@ renderer/           渲染层（原生 HTML/JS/CSS）
 - 对话会话数据与工作区注册表由 harness 持久化在 `~/.dsh/` 下，桌面端本身不存业务数据。
 - 动态背景视频约 45MB；不需要动画背景时可直接删除 `renderer/bg-animated.mp4`。
 
+
 ## 一键安装包（发行版）
 
-运行 `scripts/build-dist.ps1` 生成 `dist/DSH-Desktop-v<版本>.zip` 与自解压 `DSH-Desktop-v<版本>-Setup.exe`：
-内含桌面端应用（含 Electron）、DeepSeek Harness 引擎（含全部依赖）、内置 Node.js 运行时、Harness 配置模板与 `setup.bat` 一键安装器。
+运行 `scripts/build-dist.ps1` 生成两类产物（正常安装器模式，引擎不塞进安装包）：
 
-使用者下载后：解压 zip（或直接运行 Setup.exe）→ 双击 `setup.bat` →
-自动安装到 `%LOCALAPPDATA%\DSH` 并创建桌面快捷方式；`~/.dsh/settings.yaml` 仅在首次安装时写入（不覆盖已有配置）。
-安装包不含任何 API 密钥；模型密钥在应用「设置 → 模型」中填写，GitHub 用 SSH 密钥连接。
+- `dist/DSH-Desktop-v<版本>.zip` 与自解压 `DSH-Desktop-v<版本>-Setup.exe`：仅桌面端 UI + Electron 运行时 + 一键安装器（约 100MB，与普通 Electron 应用相当）；
+- `dist/DSH-Harness-bundle-v<版本>.zip`：DeepSeek Harness 引擎载荷（源码 + node_modules + 内置 Node），安装时从 GitHub Releases 联网下载一次（约 500-700MB），支持本地离线包优先。
+
+使用者：解压（或运行 Setup.exe）→ 双击 `setup.bat` → 自动安装到 `%LOCALAPPDATA%\DSH`、
+写入 `~/.dsh/settings.yaml`（首次安装，不覆盖已有配置）、下载并解压 Harness 引擎、创建桌面快捷方式。
+安装包不含任何 API 密钥；模型密钥在应用「设置 → 模型」填写，GitHub 用 SSH 密钥连接。
