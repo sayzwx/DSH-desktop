@@ -724,6 +724,75 @@
       const r = await api.openSettingsDoc();
       if (!r.ok && !r.opened) (window.__modal ? window.__modal.alert('打开配置文档失败：' + (r.error || 'unknown'), '提示') : alert('打开配置文档失败：' + (r.error || 'unknown')));
     });
+
+    // ---- 软件更新（检查 sayzwx/DSH-desktop 的 GitHub Releases，一键下载） ----
+    let updateInfo = null;
+    const updateCurrentVer = $('#updateCurrentVer');
+    const updateStatus = $('#updateStatus');
+    const updateActionRow = $('#updateActionRow');
+    const updateNewVer = $('#updateNewVer');
+    const updateProgressWrap = $('#updateProgressWrap');
+    const updateProgressFill = $('#updateProgressFill');
+    const updateProgressText = $('#updateProgressText');
+    const checkUpdateBtn = $('#checkUpdateBtn');
+    const downloadUpdateBtn = $('#downloadUpdateBtn');
+    const renderMb = (n) => (n ? `${Math.round(n / 1048576)} MB` : '—');
+
+    api.onUpdaterProgress((p) => {
+      updateProgressFill.style.width = `${p.pct || 0}%`;
+      const recv = renderMb(p.received || 0);
+      const total = renderMb(p.total || 0);
+      updateProgressText.textContent = p.phase === 'done'
+        ? `下载完成：${recv}`
+        : `正在下载 ${p.name || ''} … ${recv} / ${total}（${p.pct || 0}%）`;
+    });
+    api.onUpdaterResult((p) => {
+      downloadUpdateBtn.disabled = false;
+      updateProgressWrap.hidden = false;
+      updateStatus.textContent = p.ok
+        ? `更新下载完成：${p.name}（已打开安装包/所在位置，重启后生效）。`
+        : `更新失败：${p.error || '未知错误'}`;
+    });
+
+    checkUpdateBtn.addEventListener('click', async () => {
+      checkUpdateBtn.disabled = true;
+      updateStatus.textContent = '正在检查更新…';
+      updateActionRow.hidden = true;
+      updateProgressWrap.hidden = true;
+      const r = await api.checkUpdate();
+      checkUpdateBtn.disabled = false;
+      if (!r || !r.ok) {
+        updateStatus.textContent = `检查失败：${(r && r.error) || 'unknown'}`;
+        return;
+      }
+      updateCurrentVer.textContent = r.current || '—';
+      if (r.hasUpdate) {
+        updateStatus.textContent = `发现新版本 v${r.latest}${r.name ? ' · ' + r.name : ''}`;
+        updateNewVer.textContent = `v${r.tag || r.latest}`;
+        updateActionRow.hidden = false;
+        updateInfo = r;
+      } else {
+        updateStatus.textContent = `已是最新版本（v${r.current || r.latest}）`;
+      }
+    });
+
+    downloadUpdateBtn.addEventListener('click', async () => {
+      const assets = (updateInfo && updateInfo.assets) || [];
+      const pick = assets.find((a) => /\.(exe|zip)$/i.test(a.name || '')) || assets[0];
+      if (!pick || !pick.url) {
+        updateStatus.textContent = '该发布里没有可下载的安装包附件。';
+        return;
+      }
+      downloadUpdateBtn.disabled = true;
+      updateProgressWrap.hidden = false;
+      updateProgressFill.style.width = '0%';
+      updateProgressText.textContent = '开始下载…';
+      const r = await api.downloadUpdate(pick.url);
+      if (!r || !r.ok) {
+        downloadUpdateBtn.disabled = false;
+        updateStatus.textContent = `下载失败：${(r && r.error) || 'unknown'}`;
+      }
+    });
   }
 
   function bindModules() {

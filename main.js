@@ -477,10 +477,18 @@ ipcMain.handle('chat:history', async (_e, sessionId) => {
   const events = foldChunks(r.value?.events || []);
   return { ok: true, events, hasMore: !!r.value?.hasMore, projections: r.value?.projections };
 });
-ipcMain.handle('chat:send', async (_e, { sessionId, content }) => {
+ipcMain.handle('chat:send', async (_e, { sessionId, content, files }) => {
   const blocks = Array.isArray(content) && content.length > 0
-    ? content
+    ? content.map((b) => ({ ...b }))
     : [{ type: 'text', text: '' }];
+  // 非图片附件复制进会话工作区 .uploads，模型用文件工具读取；图片走上面的 content 块。
+  const staged = await stageUploadFiles(sessionId, files);
+  for (const s of staged) {
+    blocks.push({
+      type: 'text',
+      text: `[附件] ${s.name}（${s.size} 字节）已保存到 ${s.savedPath}，请用工具读取并处理。`,
+    });
+  }
   const r = await rpcCall('session.prompt', {
     sessionId,
     mode: 'queue',
@@ -1172,6 +1180,205 @@ ipcMain.handle('settings:setApiKey', async (_e, key) => {
     live = r.ok ? 'ok' : r.error?.message || 'failed';
   }
   return { ok: true, live };
+});
+
+// ---------- 附件：非图片文件落盘到会话工作区 ----------
+async function resolveSessionWorkspacePath(sessionId) {
+  try {
+    const ws = await rpcCall('workspace.list', {});
+    if (ws.ok && Array.isArray(ws.value?.items)) {
+      for (const w of ws.value.items) {
+        if ((w.sessionIds || []).includes(sessionId)) return w.path || null;
+      }
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+async function stageUploadFiles(sessionId, files) {
+  if (!Array.isArray(files) || files.length === 0) return [];
+  const wsPath = (await resolveSessionWorkspacePath(sessionId)) || HARNESS_DIR;
+  const dir = path.join(wsPath, '.uploads');
+  fs.mkdirSync(dir, { recursive: true });
+  const staged = [];
+  const used = new Set();
+  for (const f of files) {
+    const src = f && f.path ? String(f.path) : '';
+    const name = f && f.name ? path.basename(String(f.name)) : (src ? path.basename(src) : 'file');
+    const safe = (name.replace(/[\\/:*?"<>|]/g, '_') || 'file').trim();
+    let target = safe;
+    let i = 1;
+    while (used.has(target) || fs.existsSync(path.join(dir, target))) {
+      const dot = safe.lastIndexOf('.');
+      const base = dot > 0 ? safe.slice(0, dot) : safe;
+      const ext = dot > 0 ? safe.slice(dot) : '';
+      target = `${base}-${i}${ext}`;
+      i += 1;
+    }
+    used.add(target);
+    try {
+      if (src && fs.existsSync(src)) {
+        fs.copyFileSync(src, path.join(dir, target));
+        staged.push({ name: safe, size: fs.statSync(path.join(dir, target)).size, savedPath: path.join(dir, target) });
+      }
+    } catch (err) {
+      pushLog('stderr', `[upload] ${safe}: ${err.message}`);
+    }
+  }
+  return staged;
+}
+
+ipcMain.handle('chat:pickFiles', async () => {
+  const win = BrowserWindow.getFocusedWindow()
+    || (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
+  const opts = {
+    title: '选择要发送的文件（Word / PPT / PDF / 图片 / 视频等）',
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: '常见文件', extensions: ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'pdf', 'txt', 'md', 'csv', 'json', 'xml', 'zip', 'rar', '7z', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'mp4', 'mkv', 'avi', 'mov', 'webm', 'mp3', 'wav'] },
+      { name: '所有文件', extensions: ['*'] },
+    ],
+  };
+  const res = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
+  if (res.canceled || res.filePaths.length === 0) return { ok: true, cancelled: true, files: [] };
+  return {
+    ok: true,
+    cancelled: false,
+    files: res.filePaths.map((p) => {
+      let size = 0;
+      try { size = fs.statSync(p).size; } catch { /* ignore */ }
+      return { path: p, name: path.basename(p), size };
+    }),
+  };
+});
+
+// 智能体提问（ask_user_question）：把渲染层答案作为 client-response 发给 harness
+ipcMain.handle('chat:answerQuestion', async (_e, { rpcId, sessionId, answers }) => {
+  const body = {
+    type: 'client-response',
+    rpcId: String(rpcId),
+    result: { ok: true, value: { sessionId, answer: { answers } } },
+  };
+  try {
+    const res = await fetch(`http://127.0.0.1:${PORT}/api/respond`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
+    });
+    const parsed = await res.json();
+    const accepted = parsed?.accepted === true;
+    return { ok: accepted, accepted, reason: parsed?.reason };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// ---------- 软件更新（检查 sayzwx/DSH-desktop 的 GitHub Releases） ----------
+const APP_VERSION = (() => {
+  try { return require('./package.json').version; } catch { return '0.0.0'; }
+})();
+
+function sendUpdaterProgress(payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('updater:progress', payload);
+}
+function sendUpdaterResult(payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('updater:result', payload);
+}
+function parseSemver(text) {
+  const m = /(\d+)\.(\d+)\.(\d+)/.exec(String(text || ''));
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+function isNewerVersion(candidate, current) {
+  const A = parseSemver(candidate);
+  const B = parseSemver(current);
+  if (!A || !B) return false;
+  for (let i = 0; i < 3; i += 1) {
+    if (A[i] !== B[i]) return A[i] > B[i];
+  }
+  return false;
+}
+async function loadGhToken() {
+  try {
+    const f = path.join(DSH_HOME, '.github-token');
+    if (fs.existsSync(f)) {
+      const t = fs.readFileSync(f, 'utf8').trim();
+      if (t) return t;
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+ipcMain.handle('updater:check', async () => {
+  const current = APP_VERSION;
+  try {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 10000);
+    const headers = { 'User-Agent': 'dsh-desktop', Accept: 'application/vnd.github+json' };
+    const token = await loadGhToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await net.fetch('https://api.github.com/repos/sayzwx/DSH-desktop/releases/latest', { headers, signal: ac.signal });
+    clearTimeout(timer);
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: res.status === 404 ? '仓库还没有发布版本（GitHub Releases 尚无 latest）' : `GitHub API ${res.status}（可能触发匿名限流）`,
+      };
+    }
+    const data = await res.json();
+    const latest = String(data.tag_name || data.name || '').replace(/^v/, '');
+    const hasUpdate = isNewerVersion(latest, current);
+    return {
+      ok: true,
+      current,
+      latest,
+      tag: data.tag_name || '',
+      name: data.name || '',
+      hasUpdate,
+      assets: (data.assets || [])
+        .filter((a) => a.browser_download_url)
+        .map((a) => ({ name: a.name, url: a.browser_download_url, size: a.size || 0 })),
+    };
+  } catch (err) {
+    return { ok: false, error: `网络错误: ${err.message}` };
+  }
+});
+
+ipcMain.handle('updater:download', async (_e, url) => {
+  if (!url) return { ok: false, error: '缺少下载地址' };
+  let name = 'update';
+  try { name = path.basename(new URL(url).pathname) || name; } catch { /* ignore */ }
+  const dir = path.join(os.tmpdir(), 'DSH-update');
+  fs.mkdirSync(dir, { recursive: true });
+  const target = path.join(dir, name);
+  try {
+    const res = await net.fetch(url, { headers: { 'User-Agent': 'dsh-desktop' } });
+    if (!res.ok) {
+      sendUpdaterResult({ ok: false, error: `下载失败 HTTP ${res.status}` });
+      return { ok: false, error: `HTTP ${res.status}` };
+    }
+    const total = Number(res.headers.get('content-length')) || 0;
+    const reader = res.body.getReader();
+    const ws = fs.createWriteStream(target);
+    sendUpdaterProgress({ received: 0, total, pct: 0, phase: 'downloading', name });
+    let received = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.byteLength;
+      ws.write(value);
+      sendUpdaterProgress({ received, total, pct: total ? Math.min(100, Math.round((received / total) * 100)) : 0, phase: 'downloading', name });
+    }
+    ws.end();
+    await new Promise((resolve) => ws.on('finish', resolve));
+    sendUpdaterProgress({ received, total, pct: 100, phase: 'done', name });
+    try { shell.openPath(target); } catch { /* ignore */ }
+    sendUpdaterResult({ ok: true, path: target, name });
+    return { ok: true, path: target, name };
+  } catch (err) {
+    sendUpdaterResult({ ok: false, error: err.message });
+    return { ok: false, error: err.message };
+  }
 });
 
 app.whenReady().then(() => {

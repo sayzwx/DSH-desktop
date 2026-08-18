@@ -177,7 +177,8 @@
             <button class="ct-other" id="ctOtherRunning" hidden></button>
           </div>
           <div class="chat-input-row">
-            <textarea id="chatInput" rows="1" placeholder="向深空发送信号…（Enter 发送 / 可粘贴图片）"></textarea>
+            <button class="mini-btn" id="chatAttach" type="button" title="上传文件（Word / PPT / PDF / 图片 / 视频等）">📎</button>
+            <textarea id="chatInput" rows="1" placeholder="向深空发送信号…（Enter 发送 / 可粘贴图片 / 📎 上传文件）"></textarea>
             <button class="primary-btn" id="chatSend">发送</button>
             <button class="danger-btn" id="chatCancel" disabled>停止</button>
           </div>
@@ -298,6 +299,29 @@
               <div class="env-title">API 密钥（DeepSeek 官方模型路由）</div>
               <input type="password" id="apiKey" placeholder="DEEPSEEK_API_KEY（粘贴后自动保存）" />
               <div class="env-help" id="apiKeyStatus">密钥写入 <code>~/.dsh/.env</code> 并同步到 Harness 凭据服务，不经过任何网络。</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-module" data-module="update">
+          <div class="settings-module-head">
+            <span class="sm-icon">🚀</span>
+            <span class="sm-title">软件更新</span>
+            <span class="sm-chevron">▾</span>
+          </div>
+          <div class="settings-module-body">
+            <div class="sm-row">
+              <span class="sm-label">当前版本 <code id="updateCurrentVer">—</code></span>
+              <button class="mini-btn" id="checkUpdateBtn" type="button">检查更新</button>
+            </div>
+            <div class="meta" id="updateStatus">检查 <code>sayzwx/DSH-desktop</code> 仓库是否有新版本。</div>
+            <div class="update-progress" id="updateProgressWrap" hidden>
+              <div class="up-track"><div class="up-fill" id="updateProgressFill" style="width:0%"></div></div>
+              <div class="meta" id="updateProgressText"></div>
+            </div>
+            <div class="sm-row" id="updateActionRow" hidden>
+              <button class="primary-btn" id="downloadUpdateBtn" type="button">一键更新（下载并打开）</button>
+              <span class="meta" id="updateNewVer"></span>
             </div>
           </div>
         </div>

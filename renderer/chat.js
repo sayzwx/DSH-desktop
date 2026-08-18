@@ -717,12 +717,30 @@
 
   function renderUserMessage(ev, pendingEl) {
     const blocks = ev.data?.content || [];
-    const text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
-    const images = blocks.filter((b) => b.type === 'image');
-    let el = pendingEl || null;
-    if (!el) el = makeUserMsg(text || (images.length ? '' : ''));
-    else el.textContent = text || '';
-    for (const b of images) renderImageBlock(el, b, currentSessionId);
+    const el = pendingEl || makeUserMsg('');
+    el.innerHTML = '';
+    const text = blocks
+      .filter((b) => b.type === 'text' && typeof b.text === 'string' && !/^\[附件\] /.test(b.text))
+      .map((b) => b.text).join('\n');
+    if (text) {
+      const p = document.createElement('div');
+      p.textContent = text;
+      el.appendChild(p);
+    }
+    for (const b of blocks) {
+      if (b.type === 'image') {
+        renderImageBlock(el, b, currentSessionId);
+      } else if (b.type === 'text' && typeof b.text === 'string' && /^\[附件\] /.test(b.text)) {
+        const m = /^\[附件\] ([^（]+)（(\d+) 字节）已保存到 (.+)$/.exec(b.text);
+        if (m) {
+          el.appendChild(makeFileChipEl({ name: m[1], size: Number(m[2]), path: m[3] }));
+        } else {
+          const sp = document.createElement('div');
+          sp.textContent = b.text;
+          el.appendChild(sp);
+        }
+      }
+    }
     return el;
   }
 
@@ -811,8 +829,9 @@
     loadModels(sessionId);
   }
 
-  // ---------------- 发送（并发：queue 模式，不阻塞；支持图片） ----------------
+  // ---------------- 发送（并发：queue 模式，不阻塞；支持图片 + 文件） ----------------
   const draftImages = []; // {mediaType, data, name, thumb}
+  const draftFiles = [];  // {path, name, size}
   const draftsEl = $('#chatDrafts');
 
   async function normalizeImage(file) {
@@ -848,47 +867,109 @@
     return { mediaType, data: out.split(',')[1], name: file.name || 'pasted-image', thumb: out };
   }
 
+  function fileIcon(name) {
+    const ext = (String(name || '').split('.').pop() || '').toLowerCase();
+    if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(ext)) return '🖼️';
+    if (['mp4', 'mkv', 'avi', 'mov', 'webm'].includes(ext)) return '🎬';
+    if (['mp3', 'wav'].includes(ext)) return '🎵';
+    if (['pdf'].includes(ext)) return '📕';
+    if (['doc', 'docx'].includes(ext)) return '📘';
+    if (['ppt', 'pptx'].includes(ext)) return '📙';
+    if (['xls', 'xlsx', 'csv'].includes(ext)) return '📗';
+    if (['zip', 'rar', '7z'].includes(ext)) return '🗜️';
+    return '📄';
+  }
+
+  function fmtSize(n) {
+    if (!n) return '';
+    if (n >= 1048576) return `${(n / 1048576).toFixed(1)} MB`;
+    if (n >= 1024) return `${Math.round(n / 1024)} KB`;
+    return `${n} B`;
+  }
+
+  function draftFileChipHTML(d) {
+    return `<div class="draft-file" data-file="${d.__i}">
+        <span class="df-ic">${fileIcon(d.name)}</span>
+        <span class="df-name" title="${esc(d.path || d.name)}">${esc(d.name || '文件')}</span>
+        <span class="df-size">${fmtSize(d.size)}</span>
+        <button type="button" class="draft-x" title="移除文件">×</button>
+      </div>`;
+  }
+
   function renderDrafts() {
-    if (draftImages.length === 0) {
+    if (draftImages.length === 0 && draftFiles.length === 0) {
       draftsEl.hidden = true;
       draftsEl.innerHTML = '';
       return;
     }
     draftsEl.hidden = false;
-    draftsEl.innerHTML = draftImages
-      .map(
-        (d, i) => `<div class="draft-thumb" data-i="${i}">
+    const imgHTML = draftImages
+      .map((d, i) => `<div class="draft-thumb" data-img="${i}">
           <img src="${d.thumb}" alt="待发送图片" />
           <button type="button" class="draft-x" title="移除图片">×</button>
-        </div>`
-      )
+        </div>`)
       .join('');
-    draftsEl.querySelectorAll('.draft-x').forEach((b) => {
-      b.onclick = () => {
-        draftImages.splice(Number(b.closest('.draft-thumb').dataset.i), 1);
+    const fileHTML = draftFiles.map((d, i) => draftFileChipHTML({ ...d, __i: i })).join('');
+    draftsEl.innerHTML = imgHTML + fileHTML;
+    draftsEl.querySelectorAll('.draft-thumb[data-img]').forEach((thumb) => {
+      const btn = thumb.querySelector('.draft-x');
+      if (btn) btn.onclick = () => {
+        draftImages.splice(Number(thumb.dataset.img), 1);
+        renderDrafts();
+      };
+    });
+    draftsEl.querySelectorAll('.draft-file[data-file]').forEach((chip) => {
+      const btn = chip.querySelector('.draft-x');
+      if (btn) btn.onclick = () => {
+        draftFiles.splice(Number(chip.dataset.file), 1);
         renderDrafts();
       };
     });
   }
 
+  function makeFileChipEl(f) {
+    const chip = document.createElement('span');
+    chip.className = 'draft-file static';
+    chip.innerHTML = `<span class="df-ic">${fileIcon(f.name)}</span><span class="df-name">${esc(f.name || '文件')}</span><span class="df-size">${fmtSize(f.size)}</span>`;
+    return chip;
+  }
+
+  const attachBtn = $('#chatAttach');
+  if (attachBtn) {
+    attachBtn.addEventListener('click', async () => {
+      const r = await api.pickFiles();
+      if (!r || !r.ok || r.cancelled) return;
+      for (const f of r.files || []) {
+        if (!draftFiles.some((d) => d.path === f.path)) draftFiles.push(f);
+      }
+      renderDrafts();
+      keepInputFocus();
+    });
+  }
+
   async function send() {
     const text = inputEl.value.trim();
-    if ((!text && draftImages.length === 0) || !currentSessionId) return;
+    if ((!text && draftImages.length === 0 && draftFiles.length === 0) || !currentSessionId) return;
     const sentImages = draftImages.slice();
+    const sentFiles = draftFiles.slice();
     inputEl.value = '';
     autoGrow();
     document.querySelector('.chat-empty')?.remove();
-    pendingUserEl = makeUserMsg(text || (sentImages.length ? '[图片]' : ''));
+    pendingUserEl = makeUserMsg(text || ((sentImages.length || sentFiles.length) ? '' : ''));
     for (const d of sentImages) {
       const img = document.createElement('img');
       img.className = 'msg-img';
       img.src = d.thumb;
       pendingUserEl.appendChild(img);
     }
+    for (const f of sentFiles) {
+      pendingUserEl.appendChild(makeFileChipEl(f));
+    }
     scrollBottom(true);
-    const r = await api.chatSend(currentSessionId, text, sentImages);
+    const r = await api.chatSend(currentSessionId, text, sentImages, sentFiles);
     if (r.ok) {
       draftImages.length = 0;
+      draftFiles.length = 0;
       renderDrafts();
     } else {
       if (pendingUserEl) pendingUserEl.textContent = `⚠ 发送失败: ${r.error}`;
@@ -1196,6 +1277,11 @@
         else if (['permissions', 'contextPressure', 'tokenUsage', 'sessionStats'].includes(p.key)) {
           applyProjections({ [p.key]: p.value });
         }
+      } else if (p.type === 'question/requested') {
+        // 智能体提问（ask_user_question）：rpcId 在 server-request 帧顶层
+        handleQuestionRequested({ rpcId: msg.rpcId, sessionId: p.sessionId, questions: p.questions || [] });
+      } else if (p.type === 'question/resolved') {
+        handleQuestionResolved({ sessionId: p.sessionId, questionRpcId: p.questionRpcId, outcome: p.outcome });
       }
     }
   }
@@ -1237,6 +1323,148 @@
     confirm: themedConfirm,
     alert: (message, title) => themedAlert(message, title),
   };
+
+  // ---------------- 智能体提问（ask_user_question 多选项卡片） ----------------
+  const questionCards = new Map(); // sessionId -> { rpcId, sessionId, questions, el }
+
+  function handleQuestionRequested(q) {
+    if (!q || !q.rpcId || !Array.isArray(q.questions) || q.questions.length === 0) return;
+    const prev = questionCards.get(q.sessionId);
+    if (prev && prev.el && prev.el.isConnected) removeQuestionCard(prev.el);
+    const card = { rpcId: q.rpcId, sessionId: q.sessionId, questions: q.questions, el: null };
+    questionCards.set(q.sessionId, card);
+    // 只渲染当前会话；其它会话的未决提问在切过去时由 mux 重放重新送达
+    if (q.sessionId === currentSessionId) card.el = renderQuestionCard(card);
+  }
+
+  function handleQuestionResolved(p) {
+    const card = questionCards.get(p.sessionId);
+    if (!card) return;
+    if (card.el && card.el.isConnected) markQuestionResolved(card.el, p.outcome || 'cancelled');
+    questionCards.delete(p.sessionId);
+  }
+
+  function removeQuestionCard(cardEl) {
+    if (cardEl && cardEl.isConnected) cardEl.remove();
+    scrollBottom(false);
+  }
+
+  function renderQuestionCard(card) {
+    const el = document.createElement('div');
+    el.className = 'msg msg-question';
+    const inner = document.createElement('div');
+    inner.className = 'question-card';
+    el.appendChild(inner);
+    messagesEl.appendChild(el);
+    scrollBottom(true);
+
+    const state = card.questions.map(() => ({ selected: new Set(), custom: '' }));
+    const answersFor = () => card.questions.map((question, qi) => {
+      const st = state[qi];
+      const answer = { id: question.id, selected: [...st.selected] };
+      // ask_user_question 语义：单选且有选项时，自定义回答覆盖所选选项（否则提交会被 harness 拒绝）
+      if (st.custom && question.multiSelect !== true && Array.isArray(question.options) && question.options.length > 0) {
+        answer.selected = [];
+      }
+      if (st.custom) answer.custom = st.custom;
+      return answer;
+    });
+
+    let html = '<div class="q-title">🛰️ 智能体提问</div>';
+    card.questions.forEach((question, qi) => {
+      html += '<div class="q-item">';
+      if (question.header) html += `<div class="q-header">${esc(question.header)}</div>`;
+      html += `<div class="q-q">${esc(question.question || '')}</div>`;
+      if (question.detail) html += `<div class="q-detail">${esc(question.detail)}</div>`;
+      if (Array.isArray(question.options) && question.options.length > 0) {
+        const multi = question.multiSelect === true;
+        html += `<div class="q-options" data-qi="${qi}" data-multi="${multi ? '1' : '0'}">`;
+        for (const opt of question.options) {
+          const label = opt && typeof opt.label === 'string' ? opt.label : '';
+          if (!label) continue;
+          html += `<button type="button" class="q-option" data-qi="${qi}">${esc(label)}</button>`;
+        }
+        html += '</div>';
+      }
+      html += `<input class="q-custom" type="text" data-qi="${qi}" placeholder="自定义回答（可选）" />`;
+      html += '</div>';
+    });
+    html += `<div class="q-actions">
+        <button type="button" class="primary-btn q-ok" disabled>提交</button>
+        <button type="button" class="mini-btn q-cancel">暂不回答</button>
+      </div>`;
+    inner.innerHTML = html;
+
+    const okBtn = inner.querySelector('.q-ok');
+    const refreshOk = () => {
+      okBtn.disabled = !state.some((st) => st.selected.size > 0 || st.custom);
+    };
+
+    inner.querySelectorAll('.q-option').forEach((btn) => {
+      const qi = Number(btn.dataset.qi);
+      btn.addEventListener('click', () => {
+        const row = inner.querySelector(`.q-options[data-qi="${qi}"]`);
+        const multi = row.dataset.multi === '1';
+        if (!multi) {
+          if (!btn.classList.contains('sel')) {
+            row.querySelectorAll('.q-option').forEach((x) => x.classList.remove('sel'));
+          }
+          state[qi].selected.clear();
+        }
+        if (btn.classList.toggle('sel')) state[qi].selected.add(btn.textContent);
+        else state[qi].selected.delete(btn.textContent);
+        refreshOk();
+      });
+    });
+    inner.querySelectorAll('.q-custom').forEach((c) => {
+      c.addEventListener('input', () => {
+        state[Number(c.dataset.qi)].custom = c.value.trim();
+        refreshOk();
+      });
+    });
+
+    okBtn.addEventListener('click', async () => {
+      okBtn.disabled = true;
+      const answers = answersFor();
+      const r = await api.chatAnswerQuestion(card.rpcId, currentSessionId, answers);
+      if (r && r.ok) {
+        markQuestionResolved(el, 'answered', answers);
+      } else {
+        const reason = r && r.reason ? `（${r.reason}）` : '';
+        okBtn.disabled = false;
+        inner.querySelector('.q-title').textContent = `🛰️ 提交失败：${(r && r.error) || '未知错误'}${reason}，请重试`;
+      }
+    });
+    inner.querySelector('.q-cancel').addEventListener('click', () => {
+      removeQuestionCard(el);
+      questionCards.delete(card.sessionId);
+    });
+    return el;
+  }
+
+  function markQuestionResolved(el, outcome, answers) {
+    if (!el || !el.isConnected) return;
+    const inner = el.querySelector('.question-card');
+    if (!inner) return;
+    const tag = document.createElement('div');
+    tag.className = 'q-resolved';
+    if (outcome === 'cancelled') {
+      tag.textContent = '🛰️ 该提问已被取消';
+    } else {
+      const labels = (answers || [])
+        .map((a) => {
+          const parts = [...(a.selected || [])];
+          if (a.custom) parts.push(`自定义：${a.custom}`);
+          return parts.join('、');
+        })
+        .filter(Boolean);
+      tag.textContent = `🛰️ 已回答：${labels.join('；') || '（空）'}`;
+    }
+    inner.innerHTML = '';
+    inner.appendChild(tag);
+    el.classList.add('resolved');
+    scrollBottom(false);
+  }
 
   // ---------------- 输入框焦点保护 ----------------
   // 工具栏按钮点击不抢输入焦点（mousedown preventDefault），避免"点完模型就敲不了字"

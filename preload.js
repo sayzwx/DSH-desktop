@@ -35,14 +35,17 @@ contextBridge.exposeInMainWorld('api', {
   addWorkspace: (path) => ipcRenderer.invoke('chat:addWorkspace', path),
   chatArchiveSession: (sessionId) => ipcRenderer.invoke('chat:archiveSession', sessionId),
   chatHistory: (sessionId) => ipcRenderer.invoke('chat:history', sessionId),
-  chatSend: (sessionId, text, images) => {
+  chatSend: (sessionId, text, images, files) => {
     const content = [];
     if (text) content.push({ type: 'text', text });
     for (const img of images || []) {
       content.push({ type: 'image', mediaType: img.mediaType, data: img.data, name: img.name });
     }
-    return ipcRenderer.invoke('chat:send', { sessionId, content });
+    return ipcRenderer.invoke('chat:send', { sessionId, content, files: files || [] });
   },
+  pickFiles: () => ipcRenderer.invoke('chat:pickFiles'),
+  chatAnswerQuestion: (rpcId, sessionId, answers) =>
+    ipcRenderer.invoke('chat:answerQuestion', { rpcId, sessionId, answers }),
   chatAttachment: (sessionId, attachmentId) =>
     ipcRenderer.invoke('chat:attachment', { sessionId, attachmentId }),
   chatCancel: (sessionId) => ipcRenderer.invoke('chat:cancel', sessionId),
@@ -66,6 +69,10 @@ contextBridge.exposeInMainWorld('api', {
   setPresetDefault: (preset) => ipcRenderer.invoke('settings:setPresetDefault', preset),
   openSettingsDoc: () => ipcRenderer.invoke('settings:openDoc'),
   onChatFrame: (cb) => ipcRenderer.on('chat:frame', (_e, msg) => cb(msg)),
+  checkUpdate: () => ipcRenderer.invoke('updater:check'),
+  downloadUpdate: (url) => ipcRenderer.invoke('updater:download', url),
+  onUpdaterProgress: (cb) => ipcRenderer.on('updater:progress', (_e, p) => cb(p)),
+  onUpdaterResult: (cb) => ipcRenderer.on('updater:result', (_e, p) => cb(p)),
   getApiKey: () => ipcRenderer.invoke('settings:getApiKey'),
   setApiKey: (key) => ipcRenderer.invoke('settings:setApiKey', key),
 });
