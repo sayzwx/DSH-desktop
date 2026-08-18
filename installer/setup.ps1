@@ -99,7 +99,7 @@ $exe = Join-Path $Dest 'app\node_modules\electron\dist\electron.exe'
 $appArg = '"' + (Join-Path $Dest 'app') + '"'
 $ws = New-Object -ComObject WScript.Shell
 foreach ($dir in @([Environment]::GetFolderPath('Desktop'), (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'))) {
-  $lnk = Join-Path $dir 'DSH Desktop.lnk'
+  $lnk = Join-Path $dir 'DSH.lnk'
   $s = $ws.CreateShortcut($lnk)
   $s.TargetPath = $exe
   $s.Arguments = $appArg
