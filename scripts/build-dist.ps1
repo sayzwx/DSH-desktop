@@ -37,7 +37,8 @@ Copy-Item (Join-Path $env:USERPROFILE '.dsh\settings.yaml')    (Join-Path $cfg '
 Copy-Item (Join-Path $env:USERPROFILE '.dsh\zen-ua-proxy.mjs') (Join-Path $cfg 'zen-ua-proxy.mjs') -Force
 Copy-Item (Join-Path $root 'installer\setup.ps1')    (Join-Path $stage 'setup.ps1') -Force
 Copy-Item (Join-Path $root 'installer\setup.bat')    (Join-Path $stage 'setup.bat') -Force
-Copy-Item (Join-Path $root 'installer\安装说明.txt') (Join-Path $stage '安装说明.txt') -Force
+# 中文文件名在无 BOM 的 PS1 里会被按 GBK 误读，用通配符避开字面量
+Get-ChildItem (Join-Path $root 'installer') -Filter '*.txt' | Copy-Item -Destination $stage -Force
 $zip = Join-Path $dist "$name.zip"
 Make-Zip $stage $zip
 
@@ -51,16 +52,30 @@ Copy-Tree 'D:\nodejs'           (Join-Path $hstage 'tools\node') @()
 $hzip = Join-Path $dist "$harnessName.zip"
 Make-Zip $hstage $hzip
 
-# ---------- 3. self-extracting Setup.exe (app package only) ----------
-Write-Host "=== Building $name-Setup.exe ==="
-$csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-if (-not (Test-Path $csc)) { $csc = 'C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe' }
-if (-not (Test-Path $csc)) { Write-Host 'csc not found - skipping Setup.exe (zips are the deliverables)'; exit 0 }
-$exeOut = Join-Path $dist "$name-Setup.exe"
-& $csc /nologo /optimize+ "/out:$exeOut" "/resource:$zip,DSH.bundle.zip" `
-  /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll `
-  (Join-Path $root 'scripts\extractor.cs')
-if ($LASTEXITCODE -ne 0) { throw 'csc failed' }
-Write-Host ("  {0:N0} MB" -f ((Get-Item $exeOut).Length / 1MB))
+# ---------- 3. self-extracting Setup.exe (7-Zip SFX, LZMA2 - small) ----------
+Write-Host "=== Building $name-Setup.exe (7-Zip SFX) ==="
+$sz7 = 'D:\7-Zip\7z.exe'
+$sfx = 'D:\7-Zip\7z.sfx'
+if (-not (Test-Path $sz7) -or -not (Test-Path $sfx)) {
+  Write-Host '7-Zip not found - Setup.exe skipped (zip is the deliverable)'
+} else {
+  $sz7file = Join-Path $dist "$name.7z"
+  Push-Location $stage
+  & $sz7 a -t7z -mx=9 -m0=LZMA2 -bso0 -bsp0 $sz7file '*' | Out-Null
+  Pop-Location
+  if ($LASTEXITCODE -ne 0) { throw '7z failed' }
+  $cfg = Join-Path $dist 'sfx-config.txt'
+  Set-Content -Path $cfg -Encoding ASCII -Value @(
+    ';!@Install@!UTF-8!',
+    'Title="DSH Desktop Installer"',
+    'RunProgram="setup.bat"',
+    ';!@InstallEnd@!'
+  )
+  $exeOut = Join-Path $dist "$name-Setup.exe"
+  cmd /c "copy /b `"$sfx`" + `"$cfg`" + `"$sz7file`" `"$exeOut`" >nul"
+  if ($LASTEXITCODE -ne 0) { throw 'copy /b sfx failed' }
+  Remove-Item $cfg -Force -ErrorAction SilentlyContinue
+  Write-Host ("  {0:N0} MB" -f ((Get-Item $exeOut).Length / 1MB))
+}
 Write-Host "=== Done ==="
 Get-ChildItem $dist -File | Select-Object Name, @{N='MB';E={[math]::Round($_.Length/1MB,1)}} | Format-Table -AutoSize
