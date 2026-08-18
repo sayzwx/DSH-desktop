@@ -104,7 +104,7 @@ foreach ($dir in @([Environment]::GetFolderPath('Desktop'), (Join-Path $env:APPD
   $s.TargetPath = $exe
   $s.Arguments = $appArg
   $s.WorkingDirectory = Join-Path $Dest 'app'
-  $s.IconLocation = (Join-Path $Dest 'app\icon-planet.ico')
+  $s.IconLocation = (Join-Path $Dest 'app\DSH.ico')
   $s.Save()
 }
 

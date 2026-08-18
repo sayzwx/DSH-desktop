@@ -277,7 +277,7 @@ function createWindow() {
     minWidth: 960,
     minHeight: 640,
     backgroundColor: '#04070F',
-    icon: path.join(__dirname, 'icon-planet.ico'),
+    icon: path.join(__dirname, 'DSH.ico'),
     title: 'DSH',
     autoHideMenuBar: true,
     webPreferences: {
