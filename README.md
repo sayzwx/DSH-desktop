@@ -55,3 +55,12 @@ renderer/           渲染层（原生 HTML/JS/CSS）
 - GitHub 请求使用 Electron `net.fetch`（系统证书库），兼容本地 TLS 拦截环境。
 - 对话会话数据与工作区注册表由 harness 持久化在 `~/.dsh/` 下，桌面端本身不存业务数据。
 - 动态背景视频约 45MB；不需要动画背景时可直接删除 `renderer/bg-animated.mp4`。
+
+## 一键安装包（发行版）
+
+运行 `scripts/build-dist.ps1` 生成 `dist/DSH-Desktop-v<版本>.zip` 与自解压 `DSH-Desktop-v<版本>-Setup.exe`：
+内含桌面端应用（含 Electron）、DeepSeek Harness 引擎（含全部依赖）、内置 Node.js 运行时、Harness 配置模板与 `setup.bat` 一键安装器。
+
+使用者下载后：解压 zip（或直接运行 Setup.exe）→ 双击 `setup.bat` →
+自动安装到 `%LOCALAPPDATA%\DSH` 并创建桌面快捷方式；`~/.dsh/settings.yaml` 仅在首次安装时写入（不覆盖已有配置）。
+安装包不含任何 API 密钥；模型密钥在应用「设置 → 模型」中填写，GitHub 用 SSH 密钥连接。

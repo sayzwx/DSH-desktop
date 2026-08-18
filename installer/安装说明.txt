@@ -1,0 +1,25 @@
+# DSH Desktop 一键安装包（DSH Desktop + DeepSeek Harness）
+
+## 这是什么
+DSH 桌面端 UI + DeepSeek Harness 引擎 + 内置 Node.js 运行时的完整离线安装包。
+双击 setup 即可装好全部 Harness 配置（模型供应商、默认 Agent 等）和桌面端应用。
+
+## 安装方法（二选一）
+- 方式 A：解压 zip 到任意目录，双击里面的 `setup.bat`
+- 方式 B：直接运行 `DSH-Desktop-v...-Setup.exe`（自解压后自动执行 setup.bat）
+
+## 安装内容
+- 桌面端应用 → `%LOCALAPPDATA%\DSH\app`（含 Electron 运行时）
+- Harness 引擎 → `%LOCALAPPDATA%\DSH\harness`（含全部依赖）
+- 内置 Node.js → `%LOCALAPPDATA%\DSH\tools\node`（不依赖系统安装 Node）
+- 配置 → `%USERPROFILE%\.dsh\settings.yaml`（仅首次安装写入，已有配置不会被覆盖）
+- 桌面与开始菜单快捷方式「DSH Desktop」
+- OpenCode Zen 代理（zen-ua-proxy）随开机自启（仅当配置里用到 opencode 供应商时需要）
+
+## 安装后首次使用
+1. 打开「DSH Desktop」，点「启动 Harness」（Web 界面 http://127.0.0.1:3080）
+2. 模型 API Key：在应用「设置 → 模型」里填写（本安装包不含任何密钥，避免泄露）
+3. GitHub 连接：左侧栏用 SSH 密钥连接，可自动生成密钥
+
+## 卸载
+删除 `%LOCALAPPDATA%\DSH` 和桌面快捷方式即可；用户数据在 `%USERPROFILE%\.dsh`。
