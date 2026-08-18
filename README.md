@@ -1,4 +1,4 @@
-﻿# DeepSeek Harness 桌面端（DSH Desktop）
+# DeepSeek Harness 桌面端（DSH Desktop）
 
 基于 Electron 的 [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeek-Harness) 桌面端 UI——「深空观测站」。
 
@@ -27,8 +27,23 @@
 - DeepSeek Harness 源码目录（默认为 `C:\Users\mjsx\DeepSeek-Harness`，可用环境变量 `DSH_HARNESS_DIR` 覆盖）
 - 可选：`pnpm`（harness 启动需要，或由 harness 目录自身的安装方式提供）
 
+### 一键 setup（开发，推荐）
+
+克隆本仓库后，运行对应平台的 setup 脚本——自动检查 Node.js（≥ 18）、按 `package-lock.json`
+锁定版本安装依赖，最后给出启动与打包指引：
+
 ```sh
-npm install
+# Windows（PowerShell）
+.\setup.ps1
+
+# macOS / Linux
+./setup.sh
+```
+
+也可以手动执行（与脚本等效）：
+
+```sh
+npm ci      # 或 npm install
 npm start
 ```
 
