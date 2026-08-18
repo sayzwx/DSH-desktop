@@ -1,7 +1,7 @@
 {
-  "name": "dsh-desktop",
+  "name": "dsh",
   "version": "0.1.0",
-  "description": "DeepSeek Harness 桌面端 UI",
+  "description": "DSH 桌面端（DeepSeek Harness Desktop）",
   "main": "main.js",
   "private": true,
   "scripts": {
@@ -12,5 +12,8 @@
   },
   "dependencies": {
     "ws": "^8.21.3"
+  },
+  "allowScripts": {
+    "electron@33.4.11": true
   }
 }

@@ -45,7 +45,7 @@ async function main() {
   await sleep(1500);
   out.dockVisible = await evalJs(`!document.getElementById('dock').hidden`);
   out.dockTitle = await evalJs(`document.getElementById('dockTitle').textContent`);
-  out.ghConnectUI = await evalJs(`!!document.getElementById('ghTokenInput') && !!document.getElementById('ghConnectBtn')`);
+  out.ghConnectUI = await evalJs(`!!document.getElementById('ghKeySelect') && !!document.getElementById('ghConnectBtn')`);
   out.ghHint = await evalJs(`document.getElementById('dockBody')?.textContent.slice(0, 120)`);
   // MCP 面板
   await evalJs(`document.querySelector('.dock-btn[data-dock="mcp"]').click()`);

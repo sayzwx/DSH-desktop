@@ -148,6 +148,9 @@ function setTheme(name) {
   localStorage.setItem(THEME_KEY, name);
   if (themeSelect) themeSelect.value = name;
   if (customColorRow) customColorRow.hidden = name !== 'custom';
+  // 紫月主题：启用双视频无缝循环背景层；其余主题暂停并隐藏该层
+  // （init() 恢复本地保存主题时同样走此分支）
+  if (window.__bgMoon) window.__bgMoon.setThemeActive(name === 'moon');
   if (name !== 'custom') {
     ['--accent', '--cyan', '--bg', '--void', '--nebula-navy'].forEach((p) => root.style.removeProperty(p));
   } else {

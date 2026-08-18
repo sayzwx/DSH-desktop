@@ -58,6 +58,9 @@
 
   function start() {
     resize();
+    // 紫月主题下 #bgvideo 已被 CSS 隐藏并由 bg-moon.js 接管背景，
+    // 不再播放它（避免隐藏状态下仍持续解码大视频浪费资源）
+    if (document.documentElement.dataset.theme === 'moon') { video.pause(); return; }
     const p = video.play();
     if (p && p.catch) p.catch(() => { /* 静默：poster 图兜底 */ });
   }

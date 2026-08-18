@@ -64,16 +64,101 @@
   --border-strong: rgba(255, 215, 0, 0.32);
 }
 
+/* ------------------------------------------------------------
+   紫月主题 · 深靛夜空 + 紫罗兰星云 + 月光银白
+   色板来自 bg-moon.mp4 帧采样：
+   夜空基底 ~#2b2741 / #342964；星云电紫 ~#a43bfc / #9537f7；
+   品红高光 ~#e938f7；月与星芒近乎纯白 #ffffff（带淡紫晕染）。
+   整套变量沿用深空主题命名，让侧边栏/卡片/按钮/徽章/输入框/
+   状态灯/滚动条等所有引用 var(--*) 的样式自动随主题换色。
+   ------------------------------------------------------------ */
+:root[data-theme="moon"] {
+  --void: #080412;
+  --nebula-navy: #171033;
+  --abyss: #1e1440;
+  --cyan: #bf8cff;
+  --violet: #a855f7;
+  --gold: #ffe3b3;
+  --starlight: #f5f0ff;
+  --dust: #a193c4;
+  --orange: #ff7ac2;
+
+  --bg: var(--void);
+  --panel: rgba(27, 18, 60, 0.84);
+  --panel-hover: rgba(32, 21, 68, 0.93);
+  --float: rgba(18, 12, 46, 0.74);
+  --border: rgba(191, 140, 255, 0.16);
+  --border-strong: rgba(224, 92, 255, 0.36);
+  --text: var(--starlight);
+  --text-dim: var(--dust);
+  --accent: #b78cff;
+  --accent-2: #e05cff;
+  --accent-3: var(--gold);
+  --warn: var(--orange);
+  --ok: var(--accent);
+
+  --gradient-nebula: linear-gradient(135deg, rgba(9, 5, 22, 0.92) 0%, rgba(27, 18, 60, 0.8) 50%, rgba(168, 85, 247, 0.26) 100%);
+  --gradient-aurora: linear-gradient(90deg, #b78cff 0%, #e05cff 50%, #b78cff 100%);
+  --gradient-comet: linear-gradient(180deg, rgba(255, 227, 179, 0) 0%, rgba(255, 227, 179, 0.85) 50%, rgba(255, 227, 179, 0) 100%);
+  --gradient-horizon: linear-gradient(90deg, rgba(255, 122, 194, 0) 0%, rgba(224, 92, 255, 0.42) 30%, rgba(255, 227, 179, 0.55) 60%, rgba(255, 122, 194, 0) 100%);
+}
+
+/* 紫月主题对少量硬编码青色 rgba 的最小覆盖（其余元素已随变量自动换色） */
+:root[data-theme="moon"] .sidebar {
+  background: rgba(14, 9, 36, 0.72);
+  border-right-color: rgba(191, 140, 255, 0.14);
+}
+:root[data-theme="moon"] .nav-btn:hover,
+:root[data-theme="moon"] .nav-btn.active { background: rgba(191, 140, 255, 0.1); }
+:root[data-theme="moon"] .nav-btn:hover .nav-icon,
+:root[data-theme="moon"] .nav-btn.active .nav-icon { text-shadow: 0 0 8px rgba(191, 140, 255, 0.9); }
+:root[data-theme="moon"] .nav-btn.active::after { box-shadow: 0 0 8px rgba(224, 92, 255, 0.6); }
+:root[data-theme="moon"] .primary-btn {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.22), rgba(224, 92, 255, 0.18));
+}
+:root[data-theme="moon"] .primary-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.4), rgba(224, 92, 255, 0.32));
+  box-shadow: 0 0 24px rgba(168, 85, 247, 0.35);
+}
+:root[data-theme="moon"] .mini-btn:hover:not(:disabled),
+:root[data-theme="moon"] .ws-group-add:hover {
+  background: rgba(168, 85, 247, 0.1);
+  box-shadow: 0 0 14px rgba(168, 85, 247, 0.2);
+}
+:root[data-theme="moon"] .chat-sessions,
+:root[data-theme="moon"] .chat-main,
+:root[data-theme="moon"] .chat-collapsed-bar { border-color: rgba(191, 140, 255, 0.18); }
+:root[data-theme="moon"] .chat-sessions-head,
+:root[data-theme="moon"] .cs-workspaces { border-bottom-color: rgba(191, 140, 255, 0.12); }
+:root[data-theme="moon"] .chat-session:hover { background: rgba(191, 140, 255, 0.08); }
+:root[data-theme="moon"] .chat-session.active {
+  background: rgba(191, 140, 255, 0.16);
+  border-color: rgba(224, 92, 255, 0.32);
+}
+:root[data-theme="moon"] .msg-user {
+  background: rgba(168, 85, 247, 0.08);
+  border-color: rgba(224, 92, 255, 0.36);
+}
+:root[data-theme="moon"] .statusbar { border-top-color: rgba(191, 140, 255, 0.12); }
+:root[data-theme="moon"] .draft-thumb { box-shadow: 0 0 10px rgba(168, 85, 247, 0.16); }
+:root[data-theme="moon"] ::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(191, 140, 255, 0.35), rgba(224, 92, 255, 0.35));
+}
+:root[data-theme="moon"] ::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(191, 140, 255, 0.65), rgba(224, 92, 255, 0.65));
+}
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body { height: 100%; }
 
 body {
-  background: var(--bg);
+  background-color: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
   font-size: 14px;
   overflow: hidden;
+  transition: background-color 0.6s var(--ease-light); /* 主题切换时底色自然过渡 */
 }
 
 /* ---------- 动态背景：视频底 + 事件反馈层 ---------- */
@@ -96,6 +181,36 @@ body {
   pointer-events: none;
 }
 
+/* ---------- 紫月动态背景层：双视频无缝循环 ----------
+   默认隐藏，仅 data-theme="moon" 时显示；
+   视频未就绪时先露出深靛→紫罗兰占位渐变。
+   透明度由 bg-moon.js 按淡化调度写入（inline style），
+   这里只负责布局与缓动，不参与具体数值。 */
+#bgvideoMoon {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 0;
+  pointer-events: none;
+  display: none; /* 紫月层默认隐藏：其余主题不可见 */
+  background: linear-gradient(160deg, #150d33 0%, #2a1c58 48%, #45276e 100%);
+}
+#bgvideoMoon video {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  object-fit: cover;
+  pointer-events: none;
+  opacity: 1; /* 单视频无缝 loop，无需透明度调度：始终完全不透明 */
+  /* 注意：禁止在此加任何 transform/scale 动画 —— 960x540 素材放大到全屏后，
+     连续亚像素重采样会在合成器层产生"游动/抖动"观感（画布采样测不到，真机可见）。 */
+}
+/* 主题联动：moon 时隐藏原星云视频、显示紫月层；其余主题反之 */
+:root[data-theme="moon"] #bgvideo { display: none; }
+:root[data-theme="moon"] #bgvideoMoon { display: block; }
+
 /* ============================================================
    轨道边栏：收起 64px / 悬浮展开 240px
    ============================================================ */
@@ -114,7 +229,9 @@ body {
   -webkit-backdrop-filter: blur(20px);
   border-right: 1px solid rgba(0, 212, 170, 0.1);
   box-shadow: 4px 0 24px rgba(0, 0, 0, 0.25);
-  transition: width 0.4s var(--ease-space);
+  transition: width 0.4s var(--ease-space),
+    background-color 0.5s var(--ease-light),
+    border-color 0.5s var(--ease-light);
   overflow: hidden;
   white-space: nowrap;
 }
@@ -1200,6 +1317,42 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
 .dock-connect-desc { font-size: 12px; color: var(--text-dim); line-height: 1.8; margin-bottom: 12px; }
 .dock-row { display: flex; gap: 10px; margin-top: 10px; }
 .dock-hint { font-size: 12px; color: var(--warn); margin-top: 8px; min-height: 16px; }
+.dock-field-label { font-size: 11px; color: var(--text-dim); letter-spacing: 1px; margin: 10px 2px 6px; }
+.dock-select {
+  width: 100%;
+  max-width: none;
+  appearance: none;
+  cursor: pointer;
+  padding-right: 30px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-dim) 50%), linear-gradient(135deg, var(--text-dim) 50%, transparent 50%);
+  background-position: calc(100% - 16px) 55%, calc(100% - 11px) 55%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
+.dock-select option { background: #0d1830; color: var(--text); }
+.dock-token-toggle { margin: 6px 0 2px; }
+.dock-token-box {
+  margin: 8px 0;
+  padding: 10px;
+  border: 1px dashed rgba(120, 160, 255, 0.35);
+  border-radius: 8px;
+  background: rgba(70, 110, 200, 0.06);
+}
+.dock-token-desc { font-size: 11px; line-height: 1.6; color: var(--text-dim); margin-bottom: 8px; }
+.dock-pub {
+  width: 100%;
+  max-width: none;
+  height: 108px;
+  resize: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+.dock-addrepo { display: flex; gap: 8px; margin-top: 12px; }
+.dock-addrepo .sm-input { max-width: none; flex: 1; }
+.dock-addrepo .primary-btn { flex: none; white-space: nowrap; }
 
 /* 账户头部 */
 .dock-account {
@@ -1224,6 +1377,7 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
 .dock-account-info { flex: 1; min-width: 0; }
 .dock-account-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dock-account-login { font-size: 11px; color: var(--text-dim); font-family: var(--font-mono); }
+.dock-account-mode { font-size: 10px; color: var(--gold); margin-top: 2px; }
 .dock-account-actions { display: flex; gap: 6px; }
 
 /* 仓库 / 分支 / 文件树 */
@@ -1237,6 +1391,16 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
   transition: border-color 0.2s var(--ease-light), transform 0.15s var(--ease-orbit);
 }
 .dock-repo:hover, .dock-branch:hover { border-color: var(--accent); transform: translateX(2px); }
+.dock-repo { position: relative; padding-right: 40px; }
+.dock-repo-del {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 2px 8px;
+  opacity: 0.55;
+}
+.dock-repo-del:hover { opacity: 1; }
 .dock-repo-name { font-size: 13px; font-weight: 600; }
 .dock-repo-desc { font-size: 11.5px; color: var(--text-dim); margin-top: 3px; line-height: 1.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dock-repo-meta { font-size: 10.5px; color: var(--text-dim); margin-top: 4px; font-family: var(--font-mono); }
@@ -1423,6 +1587,73 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
 .ct-status-dot.idle { background: var(--text-dim); opacity: 0.6; }
 .ct-status-dot.running { background: var(--cyan); box-shadow: 0 0 10px var(--cyan); animation: breathe 1.4s infinite; }
 
+/* 权限预设（与推理强度并列的分段控件） */
+.ct-perm-row { display: flex; align-items: center; gap: 8px; }
+.ct-perm-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  letter-spacing: 2px;
+  cursor: default;
+}
+.ct-perm-seg {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(13, 24, 48, 0.6);
+}
+.ct-perm {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.22s var(--ease-light);
+}
+.ct-perm:hover { color: var(--text); }
+.ct-perm.active {
+  color: #04121a;
+  font-weight: 700;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  box-shadow: 0 0 12px rgba(123, 97, 255, 0.45);
+}
+.ct-perm[data-perm="read-only"].active { background: linear-gradient(90deg, var(--cyan), var(--violet)); }
+.ct-perm[data-perm="danger-full-access"].active { background: linear-gradient(90deg, var(--orange), var(--gold)); }
+
+/* 底部：上下文用量 / 估算花费 */
+.chat-usage-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 14px;
+  border-top: 1px solid var(--border);
+  background: rgba(4, 7, 15, 0.35);
+  font-size: 11px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.cu-context { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cu-track {
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(123, 97, 255, 0.15);
+  overflow: hidden;
+  min-width: 60px;
+}
+.cu-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transition: width 0.5s var(--ease-light);
+}
+.cu-track.cu-hot .cu-fill { background: linear-gradient(90deg, var(--orange), var(--gold)); }
+.cu-cost { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--gold); }
+
 /* 其他运行中横幅 */
 .ct-other {
   border: 1px dashed rgba(255, 215, 0, 0.5);
@@ -1521,6 +1752,16 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
 .sm-select option {
   background: #0b0d2e;
   color: var(--text);
+}
+.sm-select optgroup {
+  background: #0b0d2e;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  letter-spacing: 0.5px;
+}
+.sm-select optgroup option {
+  color: var(--text);
+  font-size: 13px;
 }
 
 /* ============================================================
@@ -1787,6 +2028,7 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
 .provider-grid { margin-top: 12px; }
 .provider-stats { display: flex; gap: 14px; margin-bottom: 10px; font-size: 12px; color: var(--text-dim); }
 .pstat.ok { color: var(--cyan); }
+.pstat.warn { color: var(--warn); }
 .provider-cell {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -1824,4 +2066,64 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
   padding: 2px 10px;
   font-family: var(--font-mono);
 }
+/* 加载失败的提供商 */
+.mg-fail { border-color: rgba(255, 108, 51, 0.4); }
+.mg-fail-msg {
+  font-size: 12px;
+  color: var(--warn);
+  line-height: 1.7;
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+/* 未启用 / 未加载模型的提供商 */
+.mg-idle { border-style: dashed; border-color: var(--border-strong); }
+.mg-idle-msg { font-size: 12px; color: var(--text-dim); line-height: 1.8; }
+.mg-idle-msg code {
+  font-family: var(--font-mono);
+  color: var(--accent-2);
+  background: rgba(123, 97, 255, 0.08);
+  padding: 1px 5px;
+  border-radius: 6px;
+}
+/* 提供商 API 密钥编辑器 */
+.mg-key {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-strong);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mg-key-head { display: flex; align-items: center; gap: 8px; }
+.mg-key-ref { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); }
+.mg-key-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mg-key-input {
+  flex: 1;
+  min-width: 220px;
+  background: rgba(4, 7, 15, 0.6);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12.5px;
+  font-family: var(--font-mono);
+  padding: 7px 10px;
+  transition: border-color 0.2s var(--ease-light), box-shadow 0.2s var(--ease-light);
+}
+.mg-key-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 10px rgba(0, 212, 170, 0.2);
+}
+.mg-key-input::placeholder { color: var(--text-dim); opacity: 0.7; }
+.mg-key-msg { font-size: 12px; line-height: 1.7; color: var(--text-dim); }
+.mg-key-msg.ok { color: var(--cyan); }
+.mg-key-msg.bad { color: var(--warn); }
+.mg-key-msg code {
+  font-family: var(--font-mono);
+  background: rgba(123, 97, 255, 0.08);
+  padding: 1px 5px;
+  border-radius: 6px;
+  color: var(--accent-2);
+}
+.mg-key-msg .warn { color: var(--warn); font-weight: 600; }
 .row-actions { display: flex; gap: 8px; margin-top: 12px; }

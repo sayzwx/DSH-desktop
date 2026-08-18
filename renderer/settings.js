@@ -90,50 +90,234 @@
   }
 
   // ---------------- 模型配置 ----------------
+  // 数据源：
+  //  - llm.providers -> 提供商目录（全部可选，含启用状态与配置位置）
+  //  - llm.models    -> 已加载的模型分组 + 加载失败原因
+  //  - settings.describe -> 命名空间视图（llm-pi-ai 的 apiKeyEnv / revision / writable）
+  //  - credentials.describe -> 每个派生密钥引用的已配置状态
+  let providersAll = [];
   let modelGroupsAll = [];
-  let providerNames = {};
+  let modelFailures = [];
+  let nsViews = {};    // ns -> settings.describe 命名空间视图
+  let credStates = {}; // ref -> { configured, writable }
+  let settingsWritable = true;
+
+  function providerOf(id) {
+    return providersAll.find((p) => p.provider === id);
+  }
+  function groupOf(id) {
+    return modelGroupsAll.find((g) => g.id === id);
+  }
+  function failureOf(id) {
+    return modelFailures.find((f) => f.id === id);
+  }
+
+  /** 与 Web UI 相同的约定：provider 路由 id -> 凭据引用名（如 anthropic -> ANTHROPIC_API_KEY）。 */
+  function deriveKeyRef(provider) {
+    return provider.toUpperCase().replace(/[^A-Z0-9]+/g, '_') + '_API_KEY';
+  }
+
+  /** 该提供商配置里已记录的 apiKeyEnv（llm-pi-ai 的 providers.<name>），无则 undefined。 */
+  function apiKeyEnvOf(provider) {
+    const ns = nsViews['llm-pi-ai'];
+    const profile = ns && ns.value && ns.value.providers ? ns.value.providers[provider] : undefined;
+    return profile && typeof profile.apiKeyEnv === 'string' && profile.apiKeyEnv.length > 0
+      ? profile.apiKeyEnv
+      : undefined;
+  }
 
   async function refreshModels() {
     const stats = $('#providerStats');
     const sel = $('#providerSelect');
-    const groups = $('#modelGroupList');
-    const lp = await api.getLlmProviders();
-    const lm = await api.getLlmModels();
+    const [lp, lm, sd] = await Promise.all([
+      api.getLlmProviders(),
+      api.getLlmModels(),
+      api.getSettingsDescribe(),
+    ]);
     if (!lp.ok && !lm.ok) {
       sel.innerHTML = '<option value="">（获取失败）</option>';
       stats.innerHTML = `<div class="empty">模型目录获取失败：${esc(lp.error || lm.error)}</div>`;
-      groups.innerHTML = '';
+      $('#modelGroupList').innerHTML = '';
       return;
     }
-    const providers = lp.ok ? lp.providers || [] : [];
-    providerNames = {};
-    for (const p of providers) providerNames[p.provider] = p.displayName || p.provider;
-    const active = providers.filter((p) => p.active);
+    providersAll = lp.ok ? lp.providers || [] : [];
     modelGroupsAll = lm.ok ? lm.groups || [] : [];
-    const current = sel.value;
-    sel.innerHTML = ['', ...modelGroupsAll.map((g) => g.id)]
-      .map((id) => `<option value="${esc(id)}">${id ? esc(providerNames[id] || id) : '全部提供商'}</option>`)
-      .join('');
-    if (modelGroupsAll.some((g) => g.id === current)) sel.value = current;
+    modelFailures = lm.ok ? lm.failures || [] : [];
+    nsViews = {};
+    settingsWritable = true;
+    if (sd.ok) {
+      settingsWritable = sd.writable !== false;
+      for (const n of sd.namespaces || []) nsViews[n.ns] = n;
+    }
+    // 批量查询每个提供商实际使用的密钥引用状态（一个往返）
+    const refs = [...new Set(providersAll.map((p) => apiKeyEnvOf(p.provider) || deriveKeyRef(p.provider)))];
+    const cr = await api.describeCredentials(refs);
+    credStates = cr.ok ? cr.credentials || {} : {};
+    renderProviderSelect(sel);
     renderModelGroups();
-    stats.innerHTML = `<span class="pstat">${providers.length} 个提供商</span>
-      <span class="pstat ok">${active.length} 个已启用</span>
-      <span class="pstat">${modelGroupsAll.length} 个模型分组</span>`;
+    const active = providersAll.filter((p) => p.active).length;
+    stats.innerHTML =
+      `<span class="pstat">${providersAll.length} 个提供商可选</span>` +
+      `<span class="pstat ok">${active} 个已启用</span>` +
+      `<span class="pstat">${modelGroupsAll.length} 个有可用模型</span>` +
+      (modelFailures.length ? `<span class="pstat warn">${modelFailures.length} 个加载失败</span>` : '') +
+      (settingsWritable ? '' : '<span class="pstat warn">设置只读</span>');
+  }
+
+  /** 下拉选项文案：带模型数 / 失败标记，让 37 个提供商一目了然。 */
+  function providerOptionLabel(p) {
+    const g = groupOf(p.provider);
+    const f = failureOf(p.provider);
+    if (g) return `${p.displayName || p.provider}（${g.models.length} 个模型）`;
+    if (f) return `${p.displayName || p.provider}（加载失败）`;
+    return p.displayName || p.provider;
+  }
+
+  function renderProviderSelect(sel) {
+    const current = sel.value;
+    const active = providersAll.filter((p) => p.active);
+    const inactive = providersAll.filter((p) => !p.active);
+    const opts = (list) =>
+      list.map((p) => `<option value="${esc(p.provider)}">${esc(providerOptionLabel(p))}</option>`).join('');
+    const html = [`<option value="">全部提供商（${providersAll.length} 个）</option>`];
+    if (active.length > 0) html.push(`<optgroup label="已启用（${active.length}）">${opts(active)}</optgroup>`);
+    if (inactive.length > 0) html.push(`<optgroup label="未启用（${inactive.length}）">${opts(inactive)}</optgroup>`);
+    sel.innerHTML = html.join('');
+    if (providersAll.some((p) => p.provider === current)) sel.value = current;
+    else sel.value = '';
+  }
+
+  function groupCard(g) {
+    return `<div class="model-group">
+      <div class="mg-head"><span class="mg-name">${esc(g.name || g.id)}</span><code class="mg-id">${esc(g.id)}</code></div>
+      <div class="mg-models">${(g.models || []).map((m) => `<span class="mg-chip" title="${esc(m.id)}">${esc(m.name || m.id)}</span>`).join('') || '<span class="empty">（空）</span>'}</div>
+    </div>`;
+  }
+
+  /** 密钥编辑器：填写 API 密钥 → 保存（credentials.set + settings.mutate）→ 测试连接（llm.discoverModels）。 */
+  function keyEditor(p) {
+    if (!p || p.settingsNs !== 'llm-pi-ai') return ''; // 仅聚合提供商目录下的路由支持此流程
+    if (!settingsWritable) {
+      return `<div class="mg-key" data-provider="${esc(p.provider)}">
+        <div class="mg-key-msg">设置当前为只读（read-only settings provider），无法保存密钥。</div>
+      </div>`;
+    }
+    const ref = apiKeyEnvOf(p.provider) || deriveKeyRef(p.provider);
+    const st = credStates[ref] || {};
+    const configured = !!st.configured;
+    const locked = st.writable === false;
+    return `<div class="mg-key" data-provider="${esc(p.provider)}">
+      <div class="mg-key-head">
+        <span class="mg-key-ref">${esc(ref)}</span>
+        <span class="badge ${configured ? 'trust-system' : 'trust-user'}">${configured ? '已配置密钥' : '未配置密钥'}</span>
+      </div>
+      <div class="mg-key-row">
+        <input type="password" class="sm-input mg-key-input" autocomplete="off"
+          placeholder="${configured ? '已配置密钥，输入新值可覆盖保存' : '粘贴 ' + esc(ref) + ' 密钥…'}" ${locked ? 'disabled' : ''} />
+        <button class="mini-btn mg-key-save" type="button" ${locked ? 'disabled' : ''}>保存密钥</button>
+        <button class="mini-btn mg-key-test" type="button">测试连接</button>
+      </div>
+      <div class="mg-key-msg"></div>
+    </div>`;
+  }
+
+  function wireKeyEditors() {
+    document.querySelectorAll('.mg-key').forEach((block) => {
+      if (block.dataset.wired) return;
+      block.dataset.wired = '1';
+      const provider = block.dataset.provider;
+      const p = providerOf(provider);
+      if (!p) return;
+      const ref = apiKeyEnvOf(provider) || deriveKeyRef(provider);
+      const input = block.querySelector('.mg-key-input');
+      const msg = block.querySelector('.mg-key-msg');
+      const show = (html, kind) => { msg.innerHTML = html; msg.className = 'mg-key-msg' + (kind ? ' ' + kind : ''); };
+      const saveBtn = block.querySelector('.mg-key-save');
+      const testBtn = block.querySelector('.mg-key-test');
+      if (saveBtn) saveBtn.addEventListener('click', async () => {
+        const key = (input ? input.value : '').trim();
+        if (!key) { show('<span class="warn">请先粘贴 API 密钥再保存</span>', 'bad'); return; }
+        saveBtn.disabled = true; saveBtn.textContent = '保存中…';
+        try {
+          const set = await api.setCredential(ref, key);
+          if (!set.ok) { show('保存密钥失败：' + esc(set.error || 'unknown'), 'bad'); return; }
+          const ns = nsViews['llm-pi-ai'];
+          const mut = await api.mutateSettings('llm-pi-ai',
+            [{ op: 'set', path: ['providers', provider, 'apiKeyEnv'], value: ref }],
+            ns ? ns.revision : undefined);
+          if (!mut.ok) { show('写入配置失败：' + esc(mut.error || 'unknown'), 'bad'); return; }
+          show(`已保存 <code>${esc(ref)}</code> 并启用 <strong>${esc(p.displayName || provider)}</strong>，正在重新加载模型…`, 'ok');
+          refreshModels();
+        } catch (e) {
+          show('保存出错：' + esc(e.message || String(e)), 'bad');
+        } finally {
+          saveBtn.disabled = false; saveBtn.textContent = '保存密钥';
+        }
+      });
+      if (testBtn) testBtn.addEventListener('click', async () => {
+        const key = (input ? input.value : '').trim();
+        testBtn.disabled = true; testBtn.textContent = '测试中…';
+        show('正在连接 <code>' + esc(p.settingsNs) + '</code> 并发现模型…', '');
+        try {
+          const r = await api.discoverModels(p.settingsNs, provider, key || undefined);
+          if (!r.ok) { show('连接失败：' + esc(r.error || 'unknown'), 'bad'); return; }
+          const models = r.models || [];
+          show(models.length > 0
+            ? `连接成功，发现 ${models.length} 个模型：` + models.slice(0, 10).map((m) => `<code>${esc(m.name || m.id)}</code>`).join(' ') + (models.length > 10 ? ' …' : '')
+            : '连接成功，但该端点未返回任何模型', 'ok');
+        } catch (e) {
+          show('测试出错：' + esc(e.message || String(e)), 'bad');
+        } finally {
+          testBtn.disabled = false; testBtn.textContent = '测试连接';
+        }
+      });
+    });
+  }
+
+  function failureCard(f) {
+    const p = providerOf(f.id);
+    return `<div class="model-group mg-fail">
+      <div class="mg-head"><span class="mg-name">${esc(f.name || f.id)}</span><code class="mg-id">${esc(f.id)}</code><span class="badge trust-broken">加载失败</span></div>
+      <div class="mg-fail-msg">${esc(f.message)}</div>
+      ${keyEditor(p)}
+    </div>`;
+  }
+
+  /** 选中但既无模型分组、也未报错的提供商：说明其状态与配置位置，并给出密钥填写入口。 */
+  function idleCard(p) {
+    const where = p.settingsNs
+      ? `配置位置：<code>${esc(p.settingsNs)}</code>${(p.settingsPath || []).length ? ` → <code>${esc(p.settingsPath.join(' / '))}</code>` : ''}`
+      : '该提供商未声明配置位置';
+    const tip = p.active
+      ? '该提供商已启用，但当前没有加载到模型（可能尚未配置 API 密钥）。'
+      : '该提供商未启用：填入 API 密钥并保存后即会启用（配置写入 harness settings.yaml，实时生效）。';
+    return `<div class="model-group mg-idle">
+      <div class="mg-head"><span class="mg-name">${esc(p.displayName || p.provider)}</span><code class="mg-id">${esc(p.provider)}</code>
+        <span class="badge ${p.active ? 'trust-system' : 'trust-user'}">${p.active ? '已启用' : '未启用'}</span></div>
+      <div class="mg-idle-msg">${esc(tip)}<br />${where}</div>
+      ${keyEditor(p)}
+    </div>`;
   }
 
   function renderModelGroups() {
     const selVal = $('#providerSelect').value;
-    const groups = modelGroupsAll.filter((g) => !selVal || g.id === selVal);
-    $('#modelGroupList').innerHTML = groups.length === 0
-      ? '<div class="empty">该提供商暂无可用模型</div>'
-      : groups
-          .map(
-            (grp) => `<div class="model-group">
-            <div class="mg-head"><span class="mg-name">${esc(grp.name || grp.id)}</span><code class="mg-id">${esc(grp.id)}</code></div>
-            <div class="mg-models">${(grp.models || []).map((m) => `<span class="mg-chip" title="${esc(m.id)}">${esc(m.name || m.id)}</span>`).join('') || '<span class="empty">（空）</span>'}</div>
-          </div>`
-          )
-          .join('');
+    const list = $('#modelGroupList');
+    const cards = [];
+    if (selVal) {
+      const g = groupOf(selVal);
+      const f = failureOf(selVal);
+      const p = providerOf(selVal);
+      if (g) cards.push(groupCard(g));
+      if (f) cards.push(failureCard(f));
+      if (!g && !f && p) cards.push(idleCard(p));
+      if (cards.length === 0) cards.push('<div class="empty">该提供商暂无可用模型</div>');
+    } else {
+      for (const g of modelGroupsAll) cards.push(groupCard(g));
+      for (const f of modelFailures) cards.push(failureCard(f));
+      if (cards.length === 0) cards.push('<div class="empty">尚无提供商加载模型（在上方选择一个提供商查看详情）</div>');
+    }
+    list.innerHTML = cards.join('');
+    wireKeyEditors();
   }
 
   // ---------------- 插件配置域（settings.describe namespaces + 功能备注） ----------------
@@ -196,6 +380,41 @@
       .map((p) => `<option value="${esc(p.id)}">${esc(p.name || p.id)}${p.isDefault ? '（默认）' : ''}</option>`)
       .join('');
     if (cur.ok && cur.default) sel.value = cur.default;
+  }
+
+  // ---------------- 默认权限预设（新会话默认；与 Web UI 设置同步） ----------------
+  const PERM_CN = { 'read-only': '只读', 'workspace-write': '工作区写', 'danger-full-access': '全权限', custom: '自定义' };
+
+  /** 从 permission 命名空间 schema 的 union consts 解析可选预设（保持声明顺序）。 */
+  function permissionOptionsOf(ns) {
+    const refs = ns && ns.schema && typeof ns.schema === 'object' ? ns.schema.refs : null;
+    if (!refs) return [];
+    const consts = new Map();
+    let unionList = null;
+    for (const [uid, node] of Object.entries(refs)) {
+      if (node && node.type === 'const' && typeof node.value === 'string') consts.set(Number(uid), node.value);
+      if (node && node.type === 'union' && Array.isArray(node.list)) unionList = node.list;
+    }
+    const ordered = unionList ? unionList.map((uid) => consts.get(uid)).filter(Boolean) : [...consts.values()];
+    return ordered.length > 0 ? ordered : [...consts.values()];
+  }
+
+  async function refreshDefaultPermission() {
+    const sel = $('#defaultPermissionSelect');
+    const r = await api.getSettingsDescribe();
+    if (!r.ok) {
+      sel.innerHTML = '<option value="">（获取失败）</option>';
+      return;
+    }
+    const ns = (r.namespaces || []).find((n) => n.ns === 'permission');
+    if (!ns || typeof ns.value?.defaultPreset !== 'string') {
+      sel.innerHTML = '<option value="">（无权限预设设置）</option>';
+      return;
+    }
+    sel.innerHTML = permissionOptionsOf(ns)
+      .map((id) => `<option value="${esc(id)}">${esc(PERM_CN[id] || id)}</option>`)
+      .join('');
+    sel.value = ns.value.defaultPreset;
   }
 
   // ---------------- 完整插件目录 ----------------
@@ -477,6 +696,28 @@
         if (window.__modal) window.__modal.alert('保存失败：' + r.error, '保存失败');
       }
     });
+    $('#applyDefaultPermissionBtn').addEventListener('click', async () => {
+      const sel = $('#defaultPermissionSelect');
+      const value = sel.value;
+      if (!value) {
+        if (window.__modal) window.__modal.alert('没有可保存的权限预设', '提示');
+        return;
+      }
+      // 读一次 describe 拿 revision（与 Web UI 的 settings.mutate 同语义）
+      const d = await api.getSettingsDescribe();
+      const ns = d.ok ? (d.namespaces || []).find((n) => n.ns === 'permission') : null;
+      if (!d.ok || !ns) {
+        if (window.__modal) window.__modal.alert('读取权限设置失败：' + (d.error || 'unknown'), '保存失败');
+        return;
+      }
+      const r = await api.mutateSettings('permission', [{ op: 'set', path: ['defaultPreset'], value }], ns.revision);
+      if (r.ok) {
+        if (window.__modal) window.__modal.alert(`已保存默认权限：${sel.selectedOptions[0].textContent}（新会话生效）`, '已保存');
+        refreshDefaultPermission();
+      } else {
+        if (window.__modal) window.__modal.alert('保存失败：' + (r.error || 'unknown'), '保存失败');
+      }
+    });
     $('#pluginSearch').addEventListener('input', () => { catalogShown = 40; renderPluginCatalog(); });
     $('#pluginCatalogMore').addEventListener('click', () => { catalogShown += 60; renderPluginCatalog(); });
     $('#openSettingsDocBtn').addEventListener('click', async () => {
@@ -503,6 +744,7 @@
       if (s === 'running') {
         refreshPresets();
         refreshDefaultPreset();
+        refreshDefaultPermission();
         refreshModels();
         refreshPluginNs();
         refreshPluginCatalog();
@@ -512,6 +754,7 @@
       if (st.state === 'running' || st.webUp) {
         refreshPresets();
         refreshDefaultPreset();
+        refreshDefaultPermission();
         refreshModels();
         refreshPluginNs();
         refreshPluginCatalog();

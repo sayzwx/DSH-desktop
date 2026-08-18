@@ -17,3 +17,10 @@ Thumbs.db
 # Python 缂撳瓨
 __pycache__/
 *.pyc
+
+# 实测/临时产物
+scripts/.scratch/
+
+# 分发安装包构建产物
+dist/
+

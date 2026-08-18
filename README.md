@@ -14,7 +14,7 @@
   - 「＋ 新会话」可选择电脑上的任意文件夹作为工作区（原生目录选择器）
   - 工具栏工作区菜单：筛选视图 / 添加工作区
 - **星图档案**：会话数据目录浏览
-- **GitHub 侧边栏**：Personal Access Token 登录，浏览仓库 / 分支 / 文件树
+- **GitHub 侧边栏**：SSH 密钥连接（`git@github.com`），添加仓库 / 分支 / 文件树浏览
 - **MCP / 技能**：harness 组合文件中的 MCP 服务器与技能列表
 - **设置**：主题（深空 / 极光 / 彗星金 / 自定义）、Agent preset、模型配置、API 密钥管理
 - **动态星空背景**：星空粒子 + 星云动画主题
@@ -51,7 +51,7 @@ renderer/           渲染层（原生 HTML/JS/CSS）
 
 ## 说明
 
-- GitHub Token 仅保存在本机 `~/.dsh/.github-token`，只用于调用 GitHub 公开只读接口。
+- GitHub 连接使用本机 SSH 密钥（`git@github.com`），仅在 `~/.dsh/.github-ssh.json` 记录密钥路径与登录名，不保存密钥材料；仓库浏览通过 git over SSH 完成。22 端口不通时自动回退 `ssh.github.com:443`（SSH over HTTPS）。
 - GitHub 请求使用 Electron `net.fetch`（系统证书库），兼容本地 TLS 拦截环境。
 - 对话会话数据与工作区注册表由 harness 持久化在 `~/.dsh/` 下，桌面端本身不存业务数据。
 - 动态背景视频约 45MB；不需要动画背景时可直接删除 `renderer/bg-animated.mp4`。

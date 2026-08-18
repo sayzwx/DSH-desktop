@@ -1,10 +1,15 @@
 const { app, BrowserWindow, ipcMain, shell, dialog, net } = require('electron');
-const { spawn, spawnSync } = require('node:child_process');
+const { spawn, spawnSync, execFile } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-const HARNESS_DIR = process.env.DSH_HARNESS_DIR || 'C:\\Users\\mjsx\\DeepSeek-Harness';
+// 分发安装布局：app 与 harness、tools/node 同级（%LOCALAPPDATA%\DSH\{app,harness,tools}）；
+// 本机开发时仍是 D:\DeepSeek-Harness。
+const HARNESS_DIR = process.env.DSH_HARNESS_DIR ||
+  (fs.existsSync(path.join(__dirname, '..', 'harness')) ? path.join(__dirname, '..', 'harness') : 'D:\\DeepSeek-Harness');
+const NODE_EXE = process.env.DSH_NODE_EXE ||
+  (fs.existsSync(path.join(__dirname, '..', 'tools', 'node', 'node.exe')) ? path.join(__dirname, '..', 'tools', 'node', 'node.exe') : 'node');
 const DSH_HOME = path.join(os.homedir(), '.dsh');
 const PORT = 3080;
 const LOG_LIMIT = 5000;
@@ -48,7 +53,11 @@ async function startHarness() {
   setState('starting');
   startDeadline = Date.now() + 90 * 1000;
   const env = { ...process.env, ...loadDotEnv(), DSH_HOME };
-  harnessProc = spawn('cmd.exe', ['/c', 'pnpm dsh web'], {
+  // 优先直接 node 启动 dsh CLI（分发安装自带 tools/node，不依赖系统 pnpm）；
+  // 本机无 CLI 构建时才退回 pnpm dsh web。
+  const cliBin = path.join(HARNESS_DIR, 'apps', 'cli', 'lib', 'bin.js');
+  const direct = fs.existsSync(cliBin);
+  harnessProc = spawn(direct ? NODE_EXE : 'cmd.exe', direct ? [cliBin, 'web'] : ['/c', 'pnpm dsh web'], {
     cwd: HARNESS_DIR,
     env,
     windowsHide: true,
@@ -140,6 +149,28 @@ async function rpcCall(method, payload) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ type: 'client-request', rpcId, method, payload: payload || {} }),
     signal: AbortSignal.timeout(12000),
+  });
+  const body = await res.json();
+  if (!body || body.type !== 'server-response') {
+    return { ok: false, error: { message: `bad envelope: HTTP ${res.status}` } };
+  }
+  if (!body.result || !body.result.ok) {
+    return { ok: false, error: body.result?.error || { message: 'unknown rpc error' } };
+  }
+  return { ok: true, value: body.result.value };
+}
+
+/**
+ * Typert RPC 调用（commands/* 等生成式端点）：
+ * 与 Web 客户端同一约定 —— POST /api/<ns>/<method>，payload 包一层 args。
+ */
+async function rpcCallTypert(method, args) {
+  const rpcId = `rpc-${++chatRpcCounter}`;
+  const res = await fetch(`http://127.0.0.1:${PORT}/api/${method}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ type: 'client-request', rpcId, method, payload: { args } }),
+    signal: AbortSignal.timeout(15000),
   });
   const body = await res.json();
   if (!body || body.type !== 'server-response') {
@@ -247,7 +278,7 @@ function createWindow() {
     minHeight: 640,
     backgroundColor: '#04070F',
     icon: path.join(__dirname, 'icon-planet.ico'),
-    title: 'DeepSeek Harness 桌面端',
+    title: 'DSH',
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -480,6 +511,12 @@ ipcMain.handle('chat:selectModel', async (_e, { sessionId, provider, model, reas
   if (!r.ok) return { ok: false, error: r.error?.message || 'session.selectModel failed' };
   return { ok: true, value: r.value };
 });
+// 切换会话权限预设：走 harness 的 /permission 命令（与 Web UI 同一机制）
+ipcMain.handle('chat:permissionSet', async (_e, { sessionId, preset }) => {
+  const r = await rpcCallTypert('commands/execute', { agentId: sessionId, line: `/permission ${preset}` });
+  if (!r.ok) return { ok: false, error: r.error?.message || 'commands/execute failed' };
+  return { ok: true, command: r.value?.result || null };
+});
 
 // ---------- 设置：插件（agent preset）与模型配置 IPC ----------
 ipcMain.handle('settings:presets', async () => {
@@ -593,112 +630,460 @@ ipcMain.handle('settings:openDoc', async () => {
   if (!r.ok) return { ok: false, error: r.error?.message || 'settings.openDocument failed' };
   return { ok: true, ...r.value };
 });
+// ---------- 模型提供商：凭据读写 + 配置写入 + 连接探测 ----------
+// 与 Web UI 的 Models 页同一套 RPC：credentials.set 存密钥，
+// settings.mutate 把 apiKeyEnv 写进 llm-pi-ai 的 providers.<name>，
+// llm.discoverModels 用输入框里的密钥直接探测端点。
+ipcMain.handle('credentials:describe', async (_e, refs) => {
+  const list = Array.isArray(refs) ? refs.filter((r) => typeof r === 'string' && r.length > 0) : [];
+  const r = await rpcCall('credentials.describe', { refs: list });
+  if (!r.ok) return { ok: false, error: r.error?.message || 'credentials.describe failed' };
+  return { ok: true, credentials: r.value?.credentials || {} };
+});
+ipcMain.handle('credentials:set', async (_e, { ref, value }) => {
+  const r = await rpcCall('credentials.set', { ref, value });
+  if (!r.ok) return { ok: false, error: r.error?.message || 'credentials.set failed' };
+  return { ok: true };
+});
+ipcMain.handle('settings:mutate', async (_e, { ns, ops, expectedRevision }) => {
+  const payload = { ns, ops };
+  if (typeof expectedRevision === 'number') payload.expectedRevision = expectedRevision;
+  const r = await rpcCall('settings.mutate', payload);
+  if (!r.ok) return { ok: false, error: r.error?.message || 'settings.mutate failed' };
+  return { ok: true, ...r.value };
+});
+ipcMain.handle('llm:discoverModels', async (_e, { settingsNs, provider, apiKey }) => {
+  const payload = { settingsNs, provider };
+  if (typeof apiKey === 'string' && apiKey.length > 0) payload.apiKey = apiKey;
+  const r = await rpcCall('llm.discoverModels', payload);
+  if (!r.ok) return { ok: false, error: r.error?.message || 'llm.discoverModels failed' };
+  return { ok: true, models: r.value?.models || [] };
+});
 
-// ---------- 侧边栏 Dock：GitHub / MCP / Skills ----------
-const GH_TOKEN_FILE = path.join(DSH_HOME, '.github-token');
+// ---------- 侧边栏 Dock：GitHub（SSH 密钥）/ MCP / Skills ----------
+// GitHub 连接走本机 SSH 密钥（git@github.com），不保存任何密钥材料，
+// 只在 ~/.dsh/.github-ssh.json 记录密钥路径与登录名；仓库浏览全部用 git over SSH。
+// 可选：只读 Token 文件（~/.dsh/.github-listing-token），仅用于列出私有仓库，不参与 SSH 连接。
+const GH_SSH_FILE = path.join(DSH_HOME, '.github-ssh.json');
+const GH_REPOS_FILE = path.join(DSH_HOME, '.github-repos.json');
+const GH_CACHE_DIR = path.join(DSH_HOME, '.gh-cache');
+const GH_TOKEN_FILE = path.join(DSH_HOME, '.github-listing-token');
+const SSH_DIR = path.join(os.homedir(), '.ssh');
 
-function readGhToken() {
-  try { return fs.readFileSync(GH_TOKEN_FILE, 'utf8').trim(); } catch { return null; }
-}
-
-async function ghFetch(pathname, token, init = {}) {
-  let res;
+function resolveExe(name) {
   try {
-    // 用 Electron 的 net.fetch（Chromium 网络栈，信任 Windows 系统证书库）：
-    // 全局 fetch 走 Node 自带证书库，在本地 TLS 拦截环境下会报 unable to verify the first certificate。
-    res = await net.fetch(`https://api.github.com${pathname}`, {
-      ...init,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'User-Agent': 'dsh-desktop',
-        Accept: 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28',
-        ...(init.headers || {}),
-      },
+    const r = spawnSync('where', [name], { windowsHide: true, encoding: 'utf8' });
+    const line = (r.stdout || '').split(/\r?\n/).find((l) => l.trim().length > 0);
+    if (line) return line.trim();
+  } catch { /* 找不到就用裸命令名 */ }
+  return name;
+}
+const SSH_EXE = resolveExe('ssh');
+const GIT_EXE = resolveExe('git');
+
+function execOut(cmd, args, opts = {}) {
+  return new Promise((resolve) => {
+    execFile(cmd, args, {
+      windowsHide: true,
+      encoding: 'utf8',
+      timeout: opts.timeout || 20000,
+      env: opts.env || process.env,
+      maxBuffer: 32 * 1024 * 1024,
+    }, (err, stdout, stderr) => {
+      if (err) return resolve({ ok: false, code: err.code, killed: !!err.killed, message: err.message, stdout: stdout || '', stderr: stderr || '' });
+      resolve({ ok: true, stdout: stdout || '', stderr: stderr || '' });
     });
-  } catch (err) {
-    // 网络异常（DNS / 连接被重置 / 超时）不能让登录流程挂死，转成可读错误
-    return { err: `网络错误: ${err.message}` };
-  }
-  if (res.status === 401 || res.status === 403) {
-    return { err: 'unauthorized' };
-  }
-  if (!res.ok) return { err: `GitHub API ${res.status}: ${(await res.text()).slice(0, 200)}` };
-  return { data: await res.json() };
+  });
 }
 
-async function ghAvatarDataUrl(avatarUrl, token) {
+function readGhSsh() {
+  try { return JSON.parse(fs.readFileSync(GH_SSH_FILE, 'utf8')); } catch { return null; }
+}
+function writeGhSsh(obj) {
+  fs.mkdirSync(DSH_HOME, { recursive: true });
+  fs.writeFileSync(GH_SSH_FILE, JSON.stringify(obj, null, 2), 'utf8');
+}
+function readGhRepos() {
+  try { return JSON.parse(fs.readFileSync(GH_REPOS_FILE, 'utf8')); } catch { return []; }
+}
+function writeGhRepos(list) {
+  fs.mkdirSync(DSH_HOME, { recursive: true });
+  fs.writeFileSync(GH_REPOS_FILE, JSON.stringify(list, null, 2), 'utf8');
+}
+function gitSshEnv() {
+  const gh = readGhSsh();
+  let cmd = `"${SSH_EXE}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10`;
+  if (gh && gh.keyPath && fs.existsSync(gh.keyPath)) cmd += ` -i "${gh.keyPath}"`;
+  // 22 端口被防火墙拦截时回退 ssh.github.com:443（GitHub 官方支持 SSH over HTTPS）
+  if (gh && gh.sshPort && gh.sshPort !== 22) cmd += ` -p ${gh.sshPort} -o HostName=${gh.sshHost || 'ssh.github.com'}`;
+  return { ...process.env, GIT_SSH_COMMAND: cmd };
+}
+function sshErrText(r) {
+  switch (r.err) {
+    case 'auth': return 'SSH 认证失败：请确认该密钥已添加到 GitHub（Settings → SSH and GPG keys），且无密码短语（或已用 ssh-add 加入 ssh-agent）';
+    case 'hostkey': return '主机密钥验证失败：请先手动运行 ssh -T git@github.com 确认服务器指纹';
+    case 'network': return r.detail || '网络错误：无法连接 github.com（22 端口）';
+    default: return r.detail || 'SSH 连接失败';
+  }
+}
+// ssh -T git@github.com 的退出码恒为 1（GitHub 不提供 shell），只能解析 "Hi <login>!" 判断成功
+async function sshHello(keyPath, mode) {
+  const m = mode || { host: 'github.com', port: 22 };
+  const args = ['-T', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ConnectTimeout=10', '-p', String(m.port)];
+  if (m.host !== 'github.com') args.push('-o', `HostName=${m.host}`);
+  if (keyPath && fs.existsSync(keyPath)) args.push('-i', keyPath);
+  args.push('git@github.com');
+  const r = await execOut(SSH_EXE, args, { timeout: 15000 });
+  const text = (r.stdout || '') + '\n' + (r.stderr || '');
+  const hit = text.match(/Hi ([A-Za-z0-9-]+)!/);
+  if (hit) return { login: hit[1] };
+  if (/Permission denied|publickey/i.test(text)) return { err: 'auth' };
+  if (/Host key verification failed/i.test(text)) return { err: 'hostkey' };
+  if (/Could not resolve hostname|Connection timed out|Connection refused|Network is unreachable/i.test(text)) return { err: 'network' };
+  return { err: 'unknown', detail: text.trim().slice(0, 200) };
+}
+// 22 端口连不上时自动回退 ssh.github.com:443，成功后记住该模式（持久化到 ~/.dsh/.github-ssh.json）
+async function sshHelloWithFallback(keyPath, saved) {
+  if (saved && saved.sshPort && saved.sshPort !== 22) {
+    const r = await sshHello(keyPath, { host: saved.sshHost || 'ssh.github.com', port: saved.sshPort });
+    return { ...r, sshHost: saved.sshHost || 'ssh.github.com', sshPort: saved.sshPort };
+  }
+  const r = await sshHello(keyPath, { host: 'github.com', port: 22 });
+  if (r.login) return { ...r, sshHost: 'github.com', sshPort: 22 };
+  if (r.err === 'network') {
+    const alt = await sshHello(keyPath, { host: 'ssh.github.com', port: 443 });
+    if (alt.login) return { ...alt, sshHost: 'ssh.github.com', sshPort: 443 };
+    // 443 的真实错误（如认证失败）要透传，不能笼统报"网络错误"
+    if (alt.err !== 'network') return alt;
+    return { err: 'network', detail: '无法连接 github.com（22 端口与 443 端口 ssh.github.com 均失败）' };
+  }
+  return r;
+}
+function detectSshKeys() {
+  const keys = [];
+  const sshDir = path.join(os.homedir(), '.ssh');
+  const names = ['id_ed25519', 'id_ecdsa', 'id_rsa', 'id_ed25519_sk', 'id_ecdsa_sk', 'id_dsa'];
+  if (fs.existsSync(sshDir)) {
+    for (const n of names) {
+      const p = path.join(sshDir, n);
+      if (fs.existsSync(p)) keys.push({ path: p, name: n, source: '~/.ssh' });
+    }
+  }
+  // ~/.ssh/config 中为 github.com 指定的 IdentityFile
   try {
-    const res = await net.fetch(avatarUrl, { headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'dsh-desktop' } });
+    const cfg = fs.readFileSync(path.join(sshDir, 'config'), 'utf8');
+    let inGh = false;
+    for (const raw of cfg.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (/^Host\s+/i.test(line)) inGh = /\bgithub\.com\b/i.test(line);
+      else if (inGh && /^IdentityFile\s+/i.test(line)) {
+        let p = line.replace(/^IdentityFile\s+/i, '').replace(/^"|"$/g, '').replace(/^~\//, os.homedir() + '/');
+        if (!path.isAbsolute(p)) p = path.join(sshDir, p);
+        if (fs.existsSync(p) && !keys.some((k) => k.path === p)) keys.push({ path: p, name: path.basename(p), source: 'ssh config' });
+      }
+    }
+  } catch { /* 没有 config 文件 */ }
+  return keys;
+}
+function ghHostsHijacked() {
+  try {
+    const hostsFile = path.join(process.env.WINDIR || 'C:\\Windows', 'System32', 'drivers', 'etc', 'hosts');
+    const hosts = fs.readFileSync(hostsFile, 'utf8');
+    return /^[ \t]*127\.0\.0\.1[ \t]+github\.com([ \t#].*)?$/m.test(hosts);
+  } catch { return false; }
+}
+async function ghAvatarDataUrl(login) {
+  try {
+    // 头像不需要认证：github.com/<login>.png（8 秒超时，避免网络异常时卡住连接流程）
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 8000);
+    const res = await net.fetch(`https://github.com/${encodeURIComponent(login)}.png`, { headers: { 'User-Agent': 'dsh-desktop' }, signal: ac.signal });
+    clearTimeout(timer);
     if (!res.ok) return null;
     const buf = Buffer.from(await res.arrayBuffer());
     return `data:image/png;base64,${buf.toString('base64')}`;
   } catch { return null; }
 }
+function normalizeGhUrl(input) {
+  let s = String(input || '').trim();
+  if (!s) return { err: '仓库地址不能为空' };
+  if (/^git@github\.com:/i.test(s)) {
+    s = s.replace(/\.git$/i, '') + '.git';
+  } else if (/^https?:\/\/github\.com\//i.test(s)) {
+    const p = s.replace(/^https?:\/\/github\.com\//i, '').replace(/\/+$/g, '');
+    if (!p.includes('/')) return { err: '无法识别的仓库地址（需要 owner/repo）' };
+    s = 'git@github.com:' + p.replace(/\.git$/i, '') + '.git';
+  } else if (/^ssh:\/\/git@github\.com\//i.test(s)) {
+    s = 'git@github.com:' + s.replace(/^ssh:\/\/git@github\.com\//i, '').replace(/\.git$/i, '') + '.git';
+  } else if (/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(s)) {
+    s = 'git@github.com:' + s.replace(/\.git$/i, '') + '.git';
+  } else {
+    return { err: '无法识别的仓库地址（支持 owner/repo、git@github.com:owner/repo.git 或 https://github.com/owner/repo）' };
+  }
+  return { url: s };
+}
+function ghUrlName(url) {
+  return url.replace(/^git@github\.com:/, '').replace(/\.git$/, '');
+}
+function ghSshFail(r) {
+  const msg = ((r.stderr || '') + ' ' + (r.message || '')).trim();
+  if (/Permission denied|publickey/i.test(msg)) return 'SSH 认证失败：请先在 GitHub 面板完成 SSH 连接';
+  if (/Could not resolve hostname|Connection timed out|Connection refused/i.test(msg)) return '网络错误：无法连接 github.com';
+  return msg ? msg.slice(0, 200) : 'git 命令失败';
+}
 
 ipcMain.handle('github:status', async () => {
-  const token = readGhToken();
-  if (!token) return { ok: true, connected: false };
-  const r = await ghFetch('/user', token);
-  if (r.err) {
-    if (r.err === 'unauthorized') { fs.rmSync(GH_TOKEN_FILE, { force: true }); return { ok: true, connected: false }; }
-    return { ok: false, error: r.err };
+  const gh = readGhSsh();
+  if (!gh || !gh.login) return { ok: true, connected: false };
+  // 5 分钟内验证过就不再反复 ssh（打开面板时快速返回）
+  if (!gh.verifiedAt || Date.now() - gh.verifiedAt >= 5 * 60 * 1000) {
+    const v = await sshHelloWithFallback(gh.keyPath || null, gh);
+    if (!v.login) {
+      if (v.err === 'auth') { fs.rmSync(GH_SSH_FILE, { force: true }); return { ok: true, connected: false }; }
+      return { ok: false, error: sshErrText(v) };
+    }
+    gh.login = v.login;
+    gh.sshHost = v.sshHost;
+    gh.sshPort = v.sshPort;
+    gh.verifiedAt = Date.now();
+    writeGhSsh(gh);
   }
-  const u = r.data;
-  const avatar = await ghAvatarDataUrl(u.avatar_url, token);
-  return { ok: true, connected: true, login: u.login, name: u.name || u.login, avatar };
+  return { ok: true, connected: true, login: gh.login, name: gh.name || gh.login, keyPath: gh.keyPath || '', sshPort: gh.sshPort || 22, avatar: await ghAvatarDataUrl(gh.login) };
 });
-ipcMain.handle('github:login', async (_e, token) => {
-  const t = String(token || '').trim();
-  if (!t) return { ok: false, error: 'token 不能为空' };
-  const r = await ghFetch('/user', t);
-  if (r.err) return { ok: false, error: r.err === 'unauthorized' ? 'Token 无效或已过期' : r.err };
-  const u = r.data;
-  fs.mkdirSync(DSH_HOME, { recursive: true });
-  fs.writeFileSync(GH_TOKEN_FILE, t, 'utf8');
-  const avatar = await ghAvatarDataUrl(u.avatar_url, t);
-  return { ok: true, login: u.login, name: u.name || u.login, avatar };
+ipcMain.handle('github:detectKeys', async () => ({ ok: true, keys: detectSshKeys(), hostsHijacked: ghHostsHijacked() }));
+ipcMain.handle('github:pickKey', async () => {
+  const r = await dialog.showOpenDialog(mainWindow, {
+    title: '选择 SSH 私钥文件',
+    properties: ['openFile'],
+    defaultPath: path.join(os.homedir(), '.ssh'),
+  });
+  if (r.canceled || !r.filePaths.length) return { ok: false, canceled: true };
+  return { ok: true, path: r.filePaths[0] };
+});
+ipcMain.handle('github:connect', async (_e, opts) => {
+  const { keyPath, keyContent } = opts || {};
+  let kp = String(keyPath || '').trim();
+  const content = String(keyContent || '').trim();
+  // 粘贴完整私钥内容 → 自动安装到 ~/.ssh/id_ed25519（旧文件先备份），随后自动用它连接
+  if (content) {
+    if (!/^-----BEGIN [A-Z0-9 ]+PRIVATE KEY-----/m.test(content)) {
+      return { ok: false, error: '粘贴的不是完整私钥：应以 -----BEGIN OPENSSH PRIVATE KEY----- 开头、-----END OPENSSH PRIVATE KEY----- 结尾，请完整复制' };
+    }
+    fs.mkdirSync(SSH_DIR, { recursive: true });
+    const target = path.join(SSH_DIR, 'id_ed25519');
+    if (fs.existsSync(target)) fs.renameSync(target, `${target}.bak-${Date.now()}`);
+    fs.writeFileSync(target, content.replace(/\r\n/g, '\n').trimEnd() + '\n', 'utf8');
+    try {
+      spawnSync('icacls', [target, '/inheritance:r', '/grant:r', `${os.userInfo().username}:F`], { windowsHide: true });
+    } catch { /* 权限整理失败不影响使用 */ }
+    kp = target;
+  }
+  if (kp && !fs.existsSync(kp)) kp = '';
+  // 没有任何密钥 → 自动生成一把无密码密钥，只需用户把公钥添加到 GitHub 一次
+  if (!kp && detectSshKeys().length === 0) {
+    fs.mkdirSync(SSH_DIR, { recursive: true });
+    const target = path.join(SSH_DIR, 'id_ed25519');
+    if (fs.existsSync(target)) fs.renameSync(target, `${target}.bak-${Date.now()}`);
+    const gen = spawnSync('ssh-keygen', ['-t', 'ed25519', '-N', '', '-C', 'dsh-desktop', '-f', target], { windowsHide: true, encoding: 'utf8' });
+    if (gen.status !== 0) return { ok: false, error: `自动生成密钥失败：${(gen.stderr || gen.stdout || '').slice(0, 200)}` };
+    kp = target;
+    const pub = fs.readFileSync(`${kp}.pub`, 'utf8').trim();
+    return { ok: false, needRegister: true, pub, keyPath: kp, error: '已自动生成新密钥，请把公钥添加到 GitHub 后重试连接' };
+  }
+  const r = await sshHelloWithFallback(kp || null, readGhSsh());
+  if (!r.login) return { ok: false, error: sshErrText(r) };
+  writeGhSsh({ keyPath: kp || null, login: r.login, name: r.login, sshHost: r.sshHost, sshPort: r.sshPort, verifiedAt: Date.now() });
+  const avatar = await ghAvatarDataUrl(r.login);
+  return { ok: true, login: r.login, name: r.login, avatar, keyPath: kp || null, sshPort: r.sshPort };
+});
+ipcMain.handle('github:openKeysPage', async () => {
+  await shell.openExternal('https://github.com/settings/ssh/new');
+  return { ok: true };
 });
 ipcMain.handle('github:logout', async () => {
+  fs.rmSync(GH_SSH_FILE, { force: true });
+  return { ok: true };
+});
+function readGhToken() {
+  try { return fs.readFileSync(GH_TOKEN_FILE, 'utf8').trim(); } catch { return null; }
+}
+function writeGhToken(token) {
+  fs.mkdirSync(DSH_HOME, { recursive: true });
+  fs.writeFileSync(GH_TOKEN_FILE, token, 'utf8');
+}
+ipcMain.handle('github:listTokenStatus', async () => {
+  const t = readGhToken();
+  return { ok: true, set: !!t, prefix: t ? `${t.slice(0, 4)}…（${t.length} 字符）` : '' };
+});
+ipcMain.handle('github:setListToken', async (_e, token) => {
+  const t = String(token || '').trim();
+  if (!t) return { ok: false, error: 'Token 不能为空' };
+  try {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 15000);
+    const res = await net.fetch('https://api.github.com/user', {
+      headers: {
+        Authorization: `Bearer ${t}`,
+        'User-Agent': 'dsh-desktop',
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+      signal: ac.signal,
+    });
+    clearTimeout(timer);
+    if (res.status === 401 || res.status === 403) return { ok: false, error: 'Token 无效或已过期' };
+    if (!res.ok) return { ok: false, error: `GitHub API ${res.status}` };
+    const u = await res.json();
+    writeGhToken(t);
+    return { ok: true, login: u.login };
+  } catch (err) {
+    return { ok: false, error: `网络错误: ${err.message}` };
+  }
+});
+ipcMain.handle('github:clearListToken', async () => {
   fs.rmSync(GH_TOKEN_FILE, { force: true });
   return { ok: true };
 });
-ipcMain.handle('github:openTokenPage', async () => {
-  await shell.openExternal('https://github.com/settings/tokens');
+ipcMain.handle('github:repos', async () => {
+  const history = readGhRepos().map((x) => ({
+    url: x.url,
+    name: ghUrlName(x.url),
+    addedAt: x.addedAt || 0,
+  }));
+  // SSH 无法枚举仓库（GitHub 平台限制）。有只读 Token → 列出全部仓库（含私有）；
+  // 无 Token → 匿名 API 只列公开仓库。连接始终是 SSH key，Token 仅用于列列表。
+  let allRepos = null;
+  let publicRepos = null;
+  let listError = null;
+  const gh = readGhSsh();
+  const listToken = readGhToken();
+  if (gh && gh.login) {
+    if (listToken) {
+      const r = await ghApiRepos(listToken);
+      if (r.err) listError = r.err;
+      else allRepos = r.repos;
+    } else {
+      const r = await ghPublicRepos(gh.login);
+      if (r.err) listError = r.err;
+      else publicRepos = r.repos;
+    }
+  }
+  return { ok: true, repos: history, public: publicRepos, all: allRepos, listError, tokenSet: !!listToken };
+});
+
+function ghRepoMap(x) {
+  return {
+    url: `git@github.com:${x.full_name}.git`,
+    name: x.full_name,
+    description: x.description || '',
+    default_branch: x.default_branch || 'main',
+    private: !!x.private,
+    updated_at: x.updated_at || '',
+  };
+}
+async function ghApiRepos(token) {
+  try {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 15000);
+    const res = await net.fetch('https://api.github.com/user/repos?per_page=100&sort=updated', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'User-Agent': 'dsh-desktop',
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+      signal: ac.signal,
+    });
+    clearTimeout(timer);
+    if (res.status === 401 || res.status === 403) return { err: 'Token 无效或已过期，请重新设置' };
+    if (!res.ok) return { err: `GitHub API ${res.status}` };
+    const data = await res.json();
+    return { repos: data.map(ghRepoMap) };
+  } catch (err) {
+    return { err: `网络错误: ${err.message}` };
+  }
+}
+
+async function ghPublicRepos(login) {
+  try {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 10000);
+    const res = await net.fetch(`https://api.github.com/users/${encodeURIComponent(login)}/repos?per_page=100&sort=updated`, {
+      headers: { 'User-Agent': 'dsh-desktop', Accept: 'application/vnd.github+json' },
+      signal: ac.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) return { err: res.status === 403 ? '匿名 API 限流（60 次/小时），稍后再试' : `GitHub API ${res.status}` };
+    const data = await res.json();
+    return {
+      repos: data.map((x) => ({
+        url: `git@github.com:${x.full_name}.git`,
+        name: x.full_name,
+        description: x.description || '',
+        default_branch: x.default_branch || 'main',
+        private: !!x.private,
+        updated_at: x.updated_at || '',
+      })),
+    };
+  } catch (err) {
+    return { err: `网络错误: ${err.message}` };
+  }
+}
+ipcMain.handle('github:removeRepo', async (_e, url) => {
+  writeGhRepos(readGhRepos().filter((x) => x.url !== url));
   return { ok: true };
 });
-ipcMain.handle('github:repos', async () => {
-  const token = readGhToken();
-  if (!token) return { ok: false, error: '未连接 GitHub' };
-  const r = await ghFetch('/user/repos?per_page=100&sort=updated', token);
-  if (r.err) return { ok: false, error: r.err };
-  return {
-    ok: true,
-    repos: r.data.map((x) => ({
-      full_name: x.full_name,
-      name: x.name,
-      description: x.description || '',
-      default_branch: x.default_branch,
-      private: !!x.private,
-      updated_at: x.updated_at,
-    })),
-  };
+ipcMain.handle('github:addRepo', async (_e, input) => {
+  const norm = normalizeGhUrl(input);
+  if (norm.err) return { ok: false, error: norm.err };
+  // 校验可达性并读取默认分支
+  const r = await execOut(GIT_EXE, ['ls-remote', '--symref', norm.url, 'HEAD'], { timeout: 20000, env: gitSshEnv() });
+  if (!r.ok) return { ok: false, error: ghSshFail(r) };
+  const defM = (r.stdout || '').match(/^ref:\s+refs\/heads\/(\S+)\s+HEAD$/m);
+  const list = readGhRepos().filter((x) => x.url !== norm.url);
+  list.unshift({ url: norm.url, addedAt: Date.now() });
+  writeGhRepos(list.slice(0, 20));
+  return { ok: true, repo: { url: norm.url, default_branch: defM ? defM[1] : null } };
 });
-ipcMain.handle('github:branches', async (_e, { owner, repo }) => {
-  const token = readGhToken();
-  if (!token) return { ok: false, error: '未连接 GitHub' };
-  const r = await ghFetch(`/repos/${owner}/${repo}/branches?per_page=100`, token);
-  if (r.err) return { ok: false, error: r.err };
-  return { ok: true, branches: r.data.map((b) => b.name) };
+ipcMain.handle('github:branches', async (_e, { url }) => {
+  const r = await execOut(GIT_EXE, ['ls-remote', '--symref', '--heads', url, 'HEAD'], { timeout: 20000, env: gitSshEnv() });
+  if (!r.ok) return { ok: false, error: ghSshFail(r) };
+  const defM = (r.stdout || '').match(/^ref:\s+refs\/heads\/(\S+)\s+HEAD$/m);
+  const branches = [];
+  for (const line of (r.stdout || '').split(/\r?\n/)) {
+    const m = line.match(/^[0-9a-f]{40}\trefs\/heads\/(.+)$/);
+    if (m) branches.push(m[1]);
+  }
+  return { ok: true, branches, defaultBranch: defM ? defM[1] : null };
 });
-ipcMain.handle('github:tree', async (_e, { owner, repo, branch }) => {
-  const token = readGhToken();
-  if (!token) return { ok: false, error: '未连接 GitHub' };
-  const r = await ghFetch(`/repos/${owner}/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`, token);
+ipcMain.handle('github:tree', async (_e, { url, branch }) => {
+  const r = await ghTreeFor(url, branch);
   if (r.err) return { ok: false, error: r.err };
-  const tree = (r.data.tree || []).filter((t) => t.type === 'blob' || t.type === 'tree').map((t) => ({ path: t.path, type: t.type }));
-  return { ok: true, tree, truncated: !!r.data.truncated };
+  return { ok: true, tree: r.tree, truncated: false };
 });
+async function ghTreeFor(url, branch) {
+  const env = gitSshEnv();
+  fs.mkdirSync(GH_CACHE_DIR, { recursive: true });
+  const dir = path.join(GH_CACHE_DIR, `${encodeURIComponent(url)}__${encodeURIComponent(branch)}`);
+  // 缓存 10 分钟；克隆时只取树对象（--filter=blob:none --no-checkout），速度很快
+  const needClone = !fs.existsSync(dir) || (Date.now() - fs.statSync(dir).mtimeMs > 10 * 60 * 1000);
+  if (needClone) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    const c = await execOut(GIT_EXE, ['clone', '--depth', '1', '--single-branch', '--branch', branch, '--no-checkout', '--filter=blob:none', url, dir], { timeout: 120000, env });
+    if (!c.ok) {
+      fs.rmSync(dir, { recursive: true, force: true });
+      return { err: ghSshFail(c) };
+    }
+  }
+  const t = await execOut(GIT_EXE, ['-C', dir, 'ls-tree', '-r', 'HEAD'], { timeout: 60000, env });
+  if (!t.ok) return { err: `读取文件树失败：${ghSshFail(t)}` };
+  const tree = [];
+  for (const line of (t.stdout || '').split(/\r?\n/)) {
+    const m = line.match(/^(\d{6})\s+(\S+)\s+([0-9a-f]{40})\t(.+)$/);
+    if (m) tree.push({ path: m[4], type: m[2] === 'tree' ? 'tree' : 'blob' });
+  }
+  return { tree };
+}
 
 ipcMain.handle('mcp:list', async () => {
   // MCP 服务器在活动 profile 的组合文件（cordis.yml / cordis.patch.yml）里以 mcp-client 行声明

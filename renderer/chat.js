@@ -83,7 +83,7 @@
     });
   }
 
-  // ---- 工作区菜单（筛选视图 / 新会话归属 / 从电脑添加）----
+  // ---- 工作区菜单（筛选视图 / 从电脑添加）----
   const ctWsBtn = $('#ctWsBtn');
   const ctWsName = $('#ctWsName');
   const ctWsPanel = $('#ctWsPanel');
@@ -104,26 +104,22 @@
     ctWsPanel.innerHTML = '';
   }
 
-  // kind: 'filter'（工具栏筛选视图）| 'create'（新会话选择归属）
-  function openWorkspaceMenu(anchor, kind) {
-    if (kind === 'create' && workspaces.length === 0) {
-      // 一个工作区都没有 → 直接打开文件夹选择器（与 webui 的"唯一入口"一致）
-      pickWorkspaceFolderAndCreate();
-      return;
-    }
+  // 工具栏工作区菜单：切换筛选视图 / 从电脑添加工作区
+  // （新会话不再从这里选归属 —— 「＋ 新会话」一键开聊，详见 newSession）
+  function openWorkspaceMenu(anchor) {
     const rows = [];
-    if (kind === 'filter') {
-      rows.push(`<button type="button" class="ct-wi${currentWorkspaceId ? '' : ' active'}" data-id="">全部工作区</button>`);
+    if (currentWorkspaceId) {
+      rows.push(`<button type="button" class="ct-wi" data-id="">全部工作区</button>`);
     }
     for (const w of workspaces) {
-      const active = kind === 'filter' && w.workspaceId === currentWorkspaceId;
+      const active = w.workspaceId === currentWorkspaceId;
       rows.push(`<button type="button" class="ct-wi${active ? ' active' : ''}" data-id="${esc(w.workspaceId)}">
         <span class="ct-wi-name">${esc(w.title || w.path || '未命名工作区')}</span>
         <span class="ct-wi-path">${esc(w.path || '')}</span>
       </button>`);
     }
     if (workspaces.length > 0) rows.push('<div class="ct-wi-sep"></div>');
-    rows.push(`<button type="button" class="ct-wi ct-wi-add" data-id="__add__">${kind === 'create' ? '选择电脑上的文件夹作为工作区…' : '添加工作区…'}</button>`);
+    rows.push('<button type="button" class="ct-wi ct-wi-add" data-id="__add__">添加工作区…</button>');
     ctWsPanel.innerHTML = rows.join('');
     const rect = anchor.getBoundingClientRect();
     const width = Math.min(400, Math.max(260, window.innerWidth - rect.left - 16));
@@ -136,25 +132,21 @@
         const id = btn.dataset.id;
         closeWorkspaceMenu();
         if (id === '__add__') {
-          if (kind === 'create') pickWorkspaceFolderAndCreate();
-          else pickWorkspaceFolderAndSelect();
+          pickWorkspaceFolder();
           return;
         }
-        if (kind === 'filter') {
-          currentWorkspaceId = id || null;
-          renderWorkspaceControl();
-          renderSessions();
-          renderOtherRunning();
-        } else {
-          createSessionInWorkspace(id || null);
-        }
+        // 筛选视图：null = 全部（显示所有工作区与未分组的历史会话）
+        currentWorkspaceId = id || null;
+        renderWorkspaceControl();
+        renderSessions();
+        renderOtherRunning();
       };
     });
   }
 
   ctWsBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (ctWsPanel.hidden) openWorkspaceMenu(ctWsBtn, 'filter');
+    if (ctWsPanel.hidden) openWorkspaceMenu(ctWsBtn);
     else closeWorkspaceMenu();
   });
   document.addEventListener('mousedown', (e) => {
@@ -376,6 +368,7 @@
     renderModelPicker();
     renderEffort();
     renderStatus();
+    renderUsage(); // 花费按当前模型单价估算，模型切换后刷新
   }
 
   async function chooseModel(provider, model) {
@@ -408,6 +401,139 @@
       keepInputFocus();
     } else {
       showChatError(`思考等级切换失败：${r.error}`);
+    }
+  }
+
+  // ---------------- 权限预设（与 Web UI 同一机制：/permission 命令 + permissions 投影） ----------------
+  const PERM_LABEL_CN = {
+    'read-only': '只读',
+    'workspace-write': '工作区写',
+    'danger-full-access': '全权限',
+    custom: '自定义',
+  };
+  const permLabel = (id) => PERM_LABEL_CN[id] || id;
+  const ctPermRow = $('#ctPermRow');
+  const ctPermSeg = $('#ctPermSeg');
+  let permState = null; // { options: [{value,name}], currentValue } from permissions projection
+
+  function renderPermControl() {
+    if (!currentSessionId || !permState || !permState.options || permState.options.length === 0) {
+      ctPermRow.hidden = true;
+      return;
+    }
+    ctPermRow.hidden = false;
+    ctPermSeg.innerHTML = permState.options
+      .map(
+        (o) => `<button type="button" class="ct-perm${o.value === permState.currentValue ? ' active' : ''}" data-perm="${esc(o.value)}"
+          title="${esc(o.name || o.value)}">${esc(permLabel(o.value))}</button>`
+      )
+      .join('');
+    ctPermSeg.querySelectorAll('.ct-perm').forEach((btn) => {
+      btn.onclick = () => switchPermission(btn.dataset.perm);
+    });
+  }
+
+  async function switchPermission(preset) {
+    if (!currentSessionId || !permState || preset === permState.currentValue) return;
+    // 全权限 = 无审批的全文件访问：与 Web UI 一致，需要显式风险确认
+    if (preset === 'danger-full-access') {
+      const ok = await themedConfirm(
+        `切换到「全权限」将关闭文件操作的审批提示（sandbox: danger-full-access + approval: never）。\n确认切换当前会话的权限预设？`,
+        '权限风险确认'
+      );
+      if (!ok) return;
+    }
+    const r = await api.chatPermissionSet(currentSessionId, preset);
+    if (!r.ok) {
+      showChatError(`权限切换失败：${r.error}`);
+      return;
+    }
+    // 乐观更新；harness 会推送 permissions 投影做权威确认
+    permState.currentValue = preset;
+    renderPermControl();
+    keepInputFocus();
+  }
+
+  // ---------------- 上下文用量 / 估算花费（底部条） ----------------
+  const chatUsageBar = $('#chatUsageBar');
+  const cuContext = $('#cuContext');
+  const cuFill = $('#cuFill');
+  const cuCost = $('#cuCost');
+  let usageState = null; // { contextWindow?, projectedTokens?, tokenUsage? }
+
+  /** 估算单价表（USD / 1M tokens）：各厂商公开定价的近似值，仅供界面参考。 */
+  const COST_TABLE = [
+    { match: /^deepseek-v4-pro/, in: 0.56, out: 2.19, read: 0.14, write: 2.19 },
+    { match: /^deepseek-v4-flash/, in: 0.28, out: 1.1, read: 0.07, write: 1.1 },
+    { match: /^deepseek-/, in: 0.28, out: 1.1, read: 0.07, write: 1.1 },
+    { match: null, in: 2, out: 8, read: 0.5, write: 8 }, // 未知模型按均价粗估
+  ];
+  const costOf = (modelId) => COST_TABLE.find((row) => row.match === null || row.match.test(modelId || '')) || COST_TABLE[COST_TABLE.length - 1];
+
+  function estimateCost() {
+    const tu = usageState?.tokenUsage;
+    if (!tu) return null;
+    const totals = (tu.uncachedInputTokens || 0) + (tu.cacheReadTokens || 0) + (tu.cacheWriteTokens || 0) + (tu.outputTokens || 0);
+    if (totals === 0) return null;
+    const rate = costOf(modelState?.current?.model);
+    const usd =
+      (tu.uncachedInputTokens || 0) * rate.in
+      + (tu.cacheReadTokens || 0) * rate.read
+      + (tu.cacheWriteTokens || 0) * rate.write
+      + (tu.outputTokens || 0) * rate.out;
+    return usd / 1e6;
+  }
+
+  const fmtTokens = (n) => (n == null ? '—' : Number(n).toLocaleString('en-US'));
+
+  function renderUsage() {
+    if (!currentSessionId || !usageState) {
+      chatUsageBar.hidden = true;
+      return;
+    }
+    chatUsageBar.hidden = false;
+    const { contextWindow, projectedTokens } = usageState;
+    const tu = usageState.tokenUsage || {};
+    const fallback = (tu.uncachedInputTokens || 0) + (tu.cacheReadTokens || 0) + (tu.cacheWriteTokens || 0) + (tu.outputTokens || 0);
+    const used = projectedTokens != null ? projectedTokens : fallback;
+    if (contextWindow != null && contextWindow > 0) {
+      const pct = Math.min(100, (used / contextWindow) * 100);
+      cuContext.textContent = `${fmtTokens(used)} / ${fmtTokens(contextWindow)} tokens · ${pct.toFixed(1)}%`;
+      cuFill.style.width = `${pct.toFixed(1)}%`;
+      cuContext.title = `已用上下文 ${fmtTokens(used)} / 模型最大上下文 ${fmtTokens(contextWindow)}（${pct.toFixed(1)}%）`;
+      cuFill.parentElement.classList.toggle('cu-hot', pct >= 80);
+    } else if (used > 0) {
+      cuContext.textContent = `${fmtTokens(used)} tokens（最大上下文未知）`;
+      cuFill.style.width = '0%';
+      cuContext.title = '本会话已用 tokens（模型最大上下文暂不可知）';
+    } else {
+      cuContext.textContent = '上下文 —';
+      cuFill.style.width = '0%';
+      cuContext.title = '尚无模型请求';
+    }
+    const usd = estimateCost();
+    const modelName = modelState?.current?.model || '';
+    cuCost.textContent = usd == null
+      ? '花费 —'
+      : `≈ $${usd >= 0.01 ? usd.toFixed(2) : usd.toFixed(4)}`;
+    cuCost.title = usd == null
+      ? '尚无用量，暂无花费估算'
+      : `按 ${modelName || '当前模型'} 单价估算的本会话累计花费（仅参考，非账单）`;
+  }
+
+  function applyProjections(values) {
+    if (!values) return;
+    if (values.permissions) {
+      permState = { options: values.permissions.options || [], currentValue: values.permissions.currentValue };
+      renderPermControl();
+    }
+    if (values.contextPressure || values.tokenUsage || values.sessionStats) {
+      const prev = usageState || {};
+      const merged = { ...prev };
+      if (values.contextPressure) Object.assign(merged, values.contextPressure);
+      if (values.tokenUsage) merged.tokenUsage = values.tokenUsage;
+      usageState = merged;
+      renderUsage();
     }
   }
 
@@ -668,12 +794,16 @@
     streamMsg = null;
     domBlocks = new Map();
     pendingUserEl = null;
+    // 会话级状态在切换时重置，由本次历史投影重新填充
+    permState = null;
+    usageState = null;
     renderSessions();
     const b = buf(sessionId);
     const r = await api.chatHistory(sessionId);
     if (r.ok) {
       renderHistory(r.events);
       renderLiveBuffer(sessionId);
+      applyProjections(r.projections?.values);
     } else {
       emptyState();
     }
@@ -794,14 +924,17 @@
     if (r.sessionId) await openSession(r.sessionId);
   }
 
-  // 新会话：弹出工作区选择（列出现有工作区 + 从电脑选文件夹）
+  // 「＋ 新会话」：一键开聊，不再强制选择工作区。
+  //  - 处于工作区筛选视图 → 新会话归属该工作区（保证创建后立即可见）
+  //  - 否则 → 直接在默认目录开"闲聊"会话（未分组），点击即可对话
   async function newSession() {
     if (!running) return;
-    openWorkspaceMenu(newBtn, 'create');
+    await createSessionInWorkspace(currentWorkspaceId);
   }
 
-  // 从电脑上选一个文件夹作为工作区（原生目录选择器），可随后直接建会话
-  async function pickWorkspaceFolder(createSessionAfter) {
+  // 从电脑上选一个文件夹作为工作区（原生目录选择器）。
+  // 添加后保持"全部"筛选视图 —— 不隐藏任何历史会话，新工作区以分组形式出现在列表中。
+  async function pickWorkspaceFolder() {
     if (!running) return;
     const pick = await api.pickWorkspaceDir();
     if (!pick.ok || pick.cancelled || !pick.path) return;
@@ -810,14 +943,9 @@
       themedAlert('添加工作区失败：' + add.error, '星际通讯中断');
       return;
     }
-    currentWorkspaceId = add.workspace.workspaceId;
-    renderWorkspaceControl();
     await refreshSessions();
     await loadWorkspaces();
-    if (createSessionAfter) await createSessionInWorkspace(add.workspace.workspaceId);
   }
-  const pickWorkspaceFolderAndSelect = () => pickWorkspaceFolder(false);
-  const pickWorkspaceFolderAndCreate = () => pickWorkspaceFolder(true);
 
   async function deleteSession(sessionId) {
     const s = sessions.find((x) => x.sessionId === sessionId);
@@ -1063,7 +1191,11 @@
     if (msg.stream === 'mux') {
       if (p.type === 'session/event') handleSessionEvent(p);
       else if (p.type === 'session/projection') {
-        if (p.sessionId === currentSessionId && p.key === 'title') refreshSessions();
+        if (p.sessionId !== currentSessionId) return;
+        if (p.key === 'title') refreshSessions();
+        else if (['permissions', 'contextPressure', 'tokenUsage', 'sessionStats'].includes(p.key)) {
+          applyProjections({ [p.key]: p.value });
+        }
       }
     }
   }
