@@ -85,7 +85,7 @@ Make-Zip $stage $zip
 # ---------- 2. self-extracting Setup.exe (7-Zip SFX, LZMA2 - small) ----------
 Write-Host "=== Building $name-Setup.exe (7-Zip SFX) ==="
 $sz7 = ''
-foreach ($p in @('D:\7-Zip\7z.exe', 'C:\Program Files\7-Zip\7z.exe', 'C:\Program Files (x86)\7-Zip\7z.exe')) { if (Test-Path $p) { $sz7 = $p; break } }
+foreach ($p in @('D:\7-Zip\7z.exe', 'C:\Program Files\7-Zip\7z.exe', 'C:\Program Files (x86)\7-Zip\7z.exe', 'D:\Program Files\7-Zip\7z.exe')) { if (Test-Path $p) { $sz7 = $p; break } }
 if (-not $sz7) {
   $w = (Get-Command 7z -ErrorAction SilentlyContinue).Source
   if ($w) { $sz7 = $w }
