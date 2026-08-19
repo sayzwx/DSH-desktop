@@ -41,6 +41,7 @@
   let currentWorkspaceId = null; // null = 全部
   let archivedSessionIds = new Set();
   let modelState = null;     // 当前会话的 session.models
+  let modelLoadError = null; // 模型加载失败信息（区别于"未连接"）
   let streamMsg = null;      // 当前会话正在流的消息 DOM
   let domBlocks = new Map(); // 当前会话 DOM 块 (index -> element)
   let pendingUserEl = null;
@@ -302,9 +303,16 @@
   }
 
   function renderModelPicker() {
+    if (!currentSessionId && !modelState) {
+      ctModelName.textContent = '模型…';
+      ctModelPanel.innerHTML = '<div class="ct-model-empty">请先打开或新建一个会话，再选择模型</div>';
+      return;
+    }
     ctModelName.textContent = modelLabel();
     if (!modelState) {
-      ctModelPanel.innerHTML = '<div class="ct-model-empty">未连接 harness</div>';
+      ctModelPanel.innerHTML = modelLoadError
+        ? `<div class="ct-model-empty">模型加载失败：${esc(modelLoadError)}</div>`
+        : '<div class="ct-model-empty">正在加载模型…</div>';
       return;
     }
     const cur = modelState.current;
@@ -341,20 +349,14 @@
     ctEffortRow.hidden = false;
     const eff = currentEffort();
     ctEffortSeg.innerHTML = efforts
-      .map((e) => `<button type="button" class="ct-eff${e.id === eff ? ' active' : ''}" data-eff="${esc(e.id)}" title="${esc(e.description || '')}">${esc(effortCn(e.id))}</button>`)
+      .map((e) => `<option value="${esc(e.id)}"${e.id === eff ? ' selected' : ''}>${esc(effortCn(e.id))}</option>`)
       .join('');
-    ctEffortSeg.querySelectorAll('.ct-eff').forEach((btn) => {
-      btn.onclick = () => chooseEffort(btn.dataset.eff);
-    });
   }
 
   // 发送模式（插话/排队）渲染与切换；偏好持久化到 localStorage，且尽量与 Web UI 的 busyEnter 同步
   function renderSendMode() {
     const seg = $('#ctModeSeg');
-    if (!seg) return;
-    seg.querySelectorAll('.ct-mode-btn').forEach((btn) => {
-      btn.classList.toggle('active', btn.dataset.mode === sendMode);
-    });
+    if (seg) seg.value = sendMode;
   }
 
   function applySendMode(mode, persist) {
@@ -402,8 +404,11 @@
   }
 
   async function loadModels(sid) {
+    modelState = null;
+    renderModelPicker();
     const r = await api.chatModels(sid);
     modelState = r.ok ? r.value : null;
+    modelLoadError = r.ok ? null : (r.error?.message || r.error || '模型加载失败');
     renderModelPicker();
     renderEffort();
     renderStatus();
@@ -461,15 +466,13 @@
       return;
     }
     ctPermRow.hidden = false;
+    const prev = ctPermSeg.value;
     ctPermSeg.innerHTML = permState.options
       .map(
-        (o) => `<button type="button" class="ct-perm${o.value === permState.currentValue ? ' active' : ''}" data-perm="${esc(o.value)}"
-          title="${esc(o.name || o.value)}">${esc(permLabel(o.value))}</button>`
+        (o) => `<option value="${esc(o.value)}">${esc(permLabel(o.value))}</option>`
       )
       .join('');
-    ctPermSeg.querySelectorAll('.ct-perm').forEach((btn) => {
-      btn.onclick = () => switchPermission(btn.dataset.perm);
-    });
+    ctPermSeg.value = prev && permState.options.some((o) => o.value === prev) ? prev : (permState.currentValue || '');
   }
 
   async function switchPermission(preset) {
@@ -1595,8 +1598,11 @@
   function keepInputFocus() {
     if (inputFocused.v && !inputEl.disabled) inputEl.focus();
   }
-  [ctModelBtn, ...document.querySelectorAll('.ct-eff'), $('#ctEffortSeg')].forEach((el) => {
-    if (el) el.addEventListener('mousedown', (e) => e.preventDefault());
+  // 模型按钮点击不抢输入焦点；下拉选择（推理/权限/发送）需要正常打开菜单，不做 preventDefault
+  [ctModelBtn, $('#ctModeSeg'), $('#ctEffortSeg'), $('#ctPermSeg')].forEach((el) => {
+    if (el) el.addEventListener('mousedown', (e) => {
+      if (el === ctModelBtn) e.preventDefault();
+    });
   });
 
   // ---------------- 历史面板折叠 ----------------
@@ -1682,11 +1688,17 @@
 
   const ctModeSeg = $('#ctModeSeg');
   if (ctModeSeg) {
-    ctModeSeg.addEventListener('click', (e) => {
-      const btn = e.target.closest('.ct-mode-btn');
-      if (!btn) return;
-      applySendMode(btn.dataset.mode, true);
-    });
+    ctModeSeg.addEventListener('change', (e) => applySendMode(e.target.value, true));
+  }
+
+  // 推理强度 / 权限：下拉选择 change 触发
+  const ctEffortSegEl = $('#ctEffortSeg');
+  if (ctEffortSegEl) {
+    ctEffortSegEl.addEventListener('change', (e) => chooseEffort(e.target.value));
+  }
+  const ctPermSegEl = $('#ctPermSeg');
+  if (ctPermSegEl) {
+    ctPermSegEl.addEventListener('change', (e) => switchPermission(e.target.value));
   }
 
   api.onChatFrame(handleFrame);

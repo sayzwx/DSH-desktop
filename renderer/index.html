@@ -163,19 +163,19 @@
               <div class="ct-ws-panel" id="ctWsPanel" hidden></div>
             </div>
             <div class="ct-effort" id="ctEffortRow" hidden>
-              <span class="ct-effort-label">推理</span>
-              <div class="ct-effort-seg" id="ctEffortSeg"></div>
+              <label class="ct-inline-label" for="ctEffortSeg">推理</label>
+              <select class="ct-inline-select" id="ctEffortSeg"></select>
             </div>
             <div class="ct-perm-row" id="ctPermRow" hidden>
-              <span class="ct-perm-label" title="当前会话的权限预设（沙箱模式 + 审批策略），与 Web UI 一致">权限</span>
-              <div class="ct-perm-seg" id="ctPermSeg"></div>
+              <label class="ct-inline-label" for="ctPermSeg" title="当前会话的权限预设（沙箱模式 + 审批策略），与 Web UI 一致">权限</label>
+              <select class="ct-inline-select" id="ctPermSeg"></select>
             </div>
             <div class="ct-mode" id="ctModeRow" title="发送模式：插话 = 直接插入/转向当前回合；排队 = agent 忙时排队跟进（与 Web UI 的 busy Enter 偏好一致）">
-              <span class="ct-mode-label">发送</span>
-              <div class="ct-mode-seg" id="ctModeSeg">
-                <button type="button" class="ct-mode-btn" data-mode="queue">排队</button>
-                <button type="button" class="ct-mode-btn" data-mode="steer">插话</button>
-              </div>
+              <label class="ct-inline-label" for="ctModeSeg">发送</label>
+              <select class="ct-inline-select" id="ctModeSeg">
+                <option value="queue">排队</option>
+                <option value="steer">插话</option>
+              </select>
             </div>
             <div class="ct-status" id="ctStatus">
               <span class="ct-status-dot idle" id="ctStatusDot"></span>
