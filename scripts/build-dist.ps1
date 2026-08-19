@@ -30,11 +30,30 @@ function Make-Zip([string]$stage, [string]$zip) {
 }
 
 # ---------- 1. small app package ----------
+# 标准应用布局（双击 app\DSH.exe 即启动，无需命令行参数）：
+#   app\DSH.exe                 = Electron 运行时重命名
+#   app\resources\electron.asar = Electron 运行时内核
+#   app\resources\app\          = 应用本体（package.json / main.js / renderer / 依赖）
+#   app\DSH.ico                 = 图标（快捷方式使用）
 Write-Host "=== Building $name (app only) ==="
 $stage = Join-Path $dist "stage\$name"
 Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
-Copy-Tree $root (Join-Path $stage 'app') @("$root\.git", "$root\dist")
+
+$eleDist = Join-Path $root 'node_modules\electron\dist'
+if (-not (Test-Path (Join-Path $eleDist 'electron.exe'))) { throw '缺少 node_modules\electron\dist\electron.exe：请先运行 setup.ps1（npm ci）安装依赖' }
+$appDir = Join-Path $stage 'app'
+robocopy $eleDist $appDir /E /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
+if ($LASTEXITCODE -ge 8) { throw 'robocopy electron dist failed' }
+Move-Item (Join-Path $appDir 'electron.exe') (Join-Path $appDir 'DSH.exe') -Force
+Copy-Item (Join-Path $root 'DSH.ico') (Join-Path $appDir 'DSH.ico') -Force
+
+# 应用本体 → resources\app（剔除 .git / dist / electron 运行时自身）
+$resApp = Join-Path $appDir 'resources\app'
+New-Item -ItemType Directory -Path $resApp -Force | Out-Null
+robocopy $root $resApp /E /XD "$root\.git" "$root\dist" "$root\node_modules\electron" /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
+if ($LASTEXITCODE -ge 8) { throw 'robocopy app failed' }
+
 $cfg = Join-Path $stage 'config'
 New-Item -ItemType Directory -Path $cfg -Force | Out-Null
 Copy-Item (Join-Path $env:USERPROFILE '.dsh\settings.yaml')    (Join-Path $cfg 'settings.yaml') -Force
@@ -54,6 +73,7 @@ if (-not (Test-Path $sz7) -or -not (Test-Path $sfx)) {
   Write-Host '7-Zip not found - Setup.exe skipped (zip is the deliverable)'
 } else {
   $sz7file = Join-Path $dist "$name.7z"
+  Remove-Item $sz7file -Force -ErrorAction SilentlyContinue   # 7z a 是追加模式，先删旧档避免体积翻倍
   Push-Location $stage
   & $sz7 a -t7z -mx=9 -m0=LZMA2 -bso0 -bsp0 $sz7file '*' | Out-Null
   Pop-Location

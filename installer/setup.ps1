@@ -129,9 +129,8 @@ Copy-Tree (Join-Path $Src 'app') (Join-Path $Dest 'app')
 # 应用装好立刻创建快捷方式（即使后续引擎拉取失败，快捷方式也已存在）
 Write-Host ''
 Write-Host 'Creating shortcuts ...'
-$exe = Join-Path $Dest 'app\node_modules\electron\dist\electron.exe'
+$exe = Join-Path $Dest 'app\DSH.exe'
 $appPath = Join-Path $Dest 'app'
-$appArg = '"' + $appPath + '"'
 if (Test-Path $exe) {
   $ws = New-Object -ComObject WScript.Shell
   $linkDirs = New-Object System.Collections.ArrayList
@@ -147,16 +146,16 @@ if (Test-Path $exe) {
       $lnk = Join-Path $dir 'DSH.lnk'
       $s = $ws.CreateShortcut($lnk)
       $s.TargetPath = $exe
-      $s.Arguments = $appArg
+      $s.Arguments = ''
       $s.WorkingDirectory = $appPath
       $s.IconLocation = (Join-Path $appPath 'DSH.ico')
       $s.Save()
       if (Test-Path $lnk) { Write-Host "  shortcut created: $lnk"; $cnt++ }
     } catch { Write-Host "  WARN: shortcut failed in $dir : $($_.Exception.Message)" }
   }
-  if ($cnt -eq 0) { Write-Host '  WARN: 未能创建任何快捷方式（可手动运行 app\node_modules\electron\dist\electron.exe）' }
+  if ($cnt -eq 0) { Write-Host '  WARN: 未能创建任何快捷方式（可手动运行 app\DSH.exe）' }
 } else {
-  Write-Host "  WARN: electron.exe 不存在（$exe），跳过快捷方式创建"
+  Write-Host "  WARN: 应用 EXE 不存在（$exe），跳过快捷方式创建"
 }
 
 Write-Host ''
@@ -205,4 +204,4 @@ Write-Host ''
 Write-Host '=============================================='
 Write-Host '  Installation complete. Launching DSH Desktop ...'
 Write-Host '=============================================='
-Start-Process -FilePath $exe -ArgumentList $appArg
+Start-Process -FilePath $exe

@@ -4,12 +4,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-// 分发安装布局：app 与 harness、tools/node 同级（%LOCALAPPDATA%\DSH\{app,harness,tools}）；
-// 本机开发时仍是 D:\DeepSeek-Harness。
+// 分发安装布局：app（含 DSH.exe）与 harness、tools/node 同级（%LOCALAPPDATA%\DSH\{app,harness,tools}）；
+// 本机开发时仍是 D:\DeepSeek-Harness（或用 DSH_HARNESS_DIR / DSH_NODE_EXE 覆盖）。
+const DSH_ROOT = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'DSH') : '';
 const HARNESS_DIR = process.env.DSH_HARNESS_DIR ||
-  (fs.existsSync(path.join(__dirname, '..', 'harness')) ? path.join(__dirname, '..', 'harness') : 'D:\\DeepSeek-Harness');
+  ((DSH_ROOT && fs.existsSync(path.join(DSH_ROOT, 'harness', 'package.json')) ? path.join(DSH_ROOT, 'harness') : '') ||
+   (fs.existsSync(path.join(__dirname, '..', 'harness')) ? path.join(__dirname, '..', 'harness') : 'D:\\DeepSeek-Harness'));
 const NODE_EXE = process.env.DSH_NODE_EXE ||
-  (fs.existsSync(path.join(__dirname, '..', 'tools', 'node', 'node.exe')) ? path.join(__dirname, '..', 'tools', 'node', 'node.exe') : 'node');
+  ((DSH_ROOT && fs.existsSync(path.join(DSH_ROOT, 'tools', 'node', 'node.exe')) ? path.join(DSH_ROOT, 'tools', 'node', 'node.exe') : '') ||
+   (fs.existsSync(path.join(__dirname, '..', 'tools', 'node', 'node.exe')) ? path.join(__dirname, '..', 'tools', 'node', 'node.exe') : 'node'));
 const DSH_HOME = path.join(os.homedir(), '.dsh');
 const PORT = 3080;
 const LOG_LIMIT = 5000;
