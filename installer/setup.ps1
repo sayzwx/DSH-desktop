@@ -95,20 +95,20 @@ function Install-Harness([string]$NodeExe) {
     }
     if (-not (Test-Path (Join-Path $harnessDir 'package.json'))) { throw '引擎源码不完整：缺少 package.json' }
   }
-  # 2) pnpm（corepack 随 Node 自带，按 package.json 的 packageManager 锁定版本）
+  # 2) pnpm：直接走 corepack 子命令（corepack pnpm 按 package.json 的
+  #    packageManager 锁定版本并自动拉取，不依赖 shim 文件位置——corepack
+  #    prepare 生成的 pnpm.cmd 位置随 COREPACK_HOME 环境变化，不可靠）
   $corepack = Join-Path $nodeDir 'corepack.cmd'
   if (-not (Test-Path $corepack)) { $corepack = Join-Path $nodeDir 'corepack' }
   if ($NpmRegistry) { $env:COREPACK_NPM_REGISTRY = $NpmRegistry }
   Write-Host '  installing dependencies (pnpm install, 一次性, 可能数百 MB) ...'
   Push-Location $harnessDir
   try {
-    & $corepack prepare pnpm@11.7.0 --activate
-    if ($LASTEXITCODE -ne 0) { throw 'corepack 准备 pnpm 失败' }
-    $pnpm = Join-Path $nodeDir 'pnpm.cmd'
-    & $pnpm install --frozen-lockfile
-    if ($LASTEXITCODE -ne 0) { throw 'pnpm install 失败（检查网络 / npm 源）' }
+    if (-not (Test-Path $corepack)) { throw '未找到 corepack（Node 目录缺 corepack.cmd）' }
+    & $corepack pnpm install --frozen-lockfile
+    if ($LASTEXITCODE -ne 0) { throw 'pnpm install 失败：检查网络/npm 源；npm 源受限时加参数 -NpmRegistry https://registry.npmmirror.com' }
     Write-Host '  building harness (pnpm build, 一次性, 需数分钟) ...'
-    & $pnpm build
+    & $corepack pnpm build
     if ($LASTEXITCODE -ne 0) { throw 'pnpm build 失败' }
   } finally { Pop-Location }
   if (-not (Test-Path (Join-Path $harnessDir 'apps\cli\lib\bin.js'))) { throw '构建产物缺失：apps/cli/lib/bin.js' }
