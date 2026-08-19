@@ -302,6 +302,29 @@
     return (prov && typeof prov === 'object') ? prov : {};
   }
 
+  /** 从 llm-pi-ai schema 动态提取 API 协议枚举（不等死硬编码，schema 增列自动跟随）。 */
+  function piApiOptions() {
+    const ns = nsViews['llm-pi-ai'];
+    const refs = ns && ns.schema && typeof ns.schema === 'object' ? ns.schema.refs : null;
+    if (!refs) return ['openai-completions', 'openai-responses', 'anthropic-messages'];
+    const consts = new Map();
+    let apiUnion = null;
+    for (const [uid, node] of Object.entries(refs)) {
+      if (node && node.type === 'const' && typeof node.value === 'string') consts.set(Number(uid), node.value);
+      if (node && node.type === 'union' && Array.isArray(node.list)) {
+        // api 协议的 union 恰好是 3 个值且含 'openai-completions' 的候选
+        const vals = node.list.map((u) => consts.get(Number(u))).filter(Boolean);
+        if (/openai-completions|anthropic-messages/.test(vals.join(' ')) && (!apiUnion || vals.length > apiUnion.length)) apiUnion = vals;
+      }
+    }
+    if (apiUnion && apiUnion.length >= 2) return apiUnion;
+    return ['openai-completions', 'openai-responses', 'anthropic-messages'];
+  }
+  function piApiLabel(v) {
+    const map = { 'openai-completions': 'OpenAI Completions', 'openai-responses': 'OpenAI Responses', 'anthropic-messages': 'Anthropic Messages' };
+    return map[v] || v;
+  }
+
   /**
    * 渲染 provider 编辑面板（模仿 webUI 模型编辑）：
    *  - "自定义设置"可折叠，含 API 地址（提供方默认/自定义）与模型目录（获取可用模型 / 添加模型）
@@ -312,10 +335,14 @@
   function renderProviderEditor(editBox, provider) {
     const p = providerOf(provider);
     const cfg = providerConfigOf(provider);
-    const api = ['openai-completions', 'openai-responses', 'anthropic-messages'].includes(cfg.api) ? cfg.api : 'openai-completions';
+    const apiOptions = piApiOptions();
+    const api = apiOptions.includes(cfg.api) ? cfg.api : apiOptions[0];
     const baseURL = cfg.baseURL || '';
     const models = Array.isArray(cfg.models) ? cfg.models.slice() : [];
     const ref = apiKeyEnvOf(provider) || deriveKeyRef(provider);
+    const keySt = credStates[ref] || {};
+    const keyConfigured = !!keySt.configured;
+    const keyLocked = keySt.writable === false;
 
     const modelRows = () => models
       .map((m, i) => `<div class="mg-model-row" data-i="${i}">
@@ -327,14 +354,25 @@
       </div>`).join('') || '<div class="mg-model-empty">模型选择器中将不显示任何模型；目录外 ID 仍可直接发送。</div>';
 
     editBox.innerHTML = `
-      <details class="mg-edit-details" open>
+      <div class="mg-edit-key">
+        <div class="mg-edit-key-head">
+          <span class="mg-key-ref">${esc(ref)}</span>
+          <span class="badge ${keyConfigured ? 'trust-system' : 'trust-user'}">${keyConfigured ? '已配置——输入新值可替换' : '未配置密钥'}</span>
+        </div>
+        <div class="mg-edit-key-row">
+          <input type="password" class="sm-input mg-edit-key-input" autocomplete="off"
+            placeholder="${keyConfigured ? '输入新值可替换当前密钥…' : '粘贴 ' + esc(ref) + ' 密钥…'}" ${keyLocked ? 'disabled' : ''} />
+          <button class="mini-btn mg-edit-key-save" type="button" ${keyLocked ? 'disabled' : ''}>保存密钥</button>
+          <button class="mini-btn mg-edit-key-test" type="button">测试连接</button>
+        </div>
+        <div class="mg-edit-key-msg"></div>
+      </div>
+      <details class="mg-edit-details open">
         <summary>自定义设置</summary>
         <div class="mg-edit-grid">
           <label>API 协议
             <select class="sm-input mg-edit-api">
-              <option value="openai-completions"${api === 'openai-completions' ? ' selected' : ''}>OpenAI Completions</option>
-              <option value="openai-responses"${api === 'openai-responses' ? ' selected' : ''}>OpenAI Responses</option>
-              <option value="anthropic-messages"${api === 'anthropic-messages' ? ' selected' : ''}>Anthropic Messages</option>
+              ${apiOptions.map((v) => `<option value="${esc(v)}"${v === api ? ' selected' : ''}>${esc(piApiLabel(v))}</option>`).join('')}
             </select>
           </label>
           <label>API 地址
@@ -366,6 +404,46 @@
         <span class="mg-edit-msg"></span>
       </div>`;
     editBox.hidden = false;
+
+    // ----- API 密钥：改 key（即时保存到 credentials；不改 settings 的引用名） -----
+    const keyInput = editBox.querySelector('.mg-edit-key-input');
+    const keySaveBtn = editBox.querySelector('.mg-edit-key-save');
+    const keyTestBtn = editBox.querySelector('.mg-edit-key-test');
+    const keyMsg = editBox.querySelector('.mg-edit-key-msg');
+    const keyShow = (html, kind) => { keyMsg.innerHTML = html; keyMsg.className = 'mg-edit-key-msg' + (kind ? ' ' + kind : ''); };
+    if (keySaveBtn) keySaveBtn.addEventListener('click', async () => {
+      const key = (keyInput.value || '').trim();
+      if (!key) { keyShow('<span class="warn">请先粘贴 API 密钥</span>', 'bad'); return; }
+      keySaveBtn.disabled = true; keySaveBtn.textContent = '保存中…';
+      try {
+        const set = await api.setCredential(ref, key);
+        if (!set.ok) { keyShow('保存密钥失败：' + esc(set.error || 'unknown'), 'bad'); return; }
+        keyShow(`已保存 <code>${esc(ref)}</code>`, 'ok');
+        if (keyInput) keyInput.value = '';
+        refreshModels();
+      } catch (e) {
+        keyShow('保存出错：' + esc(e.message || String(e)), 'bad');
+      } finally {
+        keySaveBtn.disabled = false; keySaveBtn.textContent = '保存密钥';
+      }
+    });
+    if (keyTestBtn) keyTestBtn.addEventListener('click', async () => {
+      const key = (keyInput.value || '').trim();
+      keyTestBtn.disabled = true; keyTestBtn.textContent = '测试中…';
+      keyShow('正在连接端点并发现模型…', '');
+      try {
+        const r = await api.discoverModels(p.settingsNs, provider, key || undefined);
+        if (!r.ok) { keyShow('连接失败：' + esc(r.error || 'unknown'), 'bad'); return; }
+        const modelsR = r.models || [];
+        keyShow(modelsR.length > 0
+          ? `连接成功，发现 ${modelsR.length} 个模型：` + modelsR.slice(0, 8).map((x) => `<code>${esc(x.name || x.id)}</code>`).join(' ') + (modelsR.length > 8 ? ' …' : '')
+          : '连接成功，但该端点未返回模型', 'ok');
+      } catch (e) {
+        keyShow('测试出错：' + esc(e.message || String(e)), 'bad');
+      } finally {
+        keyTestBtn.disabled = false; keyTestBtn.textContent = '测试连接';
+      }
+    });
 
     // ----- 事件绑定 -----
     const urlMode = editBox.querySelector('.mg-edit-urlmode');

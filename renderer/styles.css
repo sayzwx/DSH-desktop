@@ -2245,6 +2245,40 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
 .row-actions { display: flex; gap: 8px; margin-top: 12px; }
 
 /* 自定义设置（可折叠，模仿 webUI 模型编辑） */
+.mg-edit-key {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(13, 24, 48, 0.35);
+}
+.mg-edit-key-head { display: flex; align-items: center; gap: 8px; }
+.mg-edit-key-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mg-edit-key-input {
+  flex: 1;
+  min-width: 220px;
+  background: rgba(4, 7, 15, 0.6);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12.5px;
+  font-family: var(--font-mono);
+  padding: 7px 10px;
+}
+.mg-edit-key-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 10px rgba(0, 212, 170, 0.2); }
+.mg-edit-key-msg { font-size: 11.5px; line-height: 1.7; color: var(--text-dim); }
+.mg-edit-key-msg.ok { color: var(--cyan); }
+.mg-edit-key-msg.bad { color: var(--warn); }
+.mg-edit-key-msg code {
+  font-family: var(--font-mono);
+  background: rgba(123, 97, 255, 0.08);
+  padding: 1px 5px;
+  border-radius: 6px;
+  color: var(--accent-2);
+}
 .mg-edit-details {
   border: 1px solid var(--border);
   border-radius: 10px;
