@@ -1,4 +1,4 @@
-total: 221
+﻿total: 221
 @deepseek-ai/dsh	dsh CLI: profile boot, plugin management, and the browser UI alias
 @deepseek-ai/dsh-acp	Automation-only Agent Client Protocol server for driving DeepSeek Harness agents over JSON-RPC stdio
 @deepseek-ai/dsh-acp-demo	ACP automation server app: agent spine + JSONL persistence + ACP transport, with a JSON-RPC stdio bin

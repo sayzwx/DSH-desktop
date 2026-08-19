@@ -83,3 +83,22 @@ renderer/           渲染层（原生 HTML/JS/CSS）
 写入 `~/.dsh/settings.yaml`（首次安装，不覆盖已有配置）、从官方拉取并构建 Harness 引擎、创建桌面快捷方式。
 网络受限时可用 `-NpmRegistry https://registry.npmmirror.com` 指定 npm 镜像，或 `-SkipHarness` 跳过引擎（之后手动配置 `DSH_HARNESS_DIR`）。
 安装包不含任何 API 密钥；模型密钥在应用「设置 → 模型」填写，GitHub 用 SSH 密钥连接。
+
+## 编码约定（全局防线）
+
+本项目约定所有文本文件为 UTF-8，避免中文乱码 / 脚本解析崩溃：
+
+| 类型 | 规则 | 原因 |
+|---|---|---|
+| `.ps1` | UTF-8 **带 BOM** | Windows PowerShell 5.1 对无 BOM 文件按 ANSI/GBK 解析，中文字节可能混入引号字节导致语法崩溃 |
+| `.txt` | UTF-8 **带 BOM** | 中文 Windows 记事本把无 BOM 的 UTF-8 当 ANSI 显示，用户看到乱码 |
+| `.bat` / `.cmd` | 无 BOM（内容最好纯 ASCII） | cmd 会把 BOM 字节当命令执行报错 |
+| 其余文本（`.js .json .md .yml ...`） | UTF-8 无 BOM | Node/JSON 对 BOM 敏感 |
+
+强制手段：
+- `scripts\check-encoding.ps1`：仓库级审计（`-Fix` 自动补/去 BOM）；
+- `scripts\build-dist.ps1`：打包前强制执行，不过不放行；
+- `.github\workflows\encoding-check.yml`：每次 push / PR 自动检查；
+- `.gitattributes`：统一行尾（CRLF/LF）与二进制标记。
+
+新增或编辑文本文件后，运行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-encoding.ps1 -Fix` 即可自检自愈。

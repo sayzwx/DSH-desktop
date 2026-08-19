@@ -1,0 +1,20 @@
+name: encoding-check
+
+# 全局编码防线：每次 push / PR 检查仓库文本编码约定
+# （规则见 scripts\check-encoding.ps1；构建产物 scripts\build-dist.ps1 打包前同样强制执行）
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run encoding check
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\scripts\check-encoding.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

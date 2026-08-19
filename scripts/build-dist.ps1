@@ -10,6 +10,11 @@ $root = 'D:\DSH-desktop'
 $dist = Join-Path $root 'dist'
 $name = "DSH-Desktop-v$Version"
 
+# 编码防线：打包前强制检查，乱码/错误编码一律不放行
+Write-Host '=== 编码检查 (scripts\check-encoding.ps1) ==='
+& (Join-Path $root 'scripts\check-encoding.ps1')
+if ($LASTEXITCODE -ne 0) { throw '编码检查未通过，请先修复（可运行 scripts\check-encoding.ps1 -Fix）' }
+
 function Copy-Tree([string]$from, [string]$to, [string[]]$xd) {
   Write-Host "staging $from -> $to"
   $roboArgs = @($from, $to, '/E', '/MT:16', '/NFL', '/NDL', '/NJH', '/NJS', '/R:1', '/W:1')
@@ -36,7 +41,7 @@ Copy-Item (Join-Path $env:USERPROFILE '.dsh\settings.yaml')    (Join-Path $cfg '
 Copy-Item (Join-Path $env:USERPROFILE '.dsh\zen-ua-proxy.mjs') (Join-Path $cfg 'zen-ua-proxy.mjs') -Force
 Copy-Item (Join-Path $root 'installer\setup.ps1')    (Join-Path $stage 'setup.ps1') -Force
 Copy-Item (Join-Path $root 'installer\setup.bat')    (Join-Path $stage 'setup.bat') -Force
-# 中文文件名在无 BOM 的 PS1 里会被按 GBK 误读，用通配符避开字面量
+# 说明文档（中文名）随构建复制；编码由 scripts\check-encoding.ps1 统一把关
 Get-ChildItem (Join-Path $root 'installer') -Filter '*.txt' | Copy-Item -Destination $stage -Force
 $zip = Join-Path $dist "$name.zip"
 Make-Zip $stage $zip

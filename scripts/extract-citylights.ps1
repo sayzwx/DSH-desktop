@@ -1,4 +1,4 @@
-Add-Type -AssemblyName PresentationCore
+﻿Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName System.Drawing
 
 $src = "D:\DS_harness\renderer\bg.jpg"

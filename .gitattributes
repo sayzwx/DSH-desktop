@@ -1,0 +1,37 @@
+# 行尾与文件类型规范化（配合 scripts\check-encoding.ps1 的编码防线）
+# 编码约定：.ps1/.txt 必须 UTF-8 带 BOM；.bat/.cmd 必须无 BOM；其余文本 UTF-8 无 BOM。
+
+* text=auto
+
+# PowerShell / Windows 脚本：统一 CRLF（并禁止 cmd 需要的无 BOM .bat 被改写）
+*.ps1    text eol=crlf
+*.psd1   text eol=crlf
+*.psm1   text eol=crlf
+*.bat    text eol=crlf
+*.cmd    text eol=crlf
+
+# 文档与配置：txt 带 BOM（记事本友好），其余 UTF-8 无 BOM
+*.txt    text eol=crlf
+*.md     text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+
+# 代码
+*.js     text eol=lf
+*.mjs    text eol=lf
+*.cjs    text eol=lf
+*.json   text eol=lf
+*.html   text eol=lf
+*.css    text eol=lf
+
+# 二进制文件（不做换行转换）
+*.ico    binary
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.mp4    binary
+*.exe    binary
+*.zip    binary
+*.7z     binary
+*.bin    binary

@@ -1,4 +1,4 @@
-Add-Type -AssemblyName System.Drawing
+﻿Add-Type -AssemblyName System.Drawing
 
 $outIco = "D:\DS_harness\icon.ico"
 $outPng = "D:\DS_harness\icon.png"
