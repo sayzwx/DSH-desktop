@@ -7,7 +7,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $Dest  = Join-Path $env:LOCALAPPDATA 'DSH'
-$Home  = $env:USERPROFILE
+$UserHome = $env:USERPROFILE  # 不要用 $Home：$HOME 是 PowerShell 只读自动变量
 $Src   = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 function Copy-Tree([string]$from, [string]$to) {
