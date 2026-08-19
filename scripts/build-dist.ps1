@@ -3,10 +3,14 @@
 #   (desktop UI + Electron runtime + installer; ~220 MB, like any Electron app)
 #   The heavy harness engine is NOT packaged: setup.exe pulls it from the official
 #   deepseek-ai/DeepSeek-Harness source at install time (see installer\setup.ps1).
-# Run:  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-dist.ps1
-param([string]$Version = '0.2.1')
+# Run:  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-dist.ps1 [-Version 0.2.1] [-Root C:\path\to\repo]
+param(
+  [string]$Version = '0.2.1',
+  [string]$Root = ''   # 仓库根目录，默认取脚本所在目录的上级（scripts 的父目录）
+)
 $ErrorActionPreference = 'Stop'
-$root = 'D:\DSH-desktop'
+if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }
+$root = $Root
 $dist = Join-Path $root 'dist'
 $name = "DSH-Desktop-v$Version"
 
@@ -48,11 +52,17 @@ if ($LASTEXITCODE -ge 8) { throw 'robocopy electron dist failed' }
 Move-Item (Join-Path $appDir 'electron.exe') (Join-Path $appDir 'DSH.exe') -Force
 Copy-Item (Join-Path $root 'DSH.ico') (Join-Path $appDir 'DSH.ico') -Force
 
-# 应用本体 → resources\app（剔除 .git / dist / electron 运行时自身）
+# 应用本体 → resources\app（剔除 .git / dist / electron 运行时 / 大体积非必需资源）
 $resApp = Join-Path $appDir 'resources\app'
 New-Item -ItemType Directory -Path $resApp -Force | Out-Null
-robocopy $root $resApp /E /XD "$root\.git" "$root\dist" "$root\node_modules\electron" /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
+robocopy $root $resApp /E /XD "$root\.git" "$root\dist" "$root\node_modules\electron" "$root\wallpaper-engine" /XF "*.mp4" /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
 if ($LASTEXITCODE -ge 8) { throw 'robocopy app failed' }
+# 动态星空背景（renderer\bg-animated.mp4，~45MB）若存在则放回应用资源（可选动画背景，
+# 体积敏感可自行从仓库删掉该文件后再打包——删除后 UI 自动回落静态星空背景）
+$bgAni = Join-Path $root 'renderer\bg-animated.mp4'
+if (Test-Path $bgAni) {
+  Copy-Item $bgAni (Join-Path $resApp 'renderer\bg-animated.mp4') -Force
+}
 
 $cfg = Join-Path $stage 'config'
 New-Item -ItemType Directory -Path $cfg -Force | Out-Null
@@ -74,9 +84,14 @@ Make-Zip $stage $zip
 
 # ---------- 2. self-extracting Setup.exe (7-Zip SFX, LZMA2 - small) ----------
 Write-Host "=== Building $name-Setup.exe (7-Zip SFX) ==="
-$sz7 = 'D:\7-Zip\7z.exe'
-$sfx = 'D:\7-Zip\7z.sfx'
-if (-not (Test-Path $sz7) -or -not (Test-Path $sfx)) {
+$sz7 = ''
+foreach ($p in @('D:\7-Zip\7z.exe', 'C:\Program Files\7-Zip\7z.exe', 'C:\Program Files (x86)\7-Zip\7z.exe')) { if (Test-Path $p) { $sz7 = $p; break } }
+if (-not $sz7) {
+  $w = (Get-Command 7z -ErrorAction SilentlyContinue).Source
+  if ($w) { $sz7 = $w }
+}
+$sfx = if ($sz7) { Join-Path (Split-Path -Parent $sz7) '7z.sfx' } else { '' }
+if (-not $sz7 -or -not (Test-Path $sfx)) {
   Write-Host '7-Zip not found - Setup.exe skipped (zip is the deliverable)'
 } else {
   $sz7file = Join-Path $dist "$name.7z"
