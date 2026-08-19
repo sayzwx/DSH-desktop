@@ -44,6 +44,10 @@
   let streamMsg = null;      // 当前会话正在流的消息 DOM
   let domBlocks = new Map(); // 当前会话 DOM 块 (index -> element)
   let pendingUserEl = null;
+  // 发送模式：queue = 排队跟进，steer = 插话/转向（与 Web UI 的 ui-conversation.busyEnter 语义一致）
+  const SEND_MODE_KEY = 'dsh-send-mode';
+  let sendMode = 'queue';
+  try { const s = localStorage.getItem(SEND_MODE_KEY); if (s === 'steer' || s === 'queue') sendMode = s; } catch { /* ignore */ }
 
   // ---------- 并发缓冲：每个会话独立 ----------
   const bufs = new Map();
@@ -344,6 +348,41 @@
     });
   }
 
+  // 发送模式（插话/排队）渲染与切换；偏好持久化到 localStorage，且尽量与 Web UI 的 busyEnter 同步
+  function renderSendMode() {
+    const seg = $('#ctModeSeg');
+    if (!seg) return;
+    seg.querySelectorAll('.ct-mode-btn').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.mode === sendMode);
+    });
+  }
+
+  function applySendMode(mode, persist) {
+    if (mode !== 'queue' && mode !== 'steer') return;
+    sendMode = mode;
+    if (persist !== false) {
+      try { localStorage.setItem(SEND_MODE_KEY, mode); } catch { /* ignore */ }
+      // 与 Web UI 同槽位：写 ui-conversation.busyEnter（尽力而为，失败不阻塞）
+      api.mutateSettings('ui-conversation', [{ op: 'set', path: ['busyEnter'], value: mode }], undefined).catch(() => {});
+    }
+    renderSendMode();
+  }
+
+  // 若已连接且 Web 端配过 busyEnter，则采纳它作为默认（本机偏好优先）
+  async function syncSendModeFromWeb() {
+    try {
+      const d = await api.getSettingsDescribe();
+      if (d.ok) {
+        const ns = (d.namespaces || []).find((n) => n.ns === 'ui-conversation');
+        const webVal = ns && ns.value && ns.value.busyEnter;
+        if ((webVal === 'queue' || webVal === 'steer') && !localStorage.getItem(SEND_MODE_KEY)) {
+          sendMode = webVal;
+          renderSendMode();
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
   function renderStatus() {
     const b = buf(currentSessionId);
     const label = modelLabel();
@@ -547,7 +586,26 @@
     if (!ctModelPanel.hidden && !e.target.closest('#ctModel')) ctModelPanel.hidden = true;
   });
 
-  // ---------------- 消息渲染 ----------------
+  // ---------------- 消息渲染（带身份去重） ----------------
+  // 每个会话维护"已渲染消息身份"集合：user/message 与 assistant/message 携带 id/seq，
+  // 同一身份的事件只渲染一次（重连/重复投递时复用已有元素，而不是追加第二个框）。
+  // renderHistory 整段重绘时会清空对应会话的集合。
+  const renderedIds = new Map(); // sessionId -> Set<string>  （仅当前活动的会话使用；切换会话时重建）
+
+  function renderedIdFor(sid) {
+    if (!renderedIds.has(sid)) renderedIds.set(sid, new Set());
+    return renderedIds.get(sid);
+  }
+
+  // 推导消息身份键：优先显式 id，否则用 provider+seq/时间戳兜底；没有可取身份时返回 null（不做去重）
+  function msgIdentity(ev) {
+    if (!ev || !ev.data) return null;
+    const id = ev.data.id || ev.data.messageId || ev.data.seq;
+    if (typeof id !== 'undefined' && id !== null) return String(id);
+    if (ev.data.provenance?.seq !== undefined) return `p-${ev.data.provenance.seq}`;
+    return null;
+  }
+
   function emptyState() {
     messagesEl.innerHTML = `<div class="chat-empty">
       <div class="big">✉</div>
@@ -660,6 +718,7 @@
   // 只从尾部反向收集"界面事件"（用户消息 / 完成的消息 / 工具调用），最多 80 条。
   function renderHistory(events) {
     messagesEl.innerHTML = '';
+    renderedIds.set(currentSessionId, new Set()); // 整段重绘：重置该会话的去重集合
     const surface = [];
     for (let i = (events || []).length - 1; i >= 0 && surface.length < 80; i--) {
       const ev = events[i]?.event;
@@ -776,6 +835,7 @@
     if (b.blocks.size > 0) {
       streamMsg = makeAssistantMsg();
       streamMsg.classList.remove('pending');
+      domBlocks = new Map();
       const idxs = [...b.blocks.keys()].sort((a, c) => a - c);
       for (const i of idxs) {
         const blk = b.blocks.get(i);
@@ -783,12 +843,17 @@
           const d = document.createElement('details');
           d.className = 'msg-reasoning';
           d.innerHTML = '<summary>🧠 思考过程</summary><div></div>';
-          d.querySelector('div').textContent = blk.text;
+          const txt = d.querySelector('div');
+          txt.textContent = blk.text;
+          txt.__dshLen = (blk.text || '').length;
           streamMsg.appendChild(d);
+          domBlocks.set(i, txt);
         } else {
           const el = document.createElement('div');
           el.textContent = blk.text;
+          el.__dshLen = (blk.text || '').length;
           streamMsg.appendChild(el);
+          domBlocks.set(i, el);
         }
       }
       const meta = b.model ? document.createElement('div') : null;
@@ -966,7 +1031,7 @@
       pendingUserEl.appendChild(makeFileChipEl(f));
     }
     scrollBottom(true);
-    const r = await api.chatSend(currentSessionId, text, sentImages, sentFiles);
+    const r = await api.chatSend(currentSessionId, text, sentImages, sentFiles, sendMode);
     if (r.ok) {
       draftImages.length = 0;
       draftFiles.length = 0;
@@ -1082,9 +1147,12 @@
         d.innerHTML = '<summary>🧠 思考过程</summary><div></div>';
         el.appendChild(d);
         streamMsg.appendChild(el);
-        domBlocks.set(index, d.querySelector('div'));
+        const txt = d.querySelector('div');
+        txt.__dshLen = 0;
+        domBlocks.set(index, txt);
       } else {
         el.className = 'stream-caret';
+        el.__dshLen = 0;
         streamMsg.appendChild(el);
         domBlocks.set(index, el);
       }
@@ -1104,9 +1172,19 @@
           el.className = 'stream-caret';
           streamMsg.appendChild(el);
         }
+        el.__dshLen = 0;
         domBlocks.set(index, el);
       }
-      el.textContent += chunk.text;
+      // 只追加"尚未写入"的增量：若 renderLiveBuffer/历史已重建过同 index 文本，跳过重复部分
+      const base = el.__dshLen || 0;
+      el.textContent = el.textContent.slice(0, base) + chunk.text;
+      el.__dshLen = el.textContent.length;
+      const blk = buf(currentSessionId)?.blocks?.get(index);
+      if (blk && typeof blk.text === 'string' && el.textContent.length < blk.text.length) {
+        // 缓冲里还有更长文本（renderLiveBuffer 重建过）→ 直接补全到一致
+        el.textContent = blk.text;
+        el.__dshLen = el.textContent.length;
+      }
     } else if (chunk.type === 'block-end') {
       const el = domBlocks.get(index);
       if (el && chunk.block?.text) el.textContent = chunk.block.text;
@@ -1186,16 +1264,32 @@
         if (!isCur) break;
         const isRealUser = ev.data?.source?.kind === 'user';
         if (!isRealUser) break;
+        const key = msgIdentity(ev);
+        if (key) {
+          const seen = renderedIdFor(currentSessionId);
+          // 已在 DOM（历史或此前事件渲染过）→ 只标记去重，不再新建；若 pendingUserEl 存在则复用刷新
+          if (seen.has(key)) {
+            if (pendingUserEl && !pendingUserEl.dataset.msgKey) {
+              pendingUserEl.dataset.msgKey = key;
+              renderUserMessage(ev, pendingUserEl);
+            }
+            pendingUserEl = null;
+            break;
+          }
+        }
         const blocks = ev.data?.content || [];
         const text = blocks.filter((bl) => bl.type === 'text').map((bl) => bl.text).join('\n');
         if (pendingUserEl) {
           // 用服务端回显刷新本地气泡（保留，不移除）
+          pendingUserEl.dataset.msgKey = key || '';
           renderUserMessage(ev, pendingUserEl);
           pendingUserEl = null;
         } else if (text || blocks.some((bl) => bl.type === 'image')) {
-          renderUserMessage(ev, null);
+          const el = renderUserMessage(ev, null);
+          if (key && el) el.dataset.msgKey = key;
           scrollBottom(false);
         }
+        if (key) renderedIdFor(currentSessionId).add(key);
         break;
       }
 
@@ -1213,6 +1307,18 @@
       case 'assistant/message': {
         if (ev.data?.provenance?.model) b.model = ev.data.provenance.model;
         if (isCur) {
+          const key = msgIdentity(ev);
+          if (key) {
+            const seen = renderedIdFor(currentSessionId);
+            if (seen.has(key)) {
+              // 该消息已渲染（接历史/其他来源）→ 只清理流缓冲，不产生第二框
+              b.blocks.clear();
+              if (streamMsg) { streamMsg.remove(); streamMsg = null; }
+              domBlocks = new Map();
+              break;
+            }
+            seen.add(key);
+          }
           finalizeStream(ev.data);
           scrollBottom(false);
         }
@@ -1270,6 +1376,21 @@
       return;
     }
     if (msg.stream === 'mux') {
+      if (p.type === 'session/subscribed') {
+        // mux 重连/重开时引擎只推送 subscribed 基线（lastSeq），不会重放对话事件。
+        // 这里把该会话的流式缓冲与 DOM 状态重置，避免残留 blocks 在 reopen 时与 history 叠加成双框。
+        const b = buf(p.sessionId);
+        b.blocks.clear();
+        b.turn = false;
+        b.tool = null;
+        renderedIds.set(p.sessionId, new Set());
+        if (p.sessionId === currentSessionId) {
+          streamMsg = null;
+          domBlocks = new Map();
+        }
+        if (p.sessionId === currentSessionId) setTurnUI(false);
+        return;
+      }
       if (p.type === 'session/event') handleSessionEvent(p);
       else if (p.type === 'session/projection') {
         if (p.sessionId !== currentSessionId) return;
@@ -1559,8 +1680,19 @@
     if (!r.ok) themedAlert('启动失败：' + r.error, '星际通讯中断');
   });
 
+  const ctModeSeg = $('#ctModeSeg');
+  if (ctModeSeg) {
+    ctModeSeg.addEventListener('click', (e) => {
+      const btn = e.target.closest('.ct-mode-btn');
+      if (!btn) return;
+      applySendMode(btn.dataset.mode, true);
+    });
+  }
+
   api.onChatFrame(handleFrame);
   api.onState((s) => setConnected(s === 'running'));
 
+  renderSendMode();
+  syncSendModeFromWeb();
   api.getStatus().then((st) => setConnected(st.state === 'running' || st.webUp));
 })();

@@ -194,7 +194,8 @@
     </div>`;
   }
 
-  /** 密钥编辑器：填写 API 密钥 → 保存（credentials.set + settings.mutate）→ 测试连接（llm.discoverModels）。 */
+  /** 密钥编辑器：填写 API 密钥 → 保存（credentials.set + settings.mutate）→ 测试连接（llm.discoverModels）。
+   *  另提供：编辑提供商配置（API 类型 / baseURL / 模型列表）与删除整个提供商。 */
   function keyEditor(p) {
     if (!p || p.settingsNs !== 'llm-pi-ai') return ''; // 仅聚合提供商目录下的路由支持此流程
     if (!settingsWritable) {
@@ -206,6 +207,7 @@
     const st = credStates[ref] || {};
     const configured = !!st.configured;
     const locked = st.writable === false;
+    const removable = isProviderRemovable(p.provider);
     return `<div class="mg-key" data-provider="${esc(p.provider)}">
       <div class="mg-key-head">
         <span class="mg-key-ref">${esc(ref)}</span>
@@ -217,8 +219,29 @@
         <button class="mini-btn mg-key-save" type="button" ${locked ? 'disabled' : ''}>保存密钥</button>
         <button class="mini-btn mg-key-test" type="button">测试连接</button>
       </div>
+      <div class="mg-key-actions">
+        <button class="mini-btn mg-edit" type="button" title="修改 API 类型 / baseURL / 模型列表">编辑提供商配置</button>
+        ${removable ? '<button class="mini-btn danger-btn mg-rm" type="button">删除提供商</button>' : ''}
+      </div>
+      <div class="mg-edit-box" hidden></div>
       <div class="mg-key-msg"></div>
     </div>`;
+  }
+
+  /** user 层有该 provider 而 base 没有 → 允许删除（与 Web UI 一致）。 */
+  function isProviderRemovable(provider) {
+    const ns = nsViews['llm-pi-ai'];
+    if (!ns) return false;
+    const base = ns.base && ns.base.providers ? ns.base.providers[provider] : undefined;
+    const user = ns.user && ns.user.providers ? ns.user.providers[provider] : undefined;
+    return !base && !!user;
+  }
+
+  /** 读取 llm-pi-ai 中某个 provider 的完整配置（merge 后的 value），无则返回空对象。 */
+  function providerConfigOf(provider) {
+    const ns = nsViews['llm-pi-ai'];
+    const prov = ns && ns.value && ns.value.providers ? ns.value.providers[provider] : undefined;
+    return (prov && typeof prov === 'object') ? prov : {};
   }
 
   function wireKeyEditors() {
@@ -259,6 +282,7 @@
         testBtn.disabled = true; testBtn.textContent = '测试中…';
         show('正在连接 <code>' + esc(p.settingsNs) + '</code> 并发现模型…', '');
         try {
+          const cfg = providerConfigOf(provider);
           const r = await api.discoverModels(p.settingsNs, provider, key || undefined);
           if (!r.ok) { show('连接失败：' + esc(r.error || 'unknown'), 'bad'); return; }
           const models = r.models || [];
@@ -269,6 +293,105 @@
           show('测试出错：' + esc(e.message || String(e)), 'bad');
         } finally {
           testBtn.disabled = false; testBtn.textContent = '测试连接';
+        }
+      });
+
+      // ---- 编辑提供商配置（API 类型 / baseURL / 模型列表） ----
+      const editBtn = block.querySelector('.mg-edit');
+      const editBox = block.querySelector('.mg-edit-box');
+      if (editBtn && editBox) {
+        editBtn.addEventListener('click', () => {
+          if (!editBox.hidden) { editBox.hidden = true; return; }
+          const cfg = providerConfigOf(provider);
+          const api = ['openai-completions', 'openai-responses', 'anthropic-messages'].includes(cfg.api) ? cfg.api : 'openai-completions';
+          const baseURL = cfg.baseURL || '';
+          const models = Array.isArray(cfg.models)
+            ? cfg.models.map((m) => [m.id, m.name || '', m.contextWindow || '', m.maxTokens || ''].filter(Boolean).join(' | ')).join('\n')
+            : '';
+          editBox.innerHTML = `
+            <div class="mg-edit-grid">
+              <label>API 协议
+                <select class="sm-input mg-edit-api">
+                  <option value="openai-completions"${api === 'openai-completions' ? ' selected' : ''}>OpenAI Completions</option>
+                  <option value="openai-responses"${api === 'openai-responses' ? ' selected' : ''}>OpenAI Responses</option>
+                  <option value="anthropic-messages"${api === 'anthropic-messages' ? ' selected' : ''}>Anthropic Messages</option>
+                </select>
+              </label>
+              <label>baseURL
+                <input type="text" class="sm-input mg-edit-url" placeholder="https://api.example.com/v1" value="${esc(baseURL)}" />
+              </label>
+              <label>模型列表（每行：id | 显示名 | contextWindow | maxTokens，只填 id 也可）
+                <textarea class="sm-input mg-edit-models" rows="4" placeholder="model-id&#10;model-id | 显示名">${esc(models)}</textarea>
+              </label>
+            </div>
+            <div class="mg-edit-actions">
+              <button class="mini-btn mg-edit-save" type="button">保存配置</button>
+              <span class="mg-edit-msg"></span>
+            </div>`;
+          editBox.hidden = false;
+          const saveEdit = editBox.querySelector('.mg-edit-save');
+          saveEdit.addEventListener('click', async () => {
+            const api2 = editBox.querySelector('.mg-edit-api').value;
+            const url2 = editBox.querySelector('.mg-edit-url').value.trim();
+            const models2 = editBox.querySelector('.mg-edit-models').value
+              .split(/\r?\n/)
+              .map((l) => l.trim()).filter(Boolean)
+              .map((l) => {
+                const [id, name, contextWindow, maxTokens] = l.split('|').map((s) => (s || '').trim());
+                const out = { id };
+                if (name) out.name = name;
+                if (contextWindow) out.contextWindow = Number(contextWindow);
+                if (maxTokens) out.maxTokens = Number(maxTokens);
+                return out;
+              });
+            const cfg2 = providerConfigOf(provider);
+            const patch = { ...cfg2, api: api2 };
+            if (url2) patch.baseURL = url2;
+            else delete patch.baseURL;
+            patch.models = models2;
+            saveEdit.disabled = true; saveEdit.textContent = '保存中…';
+            const m = editBox.querySelector('.mg-edit-msg');
+            try {
+              const ns = nsViews['llm-pi-ai'];
+              const mut = await api.mutateSettings('llm-pi-ai',
+                [{ op: 'set', path: ['providers', provider], value: patch }],
+                ns ? ns.revision : undefined);
+              if (!mut.ok) { m.textContent = '保存失败：' + (mut.error || 'unknown'); return; }
+              m.textContent = '已保存 ✓';
+              refreshModels();
+            } catch (e) {
+              m.textContent = '保存出错：' + (e.message || String(e));
+            } finally {
+              saveEdit.disabled = false; saveEdit.textContent = '保存配置';
+            }
+          });
+        });
+      }
+
+      // ---- 删除整个提供商（仅 user 层新增的可删） ----
+      const rmBtn = block.querySelector('.mg-rm');
+      if (rmBtn) rmBtn.addEventListener('click', async () => {
+        const ok = window.__modal
+          ? await window.__modal.confirm(`确定删除提供商 <strong>${esc(provider)}</strong> 的整份配置与对应 API 密钥？\n（此操作不可撤销，将移除其全部自定义模型）`, '删除提供商')
+          : confirm(`确定删除提供商 ${provider} 的配置与密钥？`);
+        if (!ok) return;
+        rmBtn.disabled = true; rmBtn.textContent = '删除中…';
+        try {
+          const ns = nsViews['llm-pi-ai'];
+          const cfg = providerConfigOf(provider);
+          const keyRef = (cfg && cfg.apiKeyEnv) || deriveKeyRef(provider);
+          // 1) 清理凭据（尽力而为）
+          await api.unsetCredential(keyRef).catch(() => {});
+          // 2) 移除整个 providers.<name> 配置
+          const mut = await api.mutateSettings('llm-pi-ai',
+            [{ op: 'unset', path: ['providers', provider] }],
+            ns ? ns.revision : undefined);
+          if (!mut.ok) { show('删除失败：' + esc(mut.error || 'unknown'), 'bad'); rmBtn.disabled = false; rmBtn.textContent = '删除提供商'; return; }
+          show(`已删除提供商 <code>${esc(provider)}</code> 及其密钥引用`, 'ok');
+          refreshModels();
+        } catch (e) {
+          show('删除出错：' + esc(e.message || String(e)), 'bad');
+          rmBtn.disabled = false; rmBtn.textContent = '删除提供商';
         }
       });
     });

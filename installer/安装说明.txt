@@ -1,4 +1,4 @@
-﻿# DSH Desktop 一键安装包（小体积安装器模式：引擎安装时从官方拉取）
+﻿# DSH Desktop 一键安装包（v0.2.0 · 小体积安装器模式：引擎安装时从官方拉取）
 
 ## 这是什么
 DSH 桌面端 UI 应用安装包（含 Electron 运行时，约 220MB，和普通 Electron 应用一样）。
@@ -11,12 +11,15 @@ DSH 桌面端 UI 应用安装包（含 Electron 运行时，约 220MB，和普�
 
 安装器会：
 1. 安装桌面端应用到 `%LOCALAPPDATA%\DSH\app`
-2. 写入 Harness 配置到 `%USERPROFILE%\.dsh\settings.yaml`（仅首次，已有配置不覆盖）
-3. 拉取 Harness 引擎到 `%LOCALAPPDATA%\DSH\harness`：
-   - 下载官方 Node.js（nodejs.org，~30MB）→ 下载 DeepSeek-Harness 官方源码
+2. 写入纯净默认的 Harness 配置（`~/.dsh/settings.yaml`，仅首次，已有配置不覆盖；
+   **不包含任何开发者个人配置 / 密钥**）
+3. 环境预检（`check-env.ps1`）：检查 CPU 架构、网络可达、磁盘空间与 Node.js 版本
+4. 拉取 Harness 引擎到 `%LOCALAPPDATA%\DSH\harness`：
+   - Node.js 缺失或版本过低时**优先用 winget 安装最新 LTS**，winget 不可用则下载官方
+     nodejs.org 的 Node → 下载 DeepSeek-Harness 官方源码
      （github.com/deepseek-ai，zip 优先、git clone 兜底）→ pnpm 安装依赖 + 构建
    - 需要网络：github.com / nodejs.org / npm registry
-4. 创建桌面/开始菜单快捷方式「DSH」并启动
+5. 创建桌面/开始菜单快捷方式「DSH」并启动
 
 ## 网络受限（如国内无法访问 npm registry）
 安装时给 setup 传镜像参数，例如：
@@ -32,10 +35,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File setup.ps1 -SkipHarness
 之后在应用里配置 harness 路径（环境变量 DSH_HARNESS_DIR，或直接把引擎放到
 `%LOCALAPPDATA%\DSH\harness`）。
 
+## 只修复/重装引擎（不动应用与配置）
+```bat
+powershell -NoProfile -ExecutionPolicy Bypass -File setup.ps1 -EngineOnly
+```
+
 ## 安装后首次使用
 1. 打开「DSH Desktop」，点「启动 Harness」（Web 界面 http://127.0.0.1:3080）
-2. 模型 API Key：应用「设置 → 模型」里填写（安装包不含任何密钥）
+2. 模型 API Key：应用「设置 → 模型」里填写（安装包不含任何密钥或个人配置）
 3. GitHub 连接：左侧栏用 SSH 密钥，可自动生成
+4. 对话里可用「排队 / 插话」切换发送模式；模型配置可编辑/删除自己新增的提供商
 
 ## 卸载
 删除 `%LOCALAPPDATA%\DSH` 与桌面快捷方式；用户数据在 `%USERPROFILE%\.dsh`。

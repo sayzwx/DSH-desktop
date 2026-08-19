@@ -182,13 +182,21 @@ if (-not $EngineOnly) {
   Write-Host '[2/3] Writing user configuration (~/.dsh) ...'
   $dshHome = Join-Path $UserHome '.dsh'
   New-Item -ItemType Directory -Path $dshHome -Force | Out-Null
+  # 默认配置只从仓库内置的纯净模板复制（不带任何个人提供商/密钥引用）
   if (-not (Test-Path (Join-Path $dshHome 'settings.yaml'))) {
-    Copy-Item (Join-Path $Src 'config\settings.yaml') (Join-Path $dshHome 'settings.yaml') -Force
-    Write-Host '  settings.yaml written (first install; existing config kept)'
+    if (Test-Path (Join-Path $Src 'config\settings.yaml')) {
+      Copy-Item (Join-Path $Src 'config\settings.yaml') (Join-Path $dshHome 'settings.yaml') -Force
+      Write-Host '  settings.yaml written (clean default template; existing config kept)'
+    } else {
+      Write-Host '  WARN: 缺少 config\settings.yaml 纯净模板，跳过写入（harness 使用内置默认）'
+    }
   } else {
     Write-Host '  settings.yaml already exists - keeping yours'
   }
-  Copy-Item (Join-Path $Src 'config\zen-ua-proxy.mjs') (Join-Path $dshHome 'zen-ua-proxy.mjs') -Force
+  # zen-ua-proxy 仅当包内确实带模板时才安装（不读取/分发开发者个人副本）
+  if (Test-Path (Join-Path $Src 'config\zen-ua-proxy.mjs')) {
+    Copy-Item (Join-Path $Src 'config\zen-ua-proxy.mjs') (Join-Path $dshHome 'zen-ua-proxy.mjs') -Force
+  }
 }
 
 Write-Host ''
@@ -206,10 +214,10 @@ if ($harnessReady) {
 }
 
 if (-not $EngineOnly) {
-  # UA proxy startup entry (uses the node we provisioned)
+  # UA proxy startup entry (only when the packaged template exists)
   $nodeExe = Join-Path $Dest 'tools\node\node.exe'
-  if (Test-Path $nodeExe) {
-    $mjs = Join-Path $dshHome 'zen-ua-proxy.mjs'
+  $mjs = Join-Path $dshHome 'zen-ua-proxy.mjs'
+  if ((Test-Path $nodeExe) -and (Test-Path $mjs)) {
     $startup = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup'
     New-Item -ItemType Directory -Path $startup -Force | Out-Null
     $line = 'WshShell.Run """' + $nodeExe + '"" ""' + $mjs + '""", 0, False'

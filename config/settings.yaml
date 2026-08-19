@@ -1,0 +1,7 @@
+# DSH Desktop 纯净默认配置模板。
+# 安装器首次安装时写到用户的 ~/.dsh/settings.yaml（用户已有配置则保留不动）。
+# 注意：这里必须保持纯净——不要放任何开发者个人/本机的提供商、密钥引用或私有路由，
+#       否则会把个人数据泄露给每一个下载安装包的用户。
+# 如需默认开放某项功能，请写入通用默认值（如 agent-presets.default: cordis）。
+agent-presets:
+  default: cordis

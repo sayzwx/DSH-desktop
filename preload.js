@@ -35,13 +35,13 @@ contextBridge.exposeInMainWorld('api', {
   addWorkspace: (path) => ipcRenderer.invoke('chat:addWorkspace', path),
   chatArchiveSession: (sessionId) => ipcRenderer.invoke('chat:archiveSession', sessionId),
   chatHistory: (sessionId) => ipcRenderer.invoke('chat:history', sessionId),
-  chatSend: (sessionId, text, images, files) => {
+  chatSend: (sessionId, text, images, files, mode) => {
     const content = [];
     if (text) content.push({ type: 'text', text });
     for (const img of images || []) {
       content.push({ type: 'image', mediaType: img.mediaType, data: img.data, name: img.name });
     }
-    return ipcRenderer.invoke('chat:send', { sessionId, content, files: files || [] });
+    return ipcRenderer.invoke('chat:send', { sessionId, content, files: files || [], mode: mode || 'queue' });
   },
   pickFiles: () => ipcRenderer.invoke('chat:pickFiles'),
   chatAnswerQuestion: (rpcId, sessionId, answers) =>
@@ -61,6 +61,7 @@ contextBridge.exposeInMainWorld('api', {
   getLlmModels: () => ipcRenderer.invoke('settings:llmModels'),
   describeCredentials: (refs) => ipcRenderer.invoke('credentials:describe', refs),
   setCredential: (ref, value) => ipcRenderer.invoke('credentials:set', { ref, value }),
+  unsetCredential: (ref) => ipcRenderer.invoke('credentials:unset', ref),
   mutateSettings: (ns, ops, expectedRevision) => ipcRenderer.invoke('settings:mutate', { ns, ops, expectedRevision }),
   discoverModels: (settingsNs, provider, apiKey) => ipcRenderer.invoke('llm:discoverModels', { settingsNs, provider, apiKey }),
   getSettingsDescribe: () => ipcRenderer.invoke('settings:describe'),

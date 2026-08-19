@@ -2126,6 +2126,31 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
   color: var(--accent-2);
 }
 .mg-key-msg .warn { color: var(--warn); font-weight: 600; }
+.mg-key-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.mg-edit-box {
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(4, 7, 15, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mg-edit-grid { display: flex; flex-direction: column; gap: 8px; }
+.mg-edit-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.mg-edit-grid .sm-input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+}
+.mg-edit-actions { display: flex; align-items: center; gap: 10px; }
+.mg-edit-msg { font-size: 12px; color: var(--cyan); }
 .row-actions { display: flex; gap: 8px; margin-top: 12px; }
 
 /* ============ 智能体提问卡片（ask_user_question） ============ */

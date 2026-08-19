@@ -2,13 +2,24 @@
 
 基于 Electron 的 [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeek-Harness) 桌面端 UI——「深空观测站」。
 
+> 当前版本：**v0.2.0**
+
 用一套星际主题界面把 harness 的 Web 服务（`pnpm dsh web`）封装成桌面应用：一键启停、实时日志、会话对话、使用统计、GitHub 仓库浏览，以及完整的**工作区**支持。
+
+## v0.2.0 更新日志
+
+- **发送模式**：对话工具栏新增「排队 / 插话」切换（对应 Web UI 的 busy Enter 偏好）。排队 = agent 忙时自动排队跟进；插话 = 直接向正在运行的回合插入指令（`session.prompt mode: steer`）。偏好本机记忆，并尽量与 Web 端 `ui-conversation.busyEnter` 同步。
+- **模型管理增强**：提供商配置卡片新增「编辑提供商配置」（API 协议 / baseURL / 模型列表增删）与「删除提供商」（仅限用户在此应用里新增的提供商，同时清理其 API 密钥引用）。
+- **修复消息重复渲染**：聊天窗口偶发"用户消息 / 思考过程出现两个框"的问题。补上 mux `session/subscribed` 重同步、按消息身份去重、流式增量补全，重连/切换会话不再产生重复气泡。
+- **修复检查更新 401**：此前 `~/.dsh/.github-token` 一旦存了失效令牌会导致更新检查报 `GitHub API 401`。现在会自动检测无效令牌格式并在 401/403 时清除后改用匿名检查。
+- **隐私修复**：安装包不再打包开发者本机的 `~/.dsh/settings.yaml` / `zen-ua-proxy.mjs`。发行版默认配置改为仓库内置的纯净模板（`config/settings.yaml`），不会把开发者的模型路由 / 提供商 / 密钥引用泄露给使用者。
+- **一键安装 / 引擎自动获取**：安装器新增环境预检（`check-env.ps1`），首次启动自动探测本机 Node.js；缺失或版本过低时**优先用 winget 安装最新 Node LTS**，失败再回退官方 zip 下载，环境合格后才拉取 harness 引擎（详见上文"快速开始"）。
 
 ## 功能
 
-- **一键启停**：自动启动 / 接管 `pnpm dsh web`（`:3080`），无需命令行
-- **实时信号流**：harness 启动日志实时滚动查看
-- **星际对话**：并发会话、流式输出、模型选择、思考等级、图片粘贴发送
+- **一键启停**：自动启动 / 接管 `dsh web`（`:3080`），无需命令行
+- **实时信号流**：harness 启动日志实时滚动查看（含引擎自动获取、环境预检进度）
+- **星际对话**：并发会话、流式输出、模型选择、思考等级、图片粘贴发送、**排队/插话发送模式**
 - **工作区**：
   - 左侧历史会话按工作区分组（分组可折叠，未归属会话归入「未分组」）
   - 「＋ 新会话」可选择电脑上的任意文件夹作为工作区（原生目录选择器）
@@ -16,7 +27,7 @@
 - **星图档案**：会话数据目录浏览
 - **GitHub 侧边栏**：SSH 密钥连接（`git@github.com`），添加仓库 / 分支 / 文件树浏览
 - **MCP / 技能**：harness 组合文件中的 MCP 服务器与技能列表
-- **设置**：主题（深空 / 极光 / 彗星金 / 自定义）、Agent preset、模型配置、API 密钥管理
+- **设置**：主题（深空 / 极光 / 彗星金 / 自定义）、Agent preset、模型配置（含提供商编辑/删除）、API 密钥管理、软件更新检查
 - **动态星空背景**：星空粒子 + 星云动画主题
 
 ## 快速开始
@@ -70,6 +81,8 @@ renderer/           渲染层（原生 HTML/JS/CSS）
 - GitHub 请求使用 Electron `net.fetch`（系统证书库），兼容本地 TLS 拦截环境。
 - 对话会话数据与工作区注册表由 harness 持久化在 `~/.dsh/` 下，桌面端本身不存业务数据。
 - 动态背景视频约 45MB；不需要动画背景时可直接删除 `renderer/bg-animated.mp4`。
+- **隐私**：发行版不携带任何开发者的个人配置（模型路由、API 密钥、`~/.dsh` 文件都不会进安装包）。首次安装写入的 `~/.dsh/settings.yaml` 来自仓库内置纯净模板，用户已有配置永不被覆盖。
+- **更新检查令牌**：如需用私有令牌提高 GitHub API 配额，可把有效 PAT 放到 `~/.dsh/.github-token`；失效令牌会被自动识别并清除，不影响匿名检查。
 
 
 ## 一键安装包（发行版）
@@ -80,9 +93,10 @@ renderer/           渲染层（原生 HTML/JS/CSS）
 - Harness 引擎不在安装包内：安装时由安装器从官方源自动拉取（`deepseek-ai/DeepSeek-Harness` 源码 + nodejs.org 官方 Node），在本机完成依赖安装与构建（一次性）。
 
 使用者：双击 `Setup.exe`（或解压 zip 后运行 `setup.bat`）→ 自动安装到 `%LOCALAPPDATA%\DSH`、
-写入 `~/.dsh/settings.yaml`（首次安装，不覆盖已有配置）、从官方拉取并构建 Harness 引擎、创建桌面快捷方式。
+写入纯净的默认 `~/.dsh/settings.yaml`（首次安装，不覆盖已有配置）、从官方拉取并构建 Harness 引擎、创建桌面快捷方式。
+安装器内置环境预检：Node.js 缺失或版本过低时**优先用 winget 安装最新 LTS**，winget 不可用则下载官方 Node 到 `%LOCALAPPDATA%\DSH\tools\node`。
 网络受限时可用 `-NpmRegistry https://registry.npmmirror.com` 指定 npm 镜像，或 `-SkipHarness` 跳过引擎（之后手动配置 `DSH_HARNESS_DIR`）。
-安装包不含任何 API 密钥；模型密钥在应用「设置 → 模型」填写，GitHub 用 SSH 密钥连接。
+安装包不含任何 API 密钥及个人配置；模型密钥在应用「设置 → 模型」填写，GitHub 用 SSH 密钥连接。
 
 ## 编码约定（全局防线）
 

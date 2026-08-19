@@ -671,7 +671,7 @@ ipcMain.handle('chat:history', async (_e, sessionId) => {
   const events = foldChunks(r.value?.events || []);
   return { ok: true, events, hasMore: !!r.value?.hasMore, projections: r.value?.projections };
 });
-ipcMain.handle('chat:send', async (_e, { sessionId, content, files }) => {
+ipcMain.handle('chat:send', async (_e, { sessionId, content, files, mode }) => {
   const blocks = Array.isArray(content) && content.length > 0
     ? content.map((b) => ({ ...b }))
     : [{ type: 'text', text: '' }];
@@ -683,9 +683,10 @@ ipcMain.handle('chat:send', async (_e, { sessionId, content, files }) => {
       text: `[附件] ${s.name}（${s.size} 字节）已保存到 ${s.savedPath}，请用工具读取并处理。`,
     });
   }
+  // 发送模式：queue = 排队（agent 忙时排队跟进）；steer = 插话（直接插入/转向当前回合）
   const r = await rpcCall('session.prompt', {
     sessionId,
-    mode: 'queue',
+    mode: mode === 'steer' ? 'steer' : 'queue',
     content: blocks,
   });
   if (!r.ok) return { ok: false, error: r.error?.message || 'session.prompt failed' };
@@ -847,6 +848,11 @@ ipcMain.handle('credentials:describe', async (_e, refs) => {
 ipcMain.handle('credentials:set', async (_e, { ref, value }) => {
   const r = await rpcCall('credentials.set', { ref, value });
   if (!r.ok) return { ok: false, error: r.error?.message || 'credentials.set failed' };
+  return { ok: true };
+});
+ipcMain.handle('credentials:unset', async (_e, ref) => {
+  const r = await rpcCall('credentials.unset', { ref });
+  if (!r.ok) return { ok: false, error: r.error?.message || 'credentials.unset failed' };
   return { ok: true };
 });
 ipcMain.handle('settings:mutate', async (_e, { ns, ops, expectedRevision }) => {
@@ -1499,26 +1505,45 @@ async function loadGhToken() {
     const f = path.join(DSH_HOME, '.github-token');
     if (fs.existsSync(f)) {
       const t = fs.readFileSync(f, 'utf8').trim();
-      if (t) return t;
+      // 只接受 GitHub 个人访问令牌格式（ghp_ / github_pat_ / gho_ / ghs_），旧式或损坏内容一律忽略
+      if (/^(ghp_|github_pat_|gho_|ghs_|ghu_)/.test(t)) return t;
+      pushLog('stderr', `[忽略无效的 ~/.dsh/.github-token（格式不符，已清空）]`);
+      try { fs.rmSync(f, { force: true }); } catch { /* ignore */ }
     }
   } catch { /* ignore */ }
   return null;
+}
+function clearGhToken() {
+  try { fs.rmSync(path.join(DSH_HOME, '.github-token'), { force: true }); } catch { /* ignore */ }
+}
+
+async function checkGitHubRelease(useToken) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 10000);
+  const headers = { 'User-Agent': 'dsh-desktop', Accept: 'application/vnd.github+json' };
+  if (useToken) {
+    const token = await loadGhToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+  }
+  const res = await net.fetch('https://api.github.com/repos/sayzwx/DSH-desktop/releases/latest', { headers, signal: ac.signal });
+  clearTimeout(timer);
+  return res;
 }
 
 ipcMain.handle('updater:check', async () => {
   const current = APP_VERSION;
   try {
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 10000);
-    const headers = { 'User-Agent': 'dsh-desktop', Accept: 'application/vnd.github+json' };
-    const token = await loadGhToken();
-    if (token) headers.Authorization = `Bearer ${token}`;
-    const res = await net.fetch('https://api.github.com/repos/sayzwx/DSH-desktop/releases/latest', { headers, signal: ac.signal });
-    clearTimeout(timer);
+    let res = await checkGitHubRelease(true);
+    // token 失效（401）或权限问题（403）：清除失效 token 后匿名重试，避免每次都报错
+    if (res.status === 401 || res.status === 403) {
+      pushLog('stderr', `[GitHub API ${res.status}：本地 token 失效/无权限，已清除并改用匿名检查]`);
+      clearGhToken();
+      res = await checkGitHubRelease(false);
+    }
     if (!res.ok) {
       return {
         ok: false,
-        error: res.status === 404 ? '仓库还没有发布版本（GitHub Releases 尚无 latest）' : `GitHub API ${res.status}（可能触发匿名限流）`,
+        error: res.status === 404 ? '仓库还没有发布版本（GitHub Releases 尚无 latest）' : `GitHub API ${res.status}（可能触发匿名限流，稍后再试）`,
       };
     }
     const data = await res.json();

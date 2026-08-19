@@ -4,7 +4,7 @@
 #   The heavy harness engine is NOT packaged: setup.exe pulls it from the official
 #   deepseek-ai/DeepSeek-Harness source at install time (see installer\setup.ps1).
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-dist.ps1
-param([string]$Version = '0.1.0')
+param([string]$Version = '0.2.0')
 $ErrorActionPreference = 'Stop'
 $root = 'D:\DSH-desktop'
 $dist = Join-Path $root 'dist'
@@ -56,8 +56,13 @@ if ($LASTEXITCODE -ge 8) { throw 'robocopy app failed' }
 
 $cfg = Join-Path $stage 'config'
 New-Item -ItemType Directory -Path $cfg -Force | Out-Null
-Copy-Item (Join-Path $env:USERPROFILE '.dsh\settings.yaml')    (Join-Path $cfg 'settings.yaml') -Force
-Copy-Item (Join-Path $env:USERPROFILE '.dsh\zen-ua-proxy.mjs') (Join-Path $cfg 'zen-ua-proxy.mjs') -Force
+# 默认配置必须用仓库内置的纯净模板（config\settings.yaml），绝不能读取/打包开发者本机的
+# ~/.dsh\settings.yaml 或 .github-token 等个人文件（避免把个人提供商/密钥引用泄露给每个用户）。
+Copy-Item (Join-Path $root 'config\settings.yaml') (Join-Path $cfg 'settings.yaml') -Force
+# zen-ua-proxy 是可选启动代理脚本：仅当仓库确实带有模板时才随包分发（不读取 ~/.dsh 个人副本）
+if (Test-Path (Join-Path $root 'config\zen-ua-proxy.mjs')) {
+  Copy-Item (Join-Path $root 'config\zen-ua-proxy.mjs') (Join-Path $cfg 'zen-ua-proxy.mjs') -Force
+}
 Copy-Item (Join-Path $root 'installer\setup.ps1')    (Join-Path $stage 'setup.ps1') -Force
 Copy-Item (Join-Path $root 'installer\setup.bat')    (Join-Path $stage 'setup.bat') -Force
 # 环境预检 / Node 修复脚本（setup.ps1 的 Get-NodeExe 与应用内自动获取共用）
