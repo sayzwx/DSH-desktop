@@ -100,6 +100,19 @@ renderer/           渲染层（原生 HTML/JS/CSS）
 - `dist/DSH-Desktop-v<版本>.zip` 与自解压 `DSH-Desktop-v<版本>-Setup.exe`：仅桌面端 UI + Electron 运行时 + 一键安装器（约 220MB，与普通 Electron 应用相当）；
 - Harness 引擎不在安装包内：安装时由安装器从官方源自动拉取（`deepseek-ai/DeepSeek-Harness` 源码 + nodejs.org 官方 Node），在本机完成依赖安装与构建（一次性）。
 
+### 下载加速（国内用户）
+
+GitHub Releases 直连在国内可能较慢，可用以下任一方式：
+
+- **应用内更新**：v0.2.1 起「设置 → 检查更新 → 下载」会自动按 **加速镜像优先 → GitHub 官方回源** 的顺序下载（内置 ghfast.top / ghproxy.net / gh-proxy.com / gh.ddlc.top），无需手动处理。
+- **手动下载加速链**：把官方下载链接前面拼上镜像前缀即可。例如官方链接
+  `https://github.com/sayzwx/DSH-desktop/releases/download/v0.2.1/DSH-Desktop-v0.2.1-Setup.exe`，
+  加速后为
+  `https://ghfast.top/https://github.com/sayzwx/DSH-desktop/releases/download/v0.2.1/DSH-Desktop-v0.2.1-Setup.exe`
+  （`ghfast.top` / `ghproxy.net` / `gh-proxy.com` / `gh.ddlc.top` 均可，任选其一）。
+
+> 镜像为第三方加速服务，若某天不可用，请回退 GitHub 官方直链或换其它镜像。
+
 使用者：双击 `Setup.exe`（或解压 zip 后运行 `setup.bat`）→ 自动安装到 `%LOCALAPPDATA%\DSH`、
 写入纯净的默认 `~/.dsh/settings.yaml`（首次安装，不覆盖已有配置）、从官方拉取并构建 Harness 引擎、创建桌面快捷方式。
 安装器内置环境预检：Node.js 缺失或版本过低时**优先用 winget 安装最新 LTS**，winget 不可用则下载官方 Node 到 `%LOCALAPPDATA%\DSH\tools\node`。

@@ -1517,6 +1517,29 @@ function clearGhToken() {
   try { fs.rmSync(path.join(DSH_HOME, '.github-token'), { force: true }); } catch { /* ignore */ }
 }
 
+// 国内加速镜像（实测可达）：把 github.com/releases/download 的官方直链映射为镜像候选
+const GH_MIRRORS = [
+  'https://ghfast.top/',
+  'https://ghproxy.net/',
+  'https://gh-proxy.com/',
+  'https://gh.ddlc.top/',
+];
+/**
+ * 返回下载候选列表：先列出加速镜像 URL，最后是 GitHub 官方直链。
+ * 仅在 url 来自 api.github.com 返回的 releases 下载地址（github.com 的 releases/download 路径）
+ * 时启用镜像；其它来源（如自定义 URL）原样单候选。
+ */
+function mirrorOf(url, extra) {
+  const isGhRelease = /^https:\/\/github\.com\/[^/]+\/[^/]+\/releases\/download\//.test(url);
+  if (!isGhRelease) {
+    return Array.from(new Set([url, ...(extra && extra.github ? [extra.github] : [])])).filter(Boolean);
+  }
+  const list = [];
+  for (const m of GH_MIRRORS) list.push(`${m}${url}`);
+  list.push(url);
+  return Array.from(new Set(list)).filter(Boolean);
+}
+
 async function checkGitHubRelease(useToken) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), 10000);
@@ -1558,7 +1581,10 @@ ipcMain.handle('updater:check', async () => {
       hasUpdate,
       assets: (data.assets || [])
         .filter((a) => a.browser_download_url)
-        .map((a) => ({ name: a.name, url: a.browser_download_url, size: a.size || 0 })),
+        .map((a) => {
+          const url = a.browser_download_url;
+          return { name: a.name, url, size: a.size || 0, mirrors: mirrorOf(url) };
+        }),
     };
   } catch (err) {
     return { ok: false, error: `网络错误: ${err.message}` };
@@ -1572,34 +1598,46 @@ ipcMain.handle('updater:download', async (_e, url) => {
   const dir = path.join(os.tmpdir(), 'DSH-update');
   fs.mkdirSync(dir, { recursive: true });
   const target = path.join(dir, name);
-  try {
-    const res = await net.fetch(url, { headers: { 'User-Agent': 'dsh-desktop' } });
-    if (!res.ok) {
-      sendUpdaterResult({ ok: false, error: `下载失败 HTTP ${res.status}` });
-      return { ok: false, error: `HTTP ${res.status}` };
+
+  // 下载候选序列：加速镜像优先，最后回源 GitHub（国内环境经镜像明显更快）
+  const candidates = mirrorOf(url, { github: url });
+
+  for (let i = 0; i < candidates.length; i++) {
+    const cand = candidates[i];
+    const via = cand !== url ? `（镜像 ${i + 1}/${candidates.length - 1}）` : '（GitHub 官方）';
+    pushLog('stdout', `[下载] ${name} ${via}: ${cand}`);
+    sendUpdaterProgress({ received: 0, total: 0, pct: 0, phase: 'downloading', name, via });
+    try {
+      const res = await net.fetch(cand, { headers: { 'User-Agent': 'dsh-desktop' }, signal: AbortSignal.timeout(120000) });
+      if (!res.ok) {
+        pushLog('stderr', `[下载] ${cand} HTTP ${res.status}，切换下一跳…`);
+        continue;
+      }
+      const total = Number(res.headers.get('content-length')) || 0;
+      const reader = res.body.getReader();
+      const ws = fs.createWriteStream(target);
+      let received = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        received += value.byteLength;
+        ws.write(value);
+        sendUpdaterProgress({ received, total, pct: total ? Math.min(100, Math.round((received / total) * 100)) : 0, phase: 'downloading', name, via });
+      }
+      ws.end();
+      await new Promise((resolve) => ws.on('finish', resolve));
+      sendUpdaterProgress({ received, total, pct: 100, phase: 'done', name, via });
+      try { shell.openPath(target); } catch { /* ignore */ }
+      sendUpdaterResult({ ok: true, path: target, name, via });
+      return { ok: true, path: target, name, via };
+    } catch (err) {
+      pushLog('stderr', `[下载] ${cand} 失败：${err.message}，切换下一跳…`);
+      // 清掉可能写坏的半截文件，下一跳覆盖写
+      try { fs.rmSync(target, { force: true }); } catch { /* ignore */ }
     }
-    const total = Number(res.headers.get('content-length')) || 0;
-    const reader = res.body.getReader();
-    const ws = fs.createWriteStream(target);
-    sendUpdaterProgress({ received: 0, total, pct: 0, phase: 'downloading', name });
-    let received = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      received += value.byteLength;
-      ws.write(value);
-      sendUpdaterProgress({ received, total, pct: total ? Math.min(100, Math.round((received / total) * 100)) : 0, phase: 'downloading', name });
-    }
-    ws.end();
-    await new Promise((resolve) => ws.on('finish', resolve));
-    sendUpdaterProgress({ received, total, pct: 100, phase: 'done', name });
-    try { shell.openPath(target); } catch { /* ignore */ }
-    sendUpdaterResult({ ok: true, path: target, name });
-    return { ok: true, path: target, name };
-  } catch (err) {
-    sendUpdaterResult({ ok: false, error: err.message });
-    return { ok: false, error: err.message };
   }
+  sendUpdaterResult({ ok: false, error: '所有下载源均失败（GitHub 及加速镜像不可达），请稍后重试' });
+  return { ok: false, error: '所有下载源均失败（GitHub 及加速镜像不可达）' };
 });
 
 app.whenReady().then(() => {
