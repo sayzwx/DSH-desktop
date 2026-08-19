@@ -805,17 +805,143 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
 
 .msg-tool {
   align-self: flex-start;
-  max-width: 70%;
-  font-family: var(--font-mono);
+  max-width: 82%;
   font-size: 11.5px;
-  color: var(--text-dim);
+  color: var(--text);
   background: rgba(255, 107, 53, 0.05);
-  border: 1px solid rgba(255, 107, 53, 0.22);
+  border: 1px solid rgba(255, 107, 53, 0.24);
   border-radius: 10px;
-  padding: 6px 10px;
-  white-space: pre-wrap;
-  word-break: break-all;
+  padding: 7px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
 }
+.mt-summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.mt-ic { font-size: 12px; flex-shrink: 0; }
+.mt-name {
+  font-family: var(--font-mono);
+  color: var(--text);
+  font-weight: 600;
+}
+.mt-arg {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 420px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 6px;
+  background: rgba(4, 7, 15, 0.4);
+}
+.mt-badge {
+  font-size: 10px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.mt-badge.pending { color: var(--gold); background: rgba(255, 215, 0, 0.12); }
+.mt-badge.done { color: var(--cyan); background: rgba(0, 212, 170, 0.12); }
+.mt-badge.error { color: #ff6c33; background: rgba(255, 108, 51, 0.14); }
+.mt-detail {
+  border-top: 1px dashed var(--border-strong);
+  padding-top: 5px;
+}
+.mt-detail summary {
+  cursor: pointer;
+  color: var(--violet);
+  font-size: 10.5px;
+  user-select: none;
+  letter-spacing: 0.03em;
+}
+.mt-detail pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 260px;
+  overflow: auto;
+  background: rgba(4, 7, 15, 0.6);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 助手消息 Markdown 排版（向 webUI 看齐） */
+.msg-md {
+  line-height: 1.75;
+  font-size: 13px;
+  color: var(--text);
+  word-break: break-word;
+}
+.msg-md > *:first-child { margin-top: 0; }
+.msg-md > *:last-child { margin-bottom: 0; }
+.msg-md p { margin: 0.5em 0; }
+.msg-md h1, .msg-md h2, .msg-md h3, .msg-md h4 { margin: 0.8em 0 0.4em; font-weight: 600; }
+.msg-md h1 { font-size: 1.35em; } .msg-md h2 { font-size: 1.2em; }
+.msg-md h3 { font-size: 1.08em; } .msg-md h4 { font-size: 1em; }
+.msg-md code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: rgba(123, 97, 255, 0.12);
+  border: 1px solid rgba(123, 97, 255, 0.2);
+  border-radius: 5px;
+  padding: 0 5px;
+  color: #d8c7ff;
+}
+.msg-md pre {
+  margin: 0.6em 0;
+  padding: 10px 12px;
+  background: rgba(4, 7, 15, 0.65);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow-x: auto;
+}
+.msg-md pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--text);
+  line-height: 1.6;
+}
+.msg-md ul, .msg-md ol { margin: 0.4em 0; padding-left: 1.4em; }
+.msg-md li { margin: 0.2em 0; }
+.msg-md a { color: var(--cyan); text-decoration: underline; }
+.msg-md strong { color: var(--text); font-weight: 700; }
+.msg-md blockquote {
+  margin: 0.5em 0;
+  padding: 2px 12px;
+  border-left: 3px solid var(--accent);
+  color: var(--text-dim);
+  background: rgba(0, 212, 170, 0.04);
+  border-radius: 4px;
+}
+.msg-md hr { border: none; border-top: 1px solid var(--border-strong); margin: 0.8em 0; }
+.msg-md table {
+  border-collapse: collapse;
+  margin: 0.6em 0;
+  width: 100%;
+  font-size: 12px;
+}
+.msg-md th, .msg-md td {
+  border: 1px solid var(--border-strong);
+  padding: 5px 9px;
+  text-align: left;
+}
+.msg-md th { background: rgba(123, 97, 255, 0.1); font-weight: 600; }
 
 .msg-reasoning {
   margin: 0 0 8px;

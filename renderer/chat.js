@@ -631,12 +631,133 @@
     return div;
   }
 
-  function makeToolChip(name, text) {
-    const div = document.createElement('div');
-    div.className = 'msg-tool';
-    const t = text ? ` · ${text.slice(0, 240)}` : '';
-    div.textContent = `🔧 ${name}${t}`;
-    messagesEl.appendChild(div);
+  // ---------------- 工具调用：按 callId 配对的可折叠卡片 ----------------
+  // 每次工具调用渲染为一张卡：call 建卡显示"🔧 名称 调用中…"，
+  // result 到达时更新同一张卡为完成态并填充输出（可展开），避免一行一事件导致的重复堆叠。
+  const toolCards = new Map(); // sessionId -> Map<callId, 元素>
+  function toolCardsOf(sid) {
+    if (!toolCards.has(sid)) toolCards.set(sid, new Map());
+    return toolCards.get(sid);
+  }
+
+  function toolCallIdOf(ev) {
+    const d = ev.data || {};
+    if (d.callId) return d.callId;
+    // tool/result：从 message.content 里的 tool-result 块取 toolCallId
+    const msg = d.message || {};
+    for (const c of Array.isArray(msg.content) ? msg.content : []) {
+      if (c && c.toolCallId) return c.toolCallId;
+    }
+    return null;
+  }
+
+  function toolResultText(ev) {
+    // 优先取视口 output（harness 的 view.view.output / exitCode），再退回 message.content 文本
+    const v = ev.view && ev.view.view ? ev.view.view : null;
+    if (v && v.output) {
+      let t = String(v.output);
+      if (v.exitCode !== undefined) t += `\n[exit ${v.exitCode}]`;
+      return t;
+    }
+    const msg = ev.data && ev.data.message ? ev.data.message : null;
+    const parts = [];
+    for (const c of Array.isArray(msg && msg.content) ? msg.content : []) {
+      if (c && c.type === 'tool-result') {
+        const inner = c.content;
+        if (typeof inner === 'string') { parts.push(inner); }
+        else if (Array.isArray(inner)) {
+          for (const b of inner) { if (b && b.type === 'text' && b.text) parts.push(b.text); }
+        }
+      }
+    }
+    return parts.join('\n');
+  }
+
+  function renderToolCall(sid, ev) {
+    const id = toolCallIdOf(ev) || `seq-${ev.seq}`;
+    const cards = toolCardsOf(sid);
+    let el = cards.get(id);
+    if (el && el.isConnected) return el; // 已存在：不重复建卡
+    el = document.createElement('div');
+    el.className = 'msg-tool';
+    el.dataset.callId = id;
+    if (id.startsWith('seq-')) { // 无 callId 时记录序号避免无限增长
+      el.dataset.seq = String(ev.seq || 0);
+    }
+    messagesEl.appendChild(el);
+    cards.set(id, el);
+    setToolCardPending(el, ev.data?.name || 'tool', ev);
+    return el;
+  }
+
+  function setToolCardPending(el, name, ev) {
+    const argText = (() => {
+      try {
+        const a = ev && ev.data && ev.data.arguments;
+        if (!a) return '';
+        const parsed = typeof a === 'string' ? JSON.parse(a) : a;
+        const key = Object.keys(parsed || {}).find((k) => typeof parsed[k] === 'string' && parsed[k].length > 0);
+        const cmd = key ? parsed[key] : '';
+        return cmd ? String(cmd).replace(/\s+/g, ' ').slice(0, 120) : '';
+      } catch { return ''; }
+    })();
+    el.innerHTML = '';
+    const summary = document.createElement('div');
+    summary.className = 'mt-summary';
+    summary.innerHTML = `<span class="mt-ic">🔧</span><span class="mt-name">${esc(name)}</span>
+      <span class="mt-badge pending">调用中…</span>${argText ? `<span class="mt-arg">${esc(argText)}</span>` : ''}`;
+    el.appendChild(summary);
+  }
+
+  function renderToolResult(sid, ev) {
+    const id = toolCallIdOf(ev);
+    // 无 callId 兜底：按 call→result 顺序映射到上一张 pending 卡
+    let el = null;
+    if (id) el = toolCardsOf(sid).get(id);
+    if (!el || !el.isConnected) {
+      // 历史/回放时可能没有对应 call 卡，去找该会话最后一张 pending 卡
+      const cards = toolCardsOf(sid);
+      let fallback = null;
+      for (const [, c] of cards) { if (c.isConnected && c.querySelector('.mt-badge.pending')) fallback = c; }
+      el = fallback;
+      if (!el) { // 找不到就直接建结果卡
+        el = renderToolCall(sid, ev);
+      }
+    }
+    if (!el) return;
+    const cards = toolCardsOf(sid);
+    const key = id || el.dataset.callId;
+    const output = toolResultText(ev);
+    setToolCardDone(el, ev, output);
+    if (key) cards.set(key, el);
+  }
+
+  function setToolCardDone(el, ev, output) {
+    let name = ev.data?.name || el.querySelector('.mt-name')?.textContent || 'tool';
+    const key = toolCallIdOf(ev);
+    if (key && key.startsWith('chatcmpl')) {
+      const saved = buf(currentSessionId)?.calls?.get(key);
+      if (saved) name = saved;
+    }
+    el.dataset.name = name;
+    const isErr = !!(ev && ev.data && ev.data.message && ev.data.message.content &&
+      Array.isArray(ev.data.message.content) &&
+      ev.data.message.content.some((c) => c && c.isError));
+    el.innerHTML = '';
+    const summary = document.createElement('div');
+    summary.className = 'mt-summary';
+    summary.innerHTML = `<span class="mt-ic">🔧</span><span class="mt-name">${esc(name)}</span>
+      <span class="mt-badge ${isErr ? 'error' : 'done'}">${isErr ? '⚠ 出错' : '✓ 完成'}</span>`;
+    el.appendChild(summary);
+    if (output && output.trim()) {
+      const det = document.createElement('details');
+      det.className = 'mt-detail';
+      det.innerHTML = `<summary>查看输出（${output.length} 字符${el.dataset.exitCode !== undefined ? `，exit ${el.dataset.exitCode}` : ''}）</summary><pre></pre>`;
+      const pre = det.querySelector('pre');
+      pre.textContent = output.slice(0, 4000);
+      el.appendChild(det);
+    }
+    scrollBottom(false);
   }
 
   function showChatError(message) {
@@ -716,9 +837,112 @@
     renderStatus();
   }
 
-  // ---------------- 历史加载 ----------------
-  // 历史可能携带大量 assistant/chunk 事件（尾部常是几十上百个 chunk），
-  // 只从尾部反向收集"界面事件"（用户消息 / 完成的消息 / 工具调用），最多 80 条。
+  // ---------------- 轻量 Markdown 渲染（零依赖；回答框排版向 webUI 看齐） ----------------
+  // 支持：代码块、行内代码、标题、粗体/斜体、无序/有序列表、链接、表格、引用、分隔线。
+  // 不做 XSS 友好处理：所有外部文本先转义，仅按结构生成白名单标签。
+  function mdEscape(s) {
+    return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function mdInline(text) {
+    let s = mdEscape(text);
+    // 行内代码（先保护，避免被后续规则破坏）
+    const codes = [];
+    s = s.replace(/`([^`]+)`/g, (_, c) => { codes.push(c); return `\u0001${codes.length - 1}\u0001`; });
+    // 粗体 **x**
+    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    // 斜体 *x*（避免号码、小数误伤）
+    s = s.replace(/(^|[^*])\*([^*\s][^*]*)\*(?=$|[^*])/g, '$1<em>$2</em>');
+    // 链接 [text](url)
+    s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    // 还原行内代码
+    s = s.replace(/\u0001(\d+)\u0001/g, (_, i) => `<code>${mdEscape(codes[Number(i)])}</code>`);
+    return s;
+  }
+  function mdBlock(text) {
+    const lines = String(text ?? '').split(/\r?\n/);
+    const out = [];
+    let i = 0;
+    const fence = (() => { // 收集保留原始内容的代码块（不转义内部 & 符号）
+      const blocks = [];
+      for (let k = 0; k < lines.length; k++) {
+        if (/^\s*(```|~~~)/.test(lines[k])) {
+          const fenceChar = lines[k].match(/^\s*(```|~~~)/)[1];
+          const marker = lines[k].match(/^\s*(```|~~~)\s*([\w+-]*)/)[2] || '';
+          const body = [];
+          k++;
+          while (k < lines.length && !/^\s*(```|~~~)\s*$/.test(lines[k])) { body.push(lines[k]); k++; }
+          blocks.push({ body, marker });
+        }
+      }
+      return blocks;
+    })();
+    const fenceTemp = [];
+    while (i < lines.length) {
+      const line = lines[i];
+      // 代码块
+      if (/^\s*(```|~~~)/.test(line)) {
+        const marker = line.match(/^\s*(?:```|~~~)\s*([\w+-]*)/)[1] || '';
+        const body = [];
+        i++;
+        while (i < lines.length && !/^\s*(?:```|~~~)\s*$/.test(lines[i])) { body.push(lines[i]); i++; }
+        i++; // 跳过闭合围栏
+        const placeholder = `\u0002${fenceTemp.length}\u0002`;
+        fenceTemp.push({ marker, body });
+        out.push(placeholder);
+        continue;
+      }
+      // 标题
+      const h = line.match(/^#{1,6}\s+(.+)$/);
+      if (h) { const lv = Math.min(6, Math.max(1, line.match(/^#+/)[0].length)); out.push(`<h${lv}>${mdInline(h[1])}</h${lv}>`); i++; continue; }
+      // 分隔线
+      if (/^\s*([-*_])\1{2,}\s*$/.test(line)) { out.push('<hr/>'); i++; continue; }
+      // 引用
+      if (/^\s*>\s?/.test(line)) {
+        const q = [];
+        while (i < lines.length && /^\s*>\s?/.test(lines[i])) { q.push(lines[i].replace(/^\s*>\s?/, '')); i++; }
+        out.push(`<blockquote>${q.map((l) => mdInline(l)).join('<br/>')}</blockquote>`);
+        continue;
+      }
+      // 无序列表
+      if (/^\s*[-*+]\s+/.test(line)) {
+        const items = [];
+        while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*[-*+]\s+/, '')); i++; }
+        out.push(`<ul>${items.map((it) => `<li>${mdInline(it)}</li>`).join('')}</ul>`);
+        continue;
+      }
+      // 有序列表
+      if (/^\s*\d+[.)]\s+/.test(line)) {
+        const items = [];
+        while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*\d+[.)]\s+/, '')); i++; }
+        out.push(`<ol>${items.map((it) => `<li>${mdInline(it)}</li>`).join('')}</ol>`);
+        continue;
+      }
+      // 表格（| a | b |，行 2 为分隔）
+      if (/^\s*\|/.test(line) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|[:\s|-]*$/.test(lines[i + 1])) {
+        const header = line.split('|').slice(1, -1).map((s) => s.trim()).filter((s, idx, arr) => !(idx === arr.length && s === ''));
+        const headerCells = line.split('|').filter((s, idx, arr) => idx > 0 && idx < arr.length - 1).map((s) => s.trim());
+        i += 2;
+        const rows = [];
+        while (i < lines.length && /^\s*\|/.test(lines[i])) {
+          const cells = lines[i].split('|').filter((s, idx, arr) => idx > 0 && idx < arr.length - 1).map((s) => s.trim());
+          rows.push(`<tr>${cells.map((c) => `<td>${mdInline(c)}</td>`).join('')}</tr>`);
+          i++;
+        }
+        out.push(`<table><thead><tr>${headerCells.map((c) => `<th>${mdInline(c)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`);
+        continue;
+      }
+      // 空行
+      if (!line.trim()) { i++; continue; }
+      out.push(`<p>${mdInline(line)}</p>`);
+      i++;
+    }
+    // 还原代码块
+    const result = out.join('\n').replace(/\u0002(\d+)\u0002/g, (_, idx) => {
+      const b = fenceTemp[Number(idx)];
+      return `<pre><code${b.marker ? ` class="lang-${mdEscape(b.marker)}"` : ''}>${mdEscape(b.body.join('\n'))}</code></pre>`;
+    });
+    return result;
+  }
   function renderHistory(events) {
     messagesEl.innerHTML = '';
     renderedIds.set(currentSessionId, new Set()); // 整段重绘：重置该会话的去重集合
@@ -746,10 +970,9 @@
         const usage = ev.data?.usage ? ` · ${ev.data.usage.inputTokens}↑ ${ev.data.usage.outputTokens}↓ tokens` : '';
         renderAssistantContent(div, ev.data?.content, model ? `${model}${usage}` : '');
       } else if (ev.type === 'tool/call') {
-        makeToolChip(ev.data?.name || 'tool', '调用中…');
+        renderToolCall(currentSessionId, ev);
       } else if (ev.type === 'tool/result') {
-        const text = (ev.data?.content || []).map((b) => b.text).join('\n').slice(0, 200);
-        makeToolChip(ev.data?.name || 'tool', text);
+        renderToolResult(currentSessionId, ev);
       }
     }
     if (!messagesEl.children.length) emptyState();
@@ -813,11 +1036,14 @@
         const d = document.createElement('details');
         d.className = 'msg-reasoning';
         d.innerHTML = `<summary>🧠 思考过程</summary><div></div>`;
-        d.querySelector('div').textContent = block.text;
+        const body = d.querySelector('div');
+        body.className = 'msg-md';
+        body.innerHTML = mdBlock(block.text);
         container.appendChild(d);
       } else if (block.type === 'text' && block.text) {
         const p = document.createElement('div');
-        p.textContent = block.text;
+        p.className = 'msg-md';
+        p.innerHTML = mdBlock(block.text);
         container.appendChild(p);
       } else if (block.type === 'image') {
         renderImageBlock(container, block);
@@ -1330,9 +1556,16 @@
       }
 
       case 'tool/call': {
+        const callId = ev.data?.callId;
         b.tool = ev.data?.name || 'tool';
+        // 记录 callId → 工具名，供 result 配对时回填名称
+        const b2 = buf(p.sessionId);
+        if (callId) {
+          if (!b2.calls) b2.calls = new Map();
+          b2.calls.set(callId, b.tool);
+        }
         if (isCur) {
-          makeToolChip(b.tool, '调用中…');
+          renderToolCall(p.sessionId, ev);
           renderStatus();
           scrollBottom(false);
         }
@@ -1342,8 +1575,7 @@
       case 'tool/result': {
         b.tool = null;
         if (isCur) {
-          const text = (ev.data?.content || []).map((bl) => bl.text).join('\n').slice(0, 200);
-          makeToolChip(ev.data?.name || 'tool', text);
+          renderToolResult(p.sessionId, ev);
           renderStatus();
           scrollBottom(false);
         }
