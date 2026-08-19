@@ -60,6 +60,8 @@ Copy-Item (Join-Path $env:USERPROFILE '.dsh\settings.yaml')    (Join-Path $cfg '
 Copy-Item (Join-Path $env:USERPROFILE '.dsh\zen-ua-proxy.mjs') (Join-Path $cfg 'zen-ua-proxy.mjs') -Force
 Copy-Item (Join-Path $root 'installer\setup.ps1')    (Join-Path $stage 'setup.ps1') -Force
 Copy-Item (Join-Path $root 'installer\setup.bat')    (Join-Path $stage 'setup.bat') -Force
+# 环境预检 / Node 修复脚本（setup.ps1 的 Get-NodeExe 与应用内自动获取共用）
+Copy-Item (Join-Path $root 'installer\check-env.ps1') (Join-Path $stage 'check-env.ps1') -Force
 # 说明文档（中文名）随构建复制；编码由 scripts\check-encoding.ps1 统一把关
 Get-ChildItem (Join-Path $root 'installer') -Filter '*.txt' | Copy-Item -Destination $stage -Force
 $zip = Join-Path $dist "$name.zip"

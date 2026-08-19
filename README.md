@@ -23,9 +23,9 @@
 
 前置要求：
 
-- Node.js ≥ 18（含 npm）
-- DeepSeek Harness 源码目录（默认为 `C:\Users\mjsx\DeepSeek-Harness`，可用环境变量 `DSH_HARNESS_DIR` 覆盖）
-- 可选：`pnpm`（harness 启动需要，或由 harness 目录自身的安装方式提供）
+- Node.js ≥ 18（含 npm）（没有也可运行，桌面端会自动在 `%LOCALAPPDATA%\DSH\tools\node` 安装官方 Node）
+- Harness 引擎：**不需要手动准备**。点击应用内「启动 Harness」时自动探测本机已有的引擎（按优先级：环境变量 `DSH_HARNESS_DIR` → `%LOCALAPPDATA%\DSH\harness` 源码目录 → 与 app 同级的 harness → npm 全局安装的 `@deepseek-ai/dsh` → npx 缓存里的官方发行版），找到即直接启动；找不到则自动获取（先尝试 npm 官方发行包，失败则运行 `installer/setup.ps1 -EngineOnly` 拉取官方源码并构建，一次性）。也可手动用 `npx @deepseek-ai/dsh web` 先启动，桌面端会自动接管 `:3080` 已运行的实例。
+- 可选：`pnpm`（仅源码构建流程需要）
 
 ### 一键 setup（开发，推荐）
 

@@ -4,18 +4,27 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-// 分发安装布局：app（含 DSH.exe）与 harness、tools/node 同级（%LOCALAPPDATA%\DSH\{app,harness,tools}）；
-// 本机开发时仍是 D:\DeepSeek-Harness（或用 DSH_HARNESS_DIR / DSH_NODE_EXE 覆盖）。
+// 分发安装布局：app（含 DSH.exe）与 harness、tools/node 同级（%LOCALAPPDATA%\DSH\{app,harness,tools}）。
+// harness 引擎不再写死某个路径：点击启动时自动探测本机已有安装（可用 DSH_HARNESS_DIR 显式指定源码目录），
+// 探测不到就自动安装官方发行包/运行 installer/setup.ps1 -EngineOnly 拉取官方引擎。
 const DSH_ROOT = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'DSH') : '';
-const HARNESS_DIR = process.env.DSH_HARNESS_DIR ||
-  ((DSH_ROOT && fs.existsSync(path.join(DSH_ROOT, 'harness', 'package.json')) ? path.join(DSH_ROOT, 'harness') : '') ||
-   (fs.existsSync(path.join(__dirname, '..', 'harness')) ? path.join(__dirname, '..', 'harness') : 'D:\\DeepSeek-Harness'));
-const NODE_EXE = process.env.DSH_NODE_EXE ||
-  ((DSH_ROOT && fs.existsSync(path.join(DSH_ROOT, 'tools', 'node', 'node.exe')) ? path.join(DSH_ROOT, 'tools', 'node', 'node.exe') : '') ||
-   (fs.existsSync(path.join(__dirname, '..', 'tools', 'node', 'node.exe')) ? path.join(__dirname, '..', 'tools', 'node', 'node.exe') : 'node'));
 const DSH_HOME = path.join(os.homedir(), '.dsh');
 const PORT = 3080;
 const LOG_LIMIT = 5000;
+
+// 解析 Node 可执行文件：显式 DSH_NODE_EXE → 安装布局 tools\node → 与 app 同级 tools\node → PATH 上的 node
+function resolveNodeExe() {
+  const cands = [
+    process.env.DSH_NODE_EXE || '',
+    DSH_ROOT ? path.join(DSH_ROOT, 'tools', 'node', 'node.exe') : '',
+    path.join(__dirname, '..', 'tools', 'node', 'node.exe'),
+  ];
+  for (const c of cands) if (c && fs.existsSync(c)) return c;
+  return 'node';
+}
+
+// 当前实际使用的 harness 目录（用于插件目录扫描等路径逻辑；启动后动态刷新）
+let HARNESS_DIR = '';
 
 let mainWindow = null;
 let harnessProc = null;
@@ -43,28 +52,94 @@ function setState(state) {
   }
 }
 
+// ---------- Harness 引擎发现：不再写死路径，按优先级探测本机已有安装 ----------
+// 支持两种形态：
+//   1) 源码目录：apps/cli/lib/bin.js（安装器布局 %LOCALAPPDATA%\DSH\harness 或环境变量 DSH_HARNESS_DIR 指定）
+//   2) 发行包：@deepseek-ai/dsh/lib/bin.js（npm 全局安装或 npx 缓存里的官方发行版）
+// npm 在 Windows 上只有 npm.cmd，spawn 无法直接执行，统一经 cmd.exe 包一层
+function npmSpawnSync(args, opts = {}) {
+  const win = process.platform === 'win32';
+  const cmd = win ? 'cmd.exe' : 'npm';
+  const params = win ? ['/c', 'npm', ...args] : args;
+  return spawnSync(cmd, params, { windowsHide: true, encoding: 'utf8', ...opts });
+}
+function npmSpawn(args, opts = {}) {
+  const win = process.platform === 'win32';
+  const cmd = win ? 'cmd.exe' : 'npm';
+  const params = win ? ['/c', 'npm', ...args] : args;
+  return spawn(cmd, params, { windowsHide: true, ...opts });
+}
+function discoverHarness() {
+  const candidates = [];
+  const push = (p) => { if (typeof p === 'string' && p && !candidates.includes(p)) candidates.push(p); };
+  // 1) 显式环境变量（用户/管理员指定，优先级最高）
+  push(process.env.DSH_HARNESS_DIR);
+  // 2) 安装器布局 %LOCALAPPDATA%\DSH\harness
+  if (DSH_ROOT) push(path.join(DSH_ROOT, 'harness'));
+  // 3) 与 app 同级的 harness（打包/便携布局）
+  push(path.join(__dirname, '..', 'harness'));
+  // 4) npm 全局安装的官方发行包
+  try {
+    const g = npmSpawnSync(['root', '-g']);
+    const line = (g.stdout || '').split(/\r?\n/).find((l) => l.trim());
+    if (line) push(path.join(line.trim(), '@deepseek-ai', 'dsh'));
+  } catch { /* npm 不可用/未安装 */ }
+  // 5) npx 缓存目录（npm-cache\_npx\* 与 ~/.npm/_npx/*）
+  for (const base of [
+    path.join(process.env.LOCALAPPDATA || '', 'npm-cache', '_npx'),
+    path.join(os.homedir(), '.npm', '_npx'),
+  ]) {
+    try {
+      if (!fs.existsSync(base)) continue;
+      for (const sub of fs.readdirSync(base)) {
+        push(path.join(base, sub, 'node_modules', '@deepseek-ai', 'dsh'));
+      }
+    } catch { /* 忽略不可读缓存 */ }
+  }
+  for (const dir of candidates) {
+    const srcBin = path.join(dir, 'apps', 'cli', 'lib', 'bin.js');   // 源码形态
+    if (fs.existsSync(srcBin)) return { dir, bin: srcBin, kind: 'source' };
+    const distBin = path.join(dir, 'lib', 'bin.js');                  // 发行包形态
+    if (fs.existsSync(distBin)) return { dir, bin: distBin, kind: 'dist' };
+  }
+  return null;
+}
+
+// 让 chat/上传等默认工作区落到一个真实存在的目录
+function defaultWorkspaceDir() {
+  return HARNESS_DIR || DSH_HOME || os.homedir();
+}
+
 async function startHarness() {
   if (harnessProc) return { ok: false, error: 'already running' };
-  if (!fs.existsSync(path.join(HARNESS_DIR, 'package.json'))) {
-    return { ok: false, error: `harness 目录不存在: ${HARNESS_DIR}` };
-  }
   if (await checkWebUp()) {
     pushLog('stdout', '[检测到 :3080 已有实例在运行，已直接接管，无需再次启动]');
     setState('running');
     return { ok: true, adopted: true };
   }
+  const found = discoverHarness();
+  if (!found) {
+    // 本机没有可用的 harness 引擎 → 自动获取（npm 官方发行包优先，失败则源码安装）
+    pushLog('stdout', '[未检测到本机 harness 引擎，自动安装官方发行包…]');
+    setState('installing');
+    autoInstallHarness();
+    return { ok: true, installing: true };
+  }
+  return launchHarness(found);
+}
+
+function launchHarness(found) {
+  HARNESS_DIR = found.dir;
   setState('starting');
   startDeadline = Date.now() + 90 * 1000;
   const env = { ...process.env, ...loadDotEnv(), DSH_HOME };
-  // 优先直接 node 启动 dsh CLI（分发安装自带 tools/node，不依赖系统 pnpm）；
-  // 本机无 CLI 构建时才退回 pnpm dsh web。
-  const cliBin = path.join(HARNESS_DIR, 'apps', 'cli', 'lib', 'bin.js');
-  const direct = fs.existsSync(cliBin);
-  harnessProc = spawn(direct ? NODE_EXE : 'cmd.exe', direct ? [cliBin, 'web'] : ['/c', 'pnpm dsh web'], {
-    cwd: HARNESS_DIR,
+  const nodeExe = resolveNodeExe();
+  harnessProc = spawn(nodeExe, [found.bin, 'web'], {
+    cwd: found.dir,
     env,
     windowsHide: true,
   });
+  pushLog('stdout', `[启动 harness: ${nodeExe} ${found.bin} web (${found.kind})]`);
   harnessProc.stdout.on('data', (d) => pushLog('stdout', d.toString()));
   harnessProc.stderr.on('data', (d) => pushLog('stderr', d.toString()));
   harnessProc.on('error', (err) => {
@@ -80,6 +155,115 @@ async function startHarness() {
     setState('stopped');
   });
   return { ok: true };
+}
+
+// ---------- 环境预检与自动获取引擎 ----------
+// 流程：先体检（架构/网络/磁盘/Node 版本），不合格先修复 Node（winget LTS 优先，回退官方 zip），
+//       环境合格后才去拉取引擎（npm 官方发行包优先，失败则官方源码构建）。
+function envCheckScript() {
+  return path.join(__dirname, 'installer', 'check-env.ps1');
+}
+
+// 只读体检：spawnSync 解析最后一行 JSON；失败返回 null
+function readEnvReport() {
+  const script = envCheckScript();
+  if (!fs.existsSync(script)) return null;
+  try {
+    const res = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Report'], { windowsHide: true, encoding: 'utf8', timeout: 60000 });
+    const out = (res.stdout || '');
+    const lines = out.split(/\r?\n/).map((l) => l.trim()).filter((l) => l);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (lines[i].startsWith('{')) {
+        try { return JSON.parse(lines[i]); } catch { /* 取下一行 */ }
+      }
+    }
+  } catch (err) { pushLog('stderr', `[环境预检失败] ${err.message}`); }
+  return null;
+}
+
+// 修复 Node：spawn 流式日志，完成后回调 ok/errored
+function fixNodeEnv(onDone) {
+  const script = envCheckScript();
+  if (!fs.existsSync(script)) { pushLog('stderr', `[缺少环境预检脚本 ${script}]`); onDone(false); return; }
+  pushLog('stdout', '[Node.js 缺失或版本过低，正在自动安装最新 LTS（winget 优先）…]');
+  const p = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Fix', '-NodeMinMajor', '22'], { windowsHide: true, env: { ...process.env } });
+  p.stdout.on('data', (d) => pushLog('stdout', d.toString()));
+  p.stderr.on('data', (d) => pushLog('stderr', d.toString()));
+  p.on('error', (err) => { pushLog('stderr', `[Node 修复脚本启动失败] ${err.message}`); onDone(false); });
+  p.on('close', (code) => { onDone(code === 0); });
+}
+
+function autoInstallHarness() {
+  const afterInstall = () => {
+    setTimeout(() => {
+      const found = discoverHarness();
+      if (found) { launchHarness(found); }
+      else { pushLog('stderr', '[安装完成但未找到引擎，请查看上方日志]'); setState('stopped'); }
+    }, 1500);
+  };
+  const installViaNpm = () => {
+    pushLog('stdout', `[npm install -g @deepseek-ai/dsh (官方发行包)]`);
+    const p = npmSpawn(['install', '-g', '@deepseek-ai/dsh'], { env: { ...process.env } });
+    p.stdout.on('data', (d) => pushLog('stdout', d.toString()));
+    p.stderr.on('data', (d) => pushLog('stderr', d.toString()));
+    p.on('error', (err) => { pushLog('stderr', `[npm 启动失败] ${err.message}`); installFromSource(); });
+    p.on('close', (code) => {
+      if (code === 0) afterInstall();
+      else { pushLog('stderr', `[npm 安装退出 code=${code}，回退官方源码安装…]`); installFromSource(); }
+    });
+  };
+  const installFromSource = () => {
+    const script = path.join(__dirname, 'installer', 'setup.ps1');
+    if (!fs.existsSync(script)) {
+      pushLog('stderr', `[缺少安装脚本：${script}，无法自动获取引擎。请手动运行安装器或设置 DSH_HARNESS_DIR]`);
+      setState('stopped');
+      return;
+    }
+    pushLog('stdout', `[运行引擎安装: ${script} -EngineOnly（下载官方源码+Node，首次需数分钟）]`);
+    const p = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-EngineOnly'], { windowsHide: true, env: { ...process.env } });
+    p.stdout.on('data', (d) => pushLog('stdout', d.toString()));
+    p.stderr.on('data', (d) => pushLog('stderr', d.toString()));
+    p.on('error', (err) => { pushLog('stderr', `[脚本启动失败] ${err.message}`); setState('stopped'); });
+    p.on('close', (code) => {
+      if (code !== 0) { pushLog('stderr', `[引擎安装失败 code=${code}，请检查网络后重试]`); setState('stopped'); return; }
+      afterInstall();
+    });
+  };
+  const proceed = () => {
+    // 环境已合格：npm 可用则发行包（快），否则回退源码安装
+    const npmOk = (() => { try { return npmSpawnSync(['--version']).status === 0; } catch { return false; } })();
+    if (npmOk) installViaNpm();
+    else installFromSource();
+  };
+
+  // 1) 环境体检
+  const report = readEnvReport();
+  if (report) {
+    const fatal = (report.issues || []).filter((i) => !/Node\.js/.test(i));
+    if (fatal.length > 0) {
+      for (const i of fatal) pushLog('stderr', `[环境不满足] ${i}`);
+      pushLog('stderr', '[请修复上述环境问题后重试（如联网、换 64 位系统、清理磁盘）]');
+      setState('stopped');
+      return;
+    }
+    if (report.issues && report.issues.length) {
+      for (const i of report.issues) pushLog('stdout', `[预检] ${i}`);
+    }
+    // 2) Node 不合格 → 先修复，修复后再复查一次
+    if (!report.nodeOk) {
+      fixNodeEnv((ok) => {
+        if (!ok) { pushLog('stderr', '[Node.js 安装失败，请检查网络/winget 后重试]'); setState('stopped'); return; }
+        const re = readEnvReport();
+        if (re && !re.nodeOk) { pushLog('stderr', '[Node.js 修复后仍不满足要求，请手动安装 Node.js >= 22]'); setState('stopped'); return; }
+        proceed();
+      });
+      return;
+    }
+    proceed();
+  } else {
+    // 体检脚本缺失时退回旧逻辑：有 npm 就发行包，否则源码安装
+    proceed();
+  }
 }
 
 function findListenerPid() {
@@ -305,6 +489,8 @@ ipcMain.handle('harness:status', async () => {
     if (harnessState !== 'running') setState('running');
   } else if (harnessState === 'running') {
     setState('stopped');
+  } else if (harnessState === 'installing') {
+    // 安装期间维持 installing，安装完成后 startHarness 会自动接管
   } else if (harnessProc && harnessState === 'starting' && startDeadline && Date.now() > startDeadline) {
     pushLog('stderr', '[启动超时] 90 秒内 :3080 未就绪，已终止进程');
     try {
@@ -314,7 +500,12 @@ ipcMain.handle('harness:status', async () => {
     startDeadline = 0;
     setState('stopped');
   }
-  return { state: harnessState, webUp, port: PORT, harnessDir: HARNESS_DIR };
+  // 未启动/未安装时动态探测一次，让 UI 显示当前可用引擎位置（不再写死路径）
+  if (!HARNESS_DIR && !harnessProc) {
+    const found = discoverHarness();
+    if (found) HARNESS_DIR = found.dir;
+  }
+  return { state: harnessState, webUp, port: PORT, harnessDir: HARNESS_DIR || '（未检测到，点击"启动 Harness"自动获取）' };
 });
 ipcMain.handle('harness:logs', () => logBuffer.slice(-500));
 ipcMain.handle('harness:openWeb', async () => {
@@ -383,7 +574,7 @@ ipcMain.handle('chat:create', async (_e, options) => {
   const opts = typeof options === 'string'
     ? (options ? { workspaceId: options } : null)
     : options;
-  const payload = opts?.workspaceId ? { workspaceId: opts.workspaceId } : { cwd: HARNESS_DIR };
+  const payload = opts?.workspaceId ? { workspaceId: opts.workspaceId } : { cwd: defaultWorkspaceDir() };
   const r = await rpcCall('session.create', payload);
   if (!r.ok) return { ok: false, error: r.error?.message || 'session.create failed' };
   return { ok: true, sessionId: r.value?.sessionId };
@@ -562,7 +753,9 @@ ipcMain.handle('settings:llmModels', async () => {
 });
 ipcMain.handle('settings:pluginCatalog', async () => {
   // 扫描部署仓库的全部插件包（packages/*/* + apps/*）
+  const base = HARNESS_DIR || (discoverHarness()?.dir) || '';
   const out = [];
+  if (!base) return { ok: true, plugins: out, note: '尚未定位到 harness 引擎目录' };
   const scan = (dir) => {
     let entries = [];
     try {
@@ -579,31 +772,31 @@ ipcMain.handle('settings:pluginCatalog', async () => {
               id: pkg.name,
               version: pkg.version || '',
               description: pkg.description || '',
-              path: path.relative(HARNESS_DIR, path.join(dir, e.name)),
+              path: path.relative(base, path.join(dir, e.name)),
             });
           }
         } catch { /* 忽略损坏的 package.json */ }
       }
     }
   };
-  scan(path.join(HARNESS_DIR, 'packages', 'host'));
-  scan(path.join(HARNESS_DIR, 'packages', 'client'));
-  scan(path.join(HARNESS_DIR, 'packages', 'api'));
-  scan(path.join(HARNESS_DIR, 'packages', 'llm'));
-  scan(path.join(HARNESS_DIR, 'packages', 'core'));
-  scan(path.join(HARNESS_DIR, 'packages', 'tools'));
-  scan(path.join(HARNESS_DIR, 'packages', 'agent'));
-  scan(path.join(HARNESS_DIR, 'packages', 'jobs'));
-  scan(path.join(HARNESS_DIR, 'packages', 'skills'));
-  scan(path.join(HARNESS_DIR, 'packages', 'feedback'));
-  scan(path.join(HARNESS_DIR, 'packages', 'auth'));
-  scan(path.join(HARNESS_DIR, 'packages', 'runtime'));
-  scan(path.join(HARNESS_DIR, 'apps'));
+  scan(path.join(base, 'packages', 'host'));
+  scan(path.join(base, 'packages', 'client'));
+  scan(path.join(base, 'packages', 'api'));
+  scan(path.join(base, 'packages', 'llm'));
+  scan(path.join(base, 'packages', 'core'));
+  scan(path.join(base, 'packages', 'tools'));
+  scan(path.join(base, 'packages', 'agent'));
+  scan(path.join(base, 'packages', 'jobs'));
+  scan(path.join(base, 'packages', 'skills'));
+  scan(path.join(base, 'packages', 'feedback'));
+  scan(path.join(base, 'packages', 'auth'));
+  scan(path.join(base, 'packages', 'runtime'));
+  scan(path.join(base, 'apps'));
   // 兜底：扫描 packages 下所有二级目录
   try {
-    for (const g of fs.readdirSync(path.join(HARNESS_DIR, 'packages'), { withFileTypes: true })) {
+    for (const g of fs.readdirSync(path.join(base, 'packages'), { withFileTypes: true })) {
       if (!g.isDirectory()) continue;
-      const gp = path.join(HARNESS_DIR, 'packages', g.name);
+      const gp = path.join(base, 'packages', g.name);
       for (const e of fs.readdirSync(gp, { withFileTypes: true })) {
         if (!e.isDirectory()) continue;
         const pkgPath = path.join(gp, e.name, 'package.json');
@@ -611,7 +804,7 @@ ipcMain.handle('settings:pluginCatalog', async () => {
         try {
           const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
           if (pkg.name && pkg.name.startsWith('@deepseek-ai/') && !out.some((o) => o.id === pkg.name)) {
-            out.push({ id: pkg.name, version: pkg.version || '', description: pkg.description || '', path: path.relative(HARNESS_DIR, path.join(gp, e.name)) });
+            out.push({ id: pkg.name, version: pkg.version || '', description: pkg.description || '', path: path.relative(base, path.join(gp, e.name)) });
           }
         } catch { /* ignore */ }
       }
@@ -1200,7 +1393,7 @@ async function resolveSessionWorkspacePath(sessionId) {
 
 async function stageUploadFiles(sessionId, files) {
   if (!Array.isArray(files) || files.length === 0) return [];
-  const wsPath = (await resolveSessionWorkspacePath(sessionId)) || HARNESS_DIR;
+  const wsPath = (await resolveSessionWorkspacePath(sessionId)) || defaultWorkspaceDir();
   const dir = path.join(wsPath, '.uploads');
   fs.mkdirSync(dir, { recursive: true });
   const staged = [];

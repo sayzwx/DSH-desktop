@@ -55,15 +55,16 @@ function startTPlusClock() {
 function setState(s) {
   state = s;
   const running = s === 'running';
-  statusPill.className = 'status-pill ' + s;
+  const busy = s === 'starting' || s === 'installing'; // 安装引擎与建立通讯共用"进行中"视觉
+  statusPill.className = 'status-pill ' + (busy ? 'starting' : s);
   statusText.textContent =
-    s === 'running' ? '通讯已建立' : s === 'starting' ? '建立通讯中…' : s === 'stopping' ? '中断通讯中…' : '系统待命';
-  bigStatus.textContent = s === 'running' ? '通讯已建立' : s === 'starting' ? '建立通讯中…' : '系统待命';
-  bigStatus.className = 'big-status ' + (running ? 'running' : s === 'starting' ? 'starting' : 'stopped');
-  sbDot.className = 'sb-dot ' + (running ? 'running' : s === 'starting' ? 'starting' : 'stopped');
+    s === 'running' ? '通讯已建立' : s === 'starting' ? '建立通讯中…' : s === 'installing' ? '正在获取引擎…' : s === 'stopping' ? '中断通讯中…' : '系统待命';
+  bigStatus.textContent = s === 'running' ? '通讯已建立' : s === 'starting' ? '建立通讯中…' : s === 'installing' ? '正在获取引擎…' : '系统待命';
+  bigStatus.className = 'big-status ' + (running ? 'running' : busy ? 'starting' : 'stopped');
+  sbDot.className = 'sb-dot ' + (running ? 'running' : busy ? 'starting' : 'stopped');
   sbStatus.textContent =
-    s === 'running' ? '与 Harness 通讯正常' : s === 'starting' ? '正在建立通讯…' : s === 'stopping' ? '正在中断通讯…' : '系统待命 · 等待指令';
-  startBtn.disabled = running || s === 'starting';
+    s === 'running' ? '与 Harness 通讯正常' : s === 'starting' ? '正在建立通讯…' : s === 'installing' ? '正在获取 Harness 引擎…' : s === 'stopping' ? '正在中断通讯…' : '系统待命 · 等待指令';
+  startBtn.disabled = running || busy;
   stopBtn.disabled = !running;
   openWebBtn.disabled = !running;
   if (running) {
@@ -163,7 +164,8 @@ startBtn.addEventListener('click', async () => {
   const r = await api.startHarness();
   if (window.__starfield) window.__starfield.triggerMeteor();
   if (!r.ok) (window.__modal ? window.__modal.alert('启动失败：' + r.error, '星际通讯中断') : alert('启动失败: ' + r.error));
-  setState('starting');
+  else if (r.installing) setState('installing');
+  else setState('starting');
   refreshStatus();
 });
 
