@@ -219,65 +219,7 @@
 
       btn.addEventListener('click', () => {
         if (!editBox.hidden) { editBox.hidden = true; return; }
-        const cfg = providerConfigOf(provider);
-        const api = ['openai-completions', 'openai-responses', 'anthropic-messages'].includes(cfg.api) ? cfg.api : 'openai-completions';
-        const baseURL = cfg.baseURL || '';
-        const models = Array.isArray(cfg.models)
-          ? cfg.models.map((m) => [m.id, m.name || '', m.contextWindow || '', m.maxTokens || ''].filter(Boolean).join(' | ')).join('\n')
-          : '';
-        editBox.innerHTML = `
-          <div class="mg-edit-grid">
-            <label>API 协议
-              <select class="sm-input mg-edit-api">
-                <option value="openai-completions"${api === 'openai-completions' ? ' selected' : ''}>OpenAI Completions</option>
-                <option value="openai-responses"${api === 'openai-responses' ? ' selected' : ''}>OpenAI Responses</option>
-                <option value="anthropic-messages"${api === 'anthropic-messages' ? ' selected' : ''}>Anthropic Messages</option>
-              </select>
-            </label>
-            <label>baseURL
-              <input type="text" class="sm-input mg-edit-url" placeholder="https://api.example.com/v1" value="${esc(baseURL)}" />
-            </label>
-            <label>模型列表（每行：id | 显示名 | contextWindow | maxTokens）
-              <textarea class="sm-input mg-edit-models" rows="4" placeholder="model-id&#10;model-id | 显示名">${esc(models)}</textarea>
-            </label>
-          </div>
-          <div class="mg-edit-actions"><button class="mini-btn mg-edit-save" type="button">保存配置</button><span class="mg-edit-msg"></span></div>`;
-        editBox.hidden = false;
-        const saveEdit = editBox.querySelector('.mg-edit-save');
-        const m = editBox.querySelector('.mg-edit-msg');
-        saveEdit.addEventListener('click', async () => {
-          const api2 = editBox.querySelector('.mg-edit-api').value;
-          const url2 = editBox.querySelector('.mg-edit-url').value.trim();
-          const models2 = editBox.querySelector('.mg-edit-models').value
-            .split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
-            .map((l) => {
-              const [id, name, contextWindow, maxTokens] = l.split('|').map((s) => (s || '').trim());
-              const out = { id };
-              if (name) out.name = name;
-              if (contextWindow) out.contextWindow = Number(contextWindow);
-              if (maxTokens) out.maxTokens = Number(maxTokens);
-              return out;
-            });
-          const cfg2 = providerConfigOf(provider);
-          const patch = { ...cfg2, api: api2 };
-          if (url2) patch.baseURL = url2;
-          else delete patch.baseURL;
-          patch.models = models2;
-          saveEdit.disabled = true; saveEdit.textContent = '保存中…';
-          try {
-            const ns = nsViews['llm-pi-ai'];
-            const mut = await api.mutateSettings('llm-pi-ai',
-              [{ op: 'set', path: ['providers', provider], value: patch }],
-              ns ? ns.revision : undefined);
-            if (!mut.ok) { m.textContent = '保存失败：' + (mut.error || 'unknown'); return; }
-            m.textContent = '已保存 ✓';
-            refreshModels();
-          } catch (e) {
-            m.textContent = '保存出错：' + (e.message || String(e));
-          } finally {
-            saveEdit.disabled = false; saveEdit.textContent = '保存配置';
-          }
-        });
+        renderProviderEditor(editBox, provider);
       });
 
       const rmBtn = card.querySelector('.mg-rm');
@@ -360,6 +302,171 @@
     return (prov && typeof prov === 'object') ? prov : {};
   }
 
+  /**
+   * 渲染 provider 编辑面板（模仿 webUI 模型编辑）：
+   *  - "自定义设置"可折叠，含 API 地址（提供方默认/自定义）与模型目录（获取可用模型 / 添加模型）
+   *  - 底部 取消 / 保存
+   * 保存：把变更写回 llm-pi-ai 的 providers.<name>（set 整段 profile）；成功则刷新。
+   * 返回一个 { close } 句柄，调用方用于收起面板。
+   */
+  function renderProviderEditor(editBox, provider) {
+    const p = providerOf(provider);
+    const cfg = providerConfigOf(provider);
+    const api = ['openai-completions', 'openai-responses', 'anthropic-messages'].includes(cfg.api) ? cfg.api : 'openai-completions';
+    const baseURL = cfg.baseURL || '';
+    const models = Array.isArray(cfg.models) ? cfg.models.slice() : [];
+    const ref = apiKeyEnvOf(provider) || deriveKeyRef(provider);
+
+    const modelRows = () => models
+      .map((m, i) => `<div class="mg-model-row" data-i="${i}">
+        <code class="mg-model-id">${esc(m.id)}</code>
+        ${m.name ? `<span class="mg-model-name">${esc(m.name)}</span>` : ''}
+        ${m.contextWindow ? `<span class="mg-model-dim">ctx ${esc(m.contextWindow)}</span>` : ''}
+        ${m.maxTokens ? `<span class="mg-model-dim">max ${esc(m.maxTokens)}</span>` : ''}
+        <button type="button" class="mini-btn mg-model-del" title="移除该模型">✕</button>
+      </div>`).join('') || '<div class="mg-model-empty">模型选择器中将不显示任何模型；目录外 ID 仍可直接发送。</div>';
+
+    editBox.innerHTML = `
+      <details class="mg-edit-details" open>
+        <summary>自定义设置</summary>
+        <div class="mg-edit-grid">
+          <label>API 协议
+            <select class="sm-input mg-edit-api">
+              <option value="openai-completions"${api === 'openai-completions' ? ' selected' : ''}>OpenAI Completions</option>
+              <option value="openai-responses"${api === 'openai-responses' ? ' selected' : ''}>OpenAI Responses</option>
+              <option value="anthropic-messages"${api === 'anthropic-messages' ? ' selected' : ''}>Anthropic Messages</option>
+            </select>
+          </label>
+          <label>API 地址
+            <select class="sm-input mg-edit-urlmode">
+              <option value="default">提供方默认</option>
+              <option value="custom"${baseURL ? ' selected' : ''}>自定义</option>
+            </select>
+            <input type="text" class="sm-input mg-edit-url" placeholder="https://api.example.com/v1"
+              value="${esc(baseURL)}" ${baseURL ? '' : 'hidden'} />
+          </label>
+          <div class="mg-models-block">
+            <div class="mg-models-head">
+              <span>模型目录</span>
+              <span class="mg-models-note">（正在使用适配器默认模型）</span>
+            </div>
+            <div class="mg-model-list">${modelRows()}</div>
+            <div class="mg-add-model">
+              <input type="text" class="sm-input mg-add-model-input" placeholder="输入模型 ID 添加，如 deepseek-v4-flash" />
+              <button class="mini-btn mg-add-model-btn" type="button">添加模型</button>
+              <button class="mini-btn mg-discover-btn" type="button">获取可用模型</button>
+            </div>
+            <div class="mg-discover-output"></div>
+          </div>
+        </div>
+      </details>
+      <div class="mg-edit-actions">
+        <button class="mini-btn mg-edit-cancel" type="button">取消</button>
+        <button class="mini-btn primary-btn mg-edit-save" type="button">保存</button>
+        <span class="mg-edit-msg"></span>
+      </div>`;
+    editBox.hidden = false;
+
+    // ----- 事件绑定 -----
+    const urlMode = editBox.querySelector('.mg-edit-urlmode');
+    const urlInput = editBox.querySelector('.mg-edit-url');
+    const syncUrl = () => { urlInput.hidden = urlMode.value !== 'custom'; };
+    urlMode.addEventListener('change', syncUrl); syncUrl();
+
+    const saveEdit = editBox.querySelector('.mg-edit-save');
+    const cancelEdit = editBox.querySelector('.mg-edit-cancel');
+    const m = editBox.querySelector('.mg-edit-msg');
+
+    // 删除单个模型
+    editBox.querySelectorAll('.mg-model-del').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const i = Number(btn.closest('.mg-model-row').dataset.i);
+        models.splice(i, 1);
+        editBox.querySelector('.mg-model-list').innerHTML = modelRows();
+        rewireModelRows();
+      });
+    });
+    function rewireModelRows() {
+      editBox.querySelectorAll('.mg-model-del').forEach((btn) => {
+        btn.onclick = () => {
+          const i = Number(btn.closest('.mg-model-row').dataset.i);
+          models.splice(i, 1);
+          editBox.querySelector('.mg-model-list').innerHTML = modelRows();
+          rewireModelRows();
+        };
+      });
+    }
+    // 添加模型
+    const addInput = editBox.querySelector('.mg-add-model-input');
+    const addBtn = editBox.querySelector('.mg-add-model-btn');
+    const addModel = () => {
+      const id = (addInput.value || '').trim();
+      if (!id) { m.textContent = '请输入模型 ID'; return; }
+      if (!models.some((x) => x.id === id)) models.push({ id });
+      addInput.value = '';
+      editBox.querySelector('.mg-model-list').innerHTML = modelRows();
+      rewireModelRows();
+      m.textContent = '';
+    };
+    addBtn.addEventListener('click', addModel);
+    addInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addModel(); } });
+    // 获取可用模型（discoverModels：只拿候选，不写配置）
+    const discoverBtn = editBox.querySelector('.mg-discover-btn');
+    const discoverOut = editBox.querySelector('.mg-discover-output');
+    discoverBtn.addEventListener('click', async () => {
+      discoverBtn.disabled = true; discoverBtn.textContent = '获取中…';
+      discoverOut.className = 'mg-discover-output';
+      discoverOut.textContent = '正在连接端点并发现模型…';
+      try {
+        const key = (() => { try { const i = editBox.closest('.model-group, .mg-key')?.querySelector('.mg-key-input'); return i ? i.value.trim() : ''; } catch { return ''; } })();
+        const r = await api.discoverModels(p.settingsNs, provider, key || undefined);
+        if (!r.ok) { discoverOut.textContent = '获取失败：' + (r.error || 'unknown'); return; }
+        const discovered = r.models || [];
+        const existing = new Set(models.map((x) => x.id));
+        const added = discovered.filter((x) => !existing.has(x.id));
+        if (added.length === 0 && discovered.length > 0) { discoverOut.textContent = `发现 ${discovered.length} 个模型，均已存在于目录中。`; return; }
+        for (const x of added) models.push({ id: x.id, name: x.name, contextWindow: x.contextWindow, maxTokens: x.maxTokens });
+        editBox.querySelector('.mg-model-list').innerHTML = modelRows();
+        rewireModelRows();
+        discoverOut.textContent = added.length > 0 ? `已加入 ${added.length} 个发现的模型到目录（保存后生效）。` : '该端点未返回模型';
+      } catch (e) {
+        discoverOut.textContent = '获取出错：' + (e.message || String(e));
+      } finally {
+        discoverBtn.disabled = false; discoverBtn.textContent = '获取可用模型';
+      }
+    });
+
+    // 保存
+    saveEdit.addEventListener('click', async () => {
+      const api2 = editBox.querySelector('.mg-edit-api').value;
+      const customUrl = urlMode.value === 'custom' ? urlInput.value.trim() : '';
+      const patch = { ...cfg, api: api2, models };
+      if (customUrl) patch.baseURL = customUrl;
+      else delete patch.baseURL;
+      saveEdit.disabled = true; saveEdit.textContent = '保存中…';
+      try {
+        const ns = nsViews['llm-pi-ai'];
+        const mut = await api.mutateSettings('llm-pi-ai',
+          [{ op: 'set', path: ['providers', provider], value: patch }],
+          ns ? ns.revision : undefined);
+        if (!mut.ok) { m.textContent = '保存失败：' + (mut.error || 'unknown'); return; }
+        m.textContent = '已保存 ✓';
+        // 成功：收起面板并刷新
+        setTimeout(() => { editBox.hidden = true; editBox.innerHTML = ''; refreshModels(); }, 600);
+      } catch (e) {
+        m.textContent = '保存出错：' + (e.message || String(e));
+      } finally {
+        saveEdit.disabled = false; saveEdit.textContent = '保存';
+      }
+    });
+    cancelEdit.addEventListener('click', () => {
+      editBox.hidden = true;
+      editBox.innerHTML = '';
+    });
+
+    return { close: () => { editBox.hidden = true; editBox.innerHTML = ''; } };
+  }
+
   function wireKeyEditors() {
     document.querySelectorAll('.mg-key').forEach((block) => {
       if (block.dataset.wired) return;
@@ -412,75 +519,13 @@
         }
       });
 
-      // ---- 编辑提供商配置（API 类型 / baseURL / 模型列表） ----
+      // ---- 编辑提供商配置（自定义设置可折叠，与 webUI 一致） ----
       const editBtn = block.querySelector('.mg-edit');
       const editBox = block.querySelector('.mg-edit-box');
       if (editBtn && editBox) {
         editBtn.addEventListener('click', () => {
           if (!editBox.hidden) { editBox.hidden = true; return; }
-          const cfg = providerConfigOf(provider);
-          const api = ['openai-completions', 'openai-responses', 'anthropic-messages'].includes(cfg.api) ? cfg.api : 'openai-completions';
-          const baseURL = cfg.baseURL || '';
-          const models = Array.isArray(cfg.models)
-            ? cfg.models.map((m) => [m.id, m.name || '', m.contextWindow || '', m.maxTokens || ''].filter(Boolean).join(' | ')).join('\n')
-            : '';
-          editBox.innerHTML = `
-            <div class="mg-edit-grid">
-              <label>API 协议
-                <select class="sm-input mg-edit-api">
-                  <option value="openai-completions"${api === 'openai-completions' ? ' selected' : ''}>OpenAI Completions</option>
-                  <option value="openai-responses"${api === 'openai-responses' ? ' selected' : ''}>OpenAI Responses</option>
-                  <option value="anthropic-messages"${api === 'anthropic-messages' ? ' selected' : ''}>Anthropic Messages</option>
-                </select>
-              </label>
-              <label>baseURL
-                <input type="text" class="sm-input mg-edit-url" placeholder="https://api.example.com/v1" value="${esc(baseURL)}" />
-              </label>
-              <label>模型列表（每行：id | 显示名 | contextWindow | maxTokens，只填 id 也可）
-                <textarea class="sm-input mg-edit-models" rows="4" placeholder="model-id&#10;model-id | 显示名">${esc(models)}</textarea>
-              </label>
-            </div>
-            <div class="mg-edit-actions">
-              <button class="mini-btn mg-edit-save" type="button">保存配置</button>
-              <span class="mg-edit-msg"></span>
-            </div>`;
-          editBox.hidden = false;
-          const saveEdit = editBox.querySelector('.mg-edit-save');
-          saveEdit.addEventListener('click', async () => {
-            const api2 = editBox.querySelector('.mg-edit-api').value;
-            const url2 = editBox.querySelector('.mg-edit-url').value.trim();
-            const models2 = editBox.querySelector('.mg-edit-models').value
-              .split(/\r?\n/)
-              .map((l) => l.trim()).filter(Boolean)
-              .map((l) => {
-                const [id, name, contextWindow, maxTokens] = l.split('|').map((s) => (s || '').trim());
-                const out = { id };
-                if (name) out.name = name;
-                if (contextWindow) out.contextWindow = Number(contextWindow);
-                if (maxTokens) out.maxTokens = Number(maxTokens);
-                return out;
-              });
-            const cfg2 = providerConfigOf(provider);
-            const patch = { ...cfg2, api: api2 };
-            if (url2) patch.baseURL = url2;
-            else delete patch.baseURL;
-            patch.models = models2;
-            saveEdit.disabled = true; saveEdit.textContent = '保存中…';
-            const m = editBox.querySelector('.mg-edit-msg');
-            try {
-              const ns = nsViews['llm-pi-ai'];
-              const mut = await api.mutateSettings('llm-pi-ai',
-                [{ op: 'set', path: ['providers', provider], value: patch }],
-                ns ? ns.revision : undefined);
-              if (!mut.ok) { m.textContent = '保存失败：' + (mut.error || 'unknown'); return; }
-              m.textContent = '已保存 ✓';
-              refreshModels();
-            } catch (e) {
-              m.textContent = '保存出错：' + (e.message || String(e));
-            } finally {
-              saveEdit.disabled = false; saveEdit.textContent = '保存配置';
-            }
-          });
+          renderProviderEditor(editBox, provider);
         });
       }
 

@@ -2240,9 +2240,72 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
   min-width: 0;
   font-family: var(--font-mono);
 }
-.mg-edit-actions { display: flex; align-items: center; gap: 10px; }
+.mg-edit-actions { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .mg-edit-msg { font-size: 12px; color: var(--cyan); }
 .row-actions { display: flex; gap: 8px; margin-top: 12px; }
+
+/* 自定义设置（可折叠，模仿 webUI 模型编辑） */
+.mg-edit-details {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(4, 7, 15, 0.3);
+  overflow: hidden;
+}
+.mg-edit-details > summary {
+  cursor: pointer;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  user-select: none;
+}
+.mg-edit-details > summary:hover { color: var(--accent); }
+.mg-edit-details > .mg-edit-grid { padding: 10px; }
+.mg-edit-grid label select { margin-bottom: 2px; }
+.mg-models-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mg-models-head { display: flex; align-items: baseline; gap: 8px; font-size: 11.5px; color: var(--text-dim); }
+.mg-models-note { font-size: 10.5px; color: var(--text-dim); opacity: 0.7; }
+.mg-model-list { display: flex; flex-direction: column; gap: 5px; }
+.mg-model-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(13, 24, 48, 0.4);
+}
+.mg-model-id { font-family: var(--font-mono); font-size: 11.5px; color: var(--text); }
+.mg-model-name { font-size: 11px; color: var(--text-dim); }
+.mg-model-dim { font-size: 10px; color: var(--accent-2); font-family: var(--font-mono); }
+.mg-model-del { margin-left: auto; }
+.mg-model-empty {
+  font-size: 11px;
+  color: var(--text-dim);
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.mg-add-model {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.mg-add-model .sm-input { flex: 1; min-width: 200px; font-family: var(--font-mono); }
+.mg-discover-output { font-size: 11px; color: var(--text-dim); line-height: 1.6; }
+.mg-discover-output:not(:empty) {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 9px;
+  background: rgba(13, 24, 48, 0.35);
+}
 
 /* ============ 智能体提问卡片（ask_user_question） ============ */
 .msg-question { display: flex; }
