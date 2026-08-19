@@ -74,11 +74,12 @@ renderer/           渲染层（原生 HTML/JS/CSS）
 
 ## 一键安装包（发行版）
 
-运行 `scripts/build-dist.ps1` 生成两类产物（正常安装器模式，引擎不塞进安装包）：
+运行 `scripts/build-dist.ps1` 生成小体积安装器（引擎不打包、不托管）：
 
-- `dist/DSH-Desktop-v<版本>.zip` 与自解压 `DSH-Desktop-v<版本>-Setup.exe`：仅桌面端 UI + Electron 运行时 + 一键安装器（约 100MB，与普通 Electron 应用相当）；
-- `dist/DSH-Harness-bundle-v<版本>.zip`：DeepSeek Harness 引擎载荷（源码 + node_modules + 内置 Node），安装时从 GitHub Releases 联网下载一次（约 500-700MB），支持本地离线包优先。
+- `dist/DSH-Desktop-v<版本>.zip` 与自解压 `DSH-Desktop-v<版本>-Setup.exe`：仅桌面端 UI + Electron 运行时 + 一键安装器（约 220MB，与普通 Electron 应用相当）；
+- Harness 引擎不在安装包内：安装时由安装器从官方源自动拉取（`deepseek-ai/DeepSeek-Harness` 源码 + nodejs.org 官方 Node），在本机完成依赖安装与构建（一次性）。
 
-使用者：解压（或运行 Setup.exe）→ 双击 `setup.bat` → 自动安装到 `%LOCALAPPDATA%\DSH`、
-写入 `~/.dsh/settings.yaml`（首次安装，不覆盖已有配置）、下载并解压 Harness 引擎、创建桌面快捷方式。
+使用者：双击 `Setup.exe`（或解压 zip 后运行 `setup.bat`）→ 自动安装到 `%LOCALAPPDATA%\DSH`、
+写入 `~/.dsh/settings.yaml`（首次安装，不覆盖已有配置）、从官方拉取并构建 Harness 引擎、创建桌面快捷方式。
+网络受限时可用 `-NpmRegistry https://registry.npmmirror.com` 指定 npm 镜像，或 `-SkipHarness` 跳过引擎（之后手动配置 `DSH_HARNESS_DIR`）。
 安装包不含任何 API 密钥；模型密钥在应用「设置 → 模型」填写，GitHub 用 SSH 密钥连接。

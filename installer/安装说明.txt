@@ -1,26 +1,36 @@
-# DSH Desktop 一键安装包（正常安装器模式：安装包小，引擎安装时联网下载）
+# DSH Desktop 一键安装包（小体积安装器模式：引擎安装时从官方拉取）
 
 ## 这是什么
-DSH 桌面端 UI 应用安装包（含 Electron 运行时，约 100MB，和普通 Electron 应用一样）。
-重型的 DeepSeek Harness 引擎**不塞进安装包**：安装时自动联网下载一次（约 500-700MB），
-像游戏/大型软件安装器那样流式安装。
+DSH 桌面端 UI 应用安装包（含 Electron 运行时，约 220MB，和普通 Electron 应用一样）。
+重型的 DeepSeek Harness 引擎**不打包进安装包**：安装时自动从 DeepSeek 官方源拉取
+（官方源码 + 官方 Node 运行时），并在本机完成依赖安装与构建（一次性，需数分钟）。
 
 ## 安装方法（二选一）
-- 方式 A：解压 `DSH-Desktop-v...-Setup.exe` 同级的 zip，双击里面的 `setup.bat`
-- 方式 B：直接运行 `DSH-Desktop-v...-Setup.exe`（自解压后自动执行 setup.bat）
+- 方式 A：下载 `DSH-Desktop-v...-Setup.exe`，双击运行（自解压后自动执行 setup.bat）
+- 方式 B：解压 `DSH-Desktop-v...-Setup.exe` 同级的 zip，双击里面的 `setup.bat`
 
 安装器会：
 1. 安装桌面端应用到 `%LOCALAPPDATA%\DSH\app`
 2. 写入 Harness 配置到 `%USERPROFILE%\.dsh\settings.yaml`（仅首次，已有配置不覆盖）
-3. 检查 Harness 引擎：已存在（`%LOCALAPPDATA%\DSH\harness` 或 `D:\DeepSeek-Harness`）则跳过；
-   否则从 GitHub Releases 下载 `DSH-Harness-bundle-v...zip` 并解压到 `%LOCALAPPDATA%\DSH\`
-4. 创建桌面/开始菜单快捷方式「DSH Desktop」并启动
+3. 拉取 Harness 引擎到 `%LOCALAPPDATA%\DSH\harness`：
+   - 下载官方 Node.js（nodejs.org，~30MB）→ 下载 DeepSeek-Harness 官方源码
+     （github.com/deepseek-ai，zip 优先、git clone 兜底）→ pnpm 安装依赖 + 构建
+   - 需要网络：github.com / nodejs.org / npm registry
+4. 创建桌面/开始菜单快捷方式「DSH」并启动
 
-## 离线 / 网络受限时
-把 `DSH-Harness-bundle-v...zip` 提前放到 setup 旁边，安装器检测到本地文件就直接用，不联网。
-跳过引擎下载：`setup.bat` 后加参数不行时，可手动运行
-`powershell -NoProfile -ExecutionPolicy Bypass -File setup.ps1 -SkipHarness`，
-之后在应用里手动配置 harness 路径（环境变量 DSH_HARNESS_DIR）。
+## 网络受限（如国内无法访问 npm registry）
+安装时给 setup 传镜像参数，例如：
+
+```bat
+powershell -NoProfile -ExecutionPolicy Bypass -File setup.ps1 -NpmRegistry https://registry.npmmirror.com
+```
+
+## 跳过引擎下载（已有引擎 / 想手动配置）
+```bat
+powershell -NoProfile -ExecutionPolicy Bypass -File setup.ps1 -SkipHarness
+```
+之后在应用里配置 harness 路径（环境变量 DSH_HARNESS_DIR，或直接把引擎放到
+`%LOCALAPPDATA%\DSH\harness`）。
 
 ## 安装后首次使用
 1. 打开「DSH Desktop」，点「启动 Harness」（Web 界面 http://127.0.0.1:3080）

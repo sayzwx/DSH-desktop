@@ -1,16 +1,14 @@
-# Build the DSH Desktop distributables (normal installer style):
-#   1. DSH-Desktop-v<ver>.zip / -Setup.exe : small app package
-#      (desktop UI + Electron runtime + installer; ~100 MB, like any Electron app)
-#   By default the heavy harness engine is NOT bundled here: setup.exe downloads
-#   it at install time from $HarnessUrl (installer\setup.ps1). Pass -IncludeHarness
-#   only when you explicitly need the DSH-Harness-bundle zip as a local artifact.
-# Run:  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-dist.ps1 [-IncludeHarness]
-param([string]$Version = '0.1.0', [switch]$IncludeHarness)
+﻿# Build the DSH Desktop distributables (small installer style):
+#   DSH-Desktop-v<ver>.zip / -Setup.exe : small app package
+#   (desktop UI + Electron runtime + installer; ~220 MB, like any Electron app)
+#   The heavy harness engine is NOT packaged: setup.exe pulls it from the official
+#   deepseek-ai/DeepSeek-Harness source at install time (see installer\setup.ps1).
+# Run:  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-dist.ps1
+param([string]$Version = '0.1.0')
 $ErrorActionPreference = 'Stop'
 $root = 'D:\DSH-desktop'
 $dist = Join-Path $root 'dist'
 $name = "DSH-Desktop-v$Version"
-$harnessName = "DSH-Harness-bundle-v$Version"
 
 function Copy-Tree([string]$from, [string]$to, [string[]]$xd) {
   Write-Host "staging $from -> $to"
@@ -43,19 +41,7 @@ Get-ChildItem (Join-Path $root 'installer') -Filter '*.txt' | Copy-Item -Destina
 $zip = Join-Path $dist "$name.zip"
 Make-Zip $stage $zip
 
-# ---------- 2. harness engine payload (OPTIONAL, default off) ----------
-Write-Host "=== Harness bundle: $($(if ($IncludeHarness) { 'building' } else { 'SKIPPED (use -IncludeHarness)' })) ==="
-if ($IncludeHarness) {
-  $hstage = Join-Path $dist "stage\$harnessName"
-  Remove-Item $hstage -Recurse -Force -ErrorAction SilentlyContinue
-  New-Item -ItemType Directory -Path $hstage -Force | Out-Null
-  Copy-Tree 'D:\DeepSeek-Harness' (Join-Path $hstage 'harness') @('D:\DeepSeek-Harness\.git')
-  Copy-Tree 'D:\nodejs'           (Join-Path $hstage 'tools\node') @()
-  $hzip = Join-Path $dist "$harnessName.zip"
-  Make-Zip $hstage $hzip
-}
-
-# ---------- 3. self-extracting Setup.exe (7-Zip SFX, LZMA2 - small) ----------
+# ---------- 2. self-extracting Setup.exe (7-Zip SFX, LZMA2 - small) ----------
 Write-Host "=== Building $name-Setup.exe (7-Zip SFX) ==="
 $sz7 = 'D:\7-Zip\7z.exe'
 $sfx = 'D:\7-Zip\7z.sfx'
