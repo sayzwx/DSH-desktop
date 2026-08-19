@@ -4,7 +4,7 @@
 #   The heavy harness engine is NOT packaged: setup.exe pulls it from the official
 #   deepseek-ai/DeepSeek-Harness source at install time (see installer\setup.ps1).
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-dist.ps1
-param([string]$Version = '0.2.0')
+param([string]$Version = '0.2.1')
 $ErrorActionPreference = 'Stop'
 $root = 'D:\DSH-desktop'
 $dist = Join-Path $root 'dist'
