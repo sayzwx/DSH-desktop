@@ -126,6 +126,39 @@ Write-Host ''
 Write-Host '[1/3] Installing application ...'
 Copy-Tree (Join-Path $Src 'app') (Join-Path $Dest 'app')
 
+# 应用装好立刻创建快捷方式（即使后续引擎拉取失败，快捷方式也已存在）
+Write-Host ''
+Write-Host 'Creating shortcuts ...'
+$exe = Join-Path $Dest 'app\node_modules\electron\dist\electron.exe'
+$appPath = Join-Path $Dest 'app'
+$appArg = '"' + $appPath + '"'
+if (Test-Path $exe) {
+  $ws = New-Object -ComObject WScript.Shell
+  $linkDirs = New-Object System.Collections.ArrayList
+  try { $d = $ws.SpecialFolders.Item('Desktop');          if ($d) { [void]$linkDirs.Add($d) } } catch {}
+  try { $d = [Environment]::GetFolderPath('Desktop');     if ($d) { [void]$linkDirs.Add($d) } } catch {}
+  $od = Join-Path ([Environment]::GetFolderPath('UserProfile')) 'OneDrive\Desktop'
+  if (Test-Path $od) { [void]$linkDirs.Add($od) }
+  $sm = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+  if (Test-Path $sm) { [void]$linkDirs.Add($sm) }
+  $cnt = 0
+  foreach ($dir in ($linkDirs | Select-Object -Unique | Where-Object { $_ -and (Test-Path $_) })) {
+    try {
+      $lnk = Join-Path $dir 'DSH.lnk'
+      $s = $ws.CreateShortcut($lnk)
+      $s.TargetPath = $exe
+      $s.Arguments = $appArg
+      $s.WorkingDirectory = $appPath
+      $s.IconLocation = (Join-Path $appPath 'DSH.ico')
+      $s.Save()
+      if (Test-Path $lnk) { Write-Host "  shortcut created: $lnk"; $cnt++ }
+    } catch { Write-Host "  WARN: shortcut failed in $dir : $($_.Exception.Message)" }
+  }
+  if ($cnt -eq 0) { Write-Host '  WARN: 未能创建任何快捷方式（可手动运行 app\node_modules\electron\dist\electron.exe）' }
+} else {
+  Write-Host "  WARN: electron.exe 不存在（$exe），跳过快捷方式创建"
+}
+
 Write-Host ''
 Write-Host '[2/3] Writing user configuration (~/.dsh) ...'
 $dshHome = Join-Path $UserHome '.dsh'
@@ -166,21 +199,6 @@ if (Test-Path $nodeExe) {
   )
   Copy-Item (Join-Path $dshHome 'zen-ua-proxy.vbs') (Join-Path $startup 'zen-ua-proxy.vbs') -Force
   try { Start-Process $nodeExe -ArgumentList $mjs -WindowStyle Hidden } catch { }
-}
-
-Write-Host ''
-Write-Host 'Creating shortcuts ...'
-$exe = Join-Path $Dest 'app\node_modules\electron\dist\electron.exe'
-$appArg = '"' + (Join-Path $Dest 'app') + '"'
-$ws = New-Object -ComObject WScript.Shell
-foreach ($dir in @([Environment]::GetFolderPath('Desktop'), (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'))) {
-  $lnk = Join-Path $dir 'DSH.lnk'
-  $s = $ws.CreateShortcut($lnk)
-  $s.TargetPath = $exe
-  $s.Arguments = $appArg
-  $s.WorkingDirectory = Join-Path $Dest 'app'
-  $s.IconLocation = (Join-Path $Dest 'app\DSH.ico')
-  $s.Save()
 }
 
 Write-Host ''
