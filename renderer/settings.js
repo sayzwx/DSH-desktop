@@ -187,11 +187,127 @@
     else sel.value = '';
   }
 
-  function groupCard(g) {
+  function groupCard(g, p) {
+    const isPiAi = p && p.settingsNs === 'llm-pi-ai';
+    const removable = isPiAi && isProviderRemovable(p.provider);
     return `<div class="model-group">
-      <div class="mg-head"><span class="mg-name">${esc(g.name || g.id)}</span><code class="mg-id">${esc(g.id)}</code></div>
+      <div class="mg-head"><span class="mg-name">${esc(g.name || g.id)}</span><code class="mg-id">${esc(g.id)}</code>
+        ${p ? `<span class="badge ${p.active ? 'trust-system' : 'trust-user'}">${p.active ? '已启用' : '未启用'}</span>` : ''}</div>
       <div class="mg-models">${(g.models || []).map((m) => `<span class="mg-chip" title="${esc(m.id)}">${esc(m.name || m.id)}</span>`).join('') || '<span class="empty">（空）</span>'}</div>
+      ${isPiAi ? `<div class="mg-key-actions">
+        <button class="mini-btn mg-edit" type="button" title="修改 API 协议 / baseURL / 模型列表">编辑提供商配置</button>
+        ${removable ? '<button class="mini-btn danger-btn mg-rm" type="button">删除提供商</button>' : ''}
+      </div>
+      <div class="mg-edit-box mg-key" data-provider="${esc(p.provider)}" style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--border-strong)" hidden></div>
+      <div class="mg-key-msg mg-key" data-provider="${esc(p.provider)}" style="margin-top:6px"></div>` : ''}
     </div>`;
+  }
+
+  /** 为"已启用 / 有模型分组"的提供商卡片挂接编辑与删除操作（与 keyEditor 同逻辑）。 */
+  function wireGroupCardOps() {
+    document.querySelectorAll('.model-group .mg-edit').forEach((btn) => {
+      if (btn.dataset.wired) return;
+      btn.dataset.wired = '1';
+      const card = btn.closest('.model-group');
+      const block = card.querySelector('.mg-edit-box, .mg-key[data-provider]');
+      const provider = block && block.dataset.provider;
+      const editBox = card.querySelector('.mg-edit-box');
+      const msgBox = card.querySelector('.mg-key-msg');
+      if (!provider || !editBox) return;
+      const p = providerOf(provider);
+      if (!p) return;
+
+      btn.addEventListener('click', () => {
+        if (!editBox.hidden) { editBox.hidden = true; return; }
+        const cfg = providerConfigOf(provider);
+        const api = ['openai-completions', 'openai-responses', 'anthropic-messages'].includes(cfg.api) ? cfg.api : 'openai-completions';
+        const baseURL = cfg.baseURL || '';
+        const models = Array.isArray(cfg.models)
+          ? cfg.models.map((m) => [m.id, m.name || '', m.contextWindow || '', m.maxTokens || ''].filter(Boolean).join(' | ')).join('\n')
+          : '';
+        editBox.innerHTML = `
+          <div class="mg-edit-grid">
+            <label>API 协议
+              <select class="sm-input mg-edit-api">
+                <option value="openai-completions"${api === 'openai-completions' ? ' selected' : ''}>OpenAI Completions</option>
+                <option value="openai-responses"${api === 'openai-responses' ? ' selected' : ''}>OpenAI Responses</option>
+                <option value="anthropic-messages"${api === 'anthropic-messages' ? ' selected' : ''}>Anthropic Messages</option>
+              </select>
+            </label>
+            <label>baseURL
+              <input type="text" class="sm-input mg-edit-url" placeholder="https://api.example.com/v1" value="${esc(baseURL)}" />
+            </label>
+            <label>模型列表（每行：id | 显示名 | contextWindow | maxTokens）
+              <textarea class="sm-input mg-edit-models" rows="4" placeholder="model-id&#10;model-id | 显示名">${esc(models)}</textarea>
+            </label>
+          </div>
+          <div class="mg-edit-actions"><button class="mini-btn mg-edit-save" type="button">保存配置</button><span class="mg-edit-msg"></span></div>`;
+        editBox.hidden = false;
+        const saveEdit = editBox.querySelector('.mg-edit-save');
+        const m = editBox.querySelector('.mg-edit-msg');
+        saveEdit.addEventListener('click', async () => {
+          const api2 = editBox.querySelector('.mg-edit-api').value;
+          const url2 = editBox.querySelector('.mg-edit-url').value.trim();
+          const models2 = editBox.querySelector('.mg-edit-models').value
+            .split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+            .map((l) => {
+              const [id, name, contextWindow, maxTokens] = l.split('|').map((s) => (s || '').trim());
+              const out = { id };
+              if (name) out.name = name;
+              if (contextWindow) out.contextWindow = Number(contextWindow);
+              if (maxTokens) out.maxTokens = Number(maxTokens);
+              return out;
+            });
+          const cfg2 = providerConfigOf(provider);
+          const patch = { ...cfg2, api: api2 };
+          if (url2) patch.baseURL = url2;
+          else delete patch.baseURL;
+          patch.models = models2;
+          saveEdit.disabled = true; saveEdit.textContent = '保存中…';
+          try {
+            const ns = nsViews['llm-pi-ai'];
+            const mut = await api.mutateSettings('llm-pi-ai',
+              [{ op: 'set', path: ['providers', provider], value: patch }],
+              ns ? ns.revision : undefined);
+            if (!mut.ok) { m.textContent = '保存失败：' + (mut.error || 'unknown'); return; }
+            m.textContent = '已保存 ✓';
+            refreshModels();
+          } catch (e) {
+            m.textContent = '保存出错：' + (e.message || String(e));
+          } finally {
+            saveEdit.disabled = false; saveEdit.textContent = '保存配置';
+          }
+        });
+      });
+
+      const rmBtn = card.querySelector('.mg-rm');
+      if (rmBtn) rmBtn.addEventListener('click', async () => {
+        const ok = window.__modal
+          ? await window.__modal.confirm(`确定删除提供商 <strong>${esc(provider)}</strong> 的整份配置与对应 API 密钥？\n（此操作不可撤销，将移除其全部自定义模型）`, '删除提供商')
+          : confirm(`确定删除提供商 ${provider} 的配置与密钥？`);
+        if (!ok) return;
+        rmBtn.disabled = true; rmBtn.textContent = '删除中…';
+        try {
+          const ns = nsViews['llm-pi-ai'];
+          const cfg = providerConfigOf(provider);
+          const keyRef = (cfg && cfg.apiKeyEnv) || deriveKeyRef(provider);
+          await api.unsetCredential(keyRef).catch(() => {});
+          const mut = await api.mutateSettings('llm-pi-ai',
+            [{ op: 'unset', path: ['providers', provider] }],
+            ns ? ns.revision : undefined);
+          if (!mut.ok) {
+            if (msgBox) msgBox.textContent = '删除失败：' + (mut.error || 'unknown');
+            rmBtn.disabled = false; rmBtn.textContent = '删除提供商';
+            return;
+          }
+          if (msgBox) msgBox.textContent = `已删除提供商 <code>${esc(provider)}</code> 及其密钥引用`;
+          refreshModels();
+        } catch (e) {
+          if (msgBox) msgBox.textContent = '删除出错：' + (e.message || String(e));
+          rmBtn.disabled = false; rmBtn.textContent = '删除提供商';
+        }
+      });
+    });
   }
 
   /** 密钥编辑器：填写 API 密钥 → 保存（credentials.set + settings.mutate）→ 测试连接（llm.discoverModels）。
@@ -430,17 +546,18 @@
       const g = groupOf(selVal);
       const f = failureOf(selVal);
       const p = providerOf(selVal);
-      if (g) cards.push(groupCard(g));
+      if (g) cards.push(groupCard(g, p));
       if (f) cards.push(failureCard(f));
       if (!g && !f && p) cards.push(idleCard(p));
       if (cards.length === 0) cards.push('<div class="empty">该提供商暂无可用模型</div>');
     } else {
-      for (const g of modelGroupsAll) cards.push(groupCard(g));
+      for (const g of modelGroupsAll) cards.push(groupCard(g, providerOf(g.id)));
       for (const f of modelFailures) cards.push(failureCard(f));
       if (cards.length === 0) cards.push('<div class="empty">尚无提供商加载模型（在上方选择一个提供商查看详情）</div>');
     }
     list.innerHTML = cards.join('');
     wireKeyEditors();
+    wireGroupCardOps();
   }
 
   // ---------------- 插件配置域（settings.describe namespaces + 功能备注） ----------------
