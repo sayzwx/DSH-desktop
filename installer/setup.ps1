@@ -6,9 +6,9 @@
 # 网络受限时可传 -NpmRegistry 指定镜像（如 https://registry.npmmirror.com）。
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1" [-SkipHarness]
 param(
-  [string]$HarnessSource = 'https://github.com/deepseek-ai/DeepSeek-Harness/archive/refs/tags/dsh-v0.1.0-rc.7.zip',
+  [string]$HarnessSource = 'https://github.com/deepseek-ai/DeepSeek-Harness/archive/refs/tags/dsh-v0.1.0-rc.8.zip',
   [string]$HarnessGit    = 'https://github.com/deepseek-ai/DeepSeek-Harness.git',
-  [string]$HarnessBranch = 'dsh-v0.1.0-rc.7',
+  [string]$HarnessBranch = 'dsh-v0.1.0-rc.8',
   [string]$NodeVersion   = 'v22.23.2',
   [string]$NpmRegistry   = '',   # 例：https://registry.npmmirror.com（npm 网络受限时）
   [switch]$SkipHarness,
@@ -79,10 +79,21 @@ function Get-NodeExe {
 function Install-Harness([string]$NodeExe) {
   $harnessDir = Join-Path $Dest 'harness'
   $nodeDir    = Split-Path -Parent $NodeExe
+  $binJs      = Join-Path $harnessDir 'apps\cli\lib\bin.js'
+  $webDist    = Join-Path $harnessDir 'apps\web\dist\index.html'
   $got = $false
+  $build = $false
   if (Test-Path (Join-Path $harnessDir 'package.json')) {
-    Write-Host '  harness source already present - reusing it'
+    # “已存在即跳过”必须以【CLI + web 前端 dist 都齐全】为前提；只差 web dist 的
+    # 旧安装（rc.7 时代曾出现 lib 构建成功而 web 未构建，导致打开就报 “frontend dist not built”）
+    # 必须重新构建，而不是复用一个残缺引擎。
+    if ((Test-Path $binJs) -and (Test-Path $webDist)) {
+      Write-Host '  harness 源码 + 完整构建产物已存在，跳过构建'
+      return
+    }
+    Write-Host '  harness 源码已存在但构建产物不完整（缺少 CLI 或 web 前端 dist）——重新构建'
     $got = $true
+    $build = $true
   } else {
     # 1) 官方源码：zip 优先，git clone 兜底
     $tmpZip = Join-Path $env:TEMP 'dsh-harness-src.zip'
@@ -113,24 +124,45 @@ function Install-Harness([string]$NodeExe) {
       $got = $true
     }
     if (-not (Test-Path (Join-Path $harnessDir 'package.json'))) { throw '引擎源码不完整：缺少 package.json' }
+    $build = $true
   }
-  # 2) pnpm：直接走 corepack 子命令（corepack pnpm 按 package.json 的
-  #    packageManager 锁定版本并自动拉取，不依赖 shim 文件位置——corepack
-  #    prepare 生成的 pnpm.cmd 位置随 COREPACK_HOME 环境变化，不可靠）
+  # 2) 构建全程使用【本机捆绑的 Node 工具链】（tools\node），不依赖系统 node/npm/pnpm：
+  #    - corepack pnpm：按 package.json 的 packageManager 锁定版本并自动拉取；
+  #    - 在捆绑 node 目录放一个 pnpm.cmd 转发到 corepack，并把它前置到 PATH，
+  #      以便构建脚本内部裸调用 `pnpm`/`npm` 都解析到捆绑版本（rc.7 干过一次
+  #      “CLI 构建成功但 web 前端没构建”的事故，根因就是 script 里裸 pnpm 解析不到）。
   $corepack = Join-Path $nodeDir 'corepack.cmd'
   if (-not (Test-Path $corepack)) { $corepack = Join-Path $nodeDir 'corepack' }
+  $pnpmShim = Join-Path $nodeDir 'pnpm.cmd'
+  if (-not (Test-Path $pnpmShim)) {
+    $shimContent = '@echo off' + "`r`n" + '"%~dp0corepack.cmd" pnpm %*'
+    Set-Content -Path $pnpmShim -Encoding Ascii -Value $shimContent
+  }
   if ($NpmRegistry) { $env:COREPACK_NPM_REGISTRY = $NpmRegistry }
-  Write-Host '  installing dependencies (pnpm install, 一次性, 可能数百 MB) ...'
   Push-Location $harnessDir
   try {
     if (-not (Test-Path $corepack)) { throw '未找到 corepack（Node 目录缺 corepack.cmd）' }
-    & $corepack pnpm install --frozen-lockfile
-    if ($LASTEXITCODE -ne 0) { throw 'pnpm install 失败：检查网络/npm 源；npm 源受限时加参数 -NpmRegistry https://registry.npmmirror.com' }
-    Write-Host '  building harness (pnpm build, 一次性, 需数分钟) ...'
-    & $corepack pnpm build
-    if ($LASTEXITCODE -ne 0) { throw 'pnpm build 失败' }
+    $oldPath = $env:PATH
+    $env:PATH = "$nodeDir;$oldPath"
+    try {
+      if ($build) {
+        Write-Host '  installing dependencies (pnpm install, 一次性, 可能数百 MB) ...'
+        & $corepack pnpm install --frozen-lockfile
+        if ($LASTEXITCODE -ne 0) { throw 'pnpm install 失败：检查网络/npm 源；npm 源受限时加参数 -NpmRegistry https://registry.npmmirror.com' }
+        Write-Host '  building harness (pnpm build, 一次性, 需数分钟) ...'
+        & $corepack pnpm build
+        if ($LASTEXITCODE -ne 0) { throw 'pnpm build 失败' }
+      }
+      # 3) 兜底校验：web 前端 dist 必须在，否则用捆邦工具直接补构建 build:web
+      if (-not (Test-Path $webDist)) {
+        Write-Host '  web 前端 dist 缺失，直接补构建 build:web ...'
+        & $corepack pnpm --filter @deepseek-ai/dsh-web-frontend run build
+        if ($LASTEXITCODE -ne 0) { throw 'web 前端构建失败（build:web）' }
+      }
+    } finally { $env:PATH = $oldPath }
   } finally { Pop-Location }
-  if (-not (Test-Path (Join-Path $harnessDir 'apps\cli\lib\bin.js'))) { throw '构建产物缺失：apps/cli/lib/bin.js' }
+  if (-not (Test-Path $binJs)) { throw '构建产物缺失：apps/cli/lib/bin.js' }
+  if (-not (Test-Path $webDist)) { throw '构建产物缺失：web 前端 apps/web/dist/index.html；构建未完整产出，请重试或检查网络/磁盘空间' }
 }
 
 Write-Host ''
