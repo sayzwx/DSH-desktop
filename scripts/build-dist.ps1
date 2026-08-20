@@ -6,9 +6,9 @@
 #   Bundled portable Node: shipped inside the package and installed to
 #   %LOCALAPPDATA%\DSH\tools\node — the desktop and the engine use it first,
 #   so the target machine needs NO system Node at all.
-# Run:  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-dist.ps1 [-Version 0.4.0] [-NodeVersion v22.23.2] [-Root C:\path\to\repo]
+# Run:  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-dist.ps1 [-Version 0.4.1] [-NodeVersion v22.23.2] [-Root C:\path\to\repo]
 param(
-  [string]$Version = '0.4.0',
+  [string]$Version = '0.4.1',
   [string]$NodeVersion = 'v22.23.2',  # 自带便携 Node 版本（随包分发，替换本机 Node 依赖）
   [string]$Root = ''   # 仓库根目录，默认取脚本所在目录的上级（scripts 的父目录）
 )
@@ -129,54 +129,64 @@ Write-Host ("  bundled Node: {0:N0} MB" -f ((Get-ChildItem $stageTools -Recurse 
 $zip = Join-Path $dist "$name.zip"
 Make-Zip $stage $zip
 
-# ---------- 2. self-extracting Setup.exe (7-Zip SFX, LZMA2 - small) ----------
-Write-Host "=== Building $name-Setup.exe (7-Zip SFX) ==="
-$sz7 = ''
-foreach ($p in @('D:\7-Zip\7z.exe', 'C:\Program Files\7-Zip\7z.exe', 'C:\Program Files (x86)\7-Zip\7z.exe', 'D:\Program Files\7-Zip\7z.exe')) { if (Test-Path $p) { $sz7 = $p; break } }
-if (-not $sz7) {
-  $w = (Get-Command 7z -ErrorAction SilentlyContinue).Source
-  if ($w) { $sz7 = $w }
-}
-$sfx = if ($sz7) { Join-Path (Split-Path -Parent $sz7) '7z.sfx' } else { '' }
-if (-not $sz7 -or -not (Test-Path $sfx)) {
-  Write-Host '7-Zip not found - Setup.exe skipped (zip is the deliverable)'
+# ---------- 2. Setup.exe 安装器：优先 Inno Setup（真正的一键安装向导），7-Zip SFX 兜底 ----------
+Write-Host "=== Building $name-Setup.exe ==="
+$inno = ''
+foreach ($p in @('C:\Users\mjsx\AppData\Local\Programs\Inno Setup 6\ISCC.exe', 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe', 'C:\Program Files\Inno Setup 6\ISCC.exe')) { if (Test-Path $p) { $inno = $p; break } }
+if (-not $inno) { $inno = (Get-Command iscc -ErrorAction SilentlyContinue).Source }
+$exeOut = Join-Path $dist "$name-Setup.exe"
+if ($inno) {
+  # Inno：真正的一键安装向导（双击→下一步→安装→自动拉引擎）。脚本 dsh-installer.iss 引用 stage。
+  $issScript = Join-Path $root 'installer\dsh-installer.iss'
+  if (Test-Path $issScript) {
+    Push-Location (Split-Path -Parent $issScript)
+    & $inno $issScript /DStagingDir="$stage" /DMyAppVersion="$Version" /DOutputDir="$dist" /Q
+    $rc = $LASTEXITCODE
+    Pop-Location
+    if ($rc -ne 0) { throw "Inno Setup 编译失败 (code=$rc)" }
+    Write-Host ("  Inno Setup.exe: {0:N0} MB" -f ((Get-Item $exeOut).Length / 1MB))
+  } else {
+    Write-Host "WARN: 缺 dsh-installer.iss，跳过 Inno (zip is the deliverable)"
+  }
 } else {
-  $sz7file = Join-Path $dist "$name.7z"
-  Remove-Item $sz7file -Force -ErrorAction SilentlyContinue   # 7z a 是追加模式，先删旧档避免体积翻倍
-  Push-Location $stage
-  & $sz7 a -t7z -mx=9 -m0=LZMA2 -bso0 -bsp0 $sz7file '*' | Out-Null
-  Pop-Location
-  if ($LASTEXITCODE -ne 0) { throw '7z failed' }
-  $cfg = Join-Path $dist 'sfx-config.txt'
-  # InstallPath 指向固定安装暂存目录（%%LOCALAPPDATA%% 需要 7-Zip 21.02+；
-  #   旧版 7-Zip 回退为解压到当前目录的旧行为）。GUIMode=1 提供安装器风格的进度对话框。
-  $cfgLines = @(
-    ';!@Install@!UTF-8!',
-    'Title="DSH Desktop Installer"',
-    'GUIMode="1"',
-    'RunProgram="setup.bat"',
-    ';!@InstallEnd@!'
-  )
-  $verLine = & $sz7 i 2>$null | Select-String '^7-Zip (\d+)\.' | Select-Object -First 1
-  $szMajor = if ($verLine -and $verLine.Matches.Count -gt 0) { [int]$verLine.Matches[0].Groups[1].Value } else { 0 }
-  if ($szMajor -ge 21) {
+  Write-Host 'WARN: Inno Setup 未找到，回退到 7-Zip SFX 自解压'
+  $sz7 = ''
+  foreach ($p in @('D:\7-Zip\7z.exe', 'C:\Program Files\7-Zip\7z.exe', 'C:\Program Files (x86)\7-Zip\7z.exe', 'D:\Program Files\7-Zip\7z.exe')) { if (Test-Path $p) { $sz7 = $p; break } }
+  if (-not $sz7) { $sz7 = (Get-Command 7z -ErrorAction SilentlyContinue).Source }
+  $sfx = if ($sz7) { Join-Path (Split-Path -Parent $sz7) '7z.sfx' } else { '' }
+  if (-not $sz7 -or -not (Test-Path $sfx)) {
+    Write-Host '7-Zip not found - Setup.exe skipped (zip is the deliverable)'
+  } else {
+    $sz7file = Join-Path $dist "$name.7z"
+    Remove-Item $sz7file -Force -ErrorAction SilentlyContinue
+    Push-Location $stage
+    & $sz7 a -t7z -mx=9 -m0=LZMA2 -bso0 -bsp0 $sz7file '*' | Out-Null
+    Pop-Location
+    if ($LASTEXITCODE -ne 0) { throw '7z failed' }
+    $cfg = Join-Path $dist 'sfx-config.txt'
+    $verLine = & $sz7 i 2>$null | Select-String '^7-Zip (\d+)\.' | Select-Object -First 1
+    $szMajor = if ($verLine -and $verLine.Matches.Count -gt 0) { [int]$verLine.Matches[0].Groups[1].Value } else { 0 }
     $cfgLines = @(
       ';!@Install@!UTF-8!',
       'Title="DSH Desktop Installer"',
-      'GUIMode="1"',
-      'InstallPath="%%LOCALAPPDATA%%\DSH\stage"',
-      'RunProgram="setup.bat"',
+      'RunProgram="cmd /c setup.bat"',
       ';!@InstallEnd@!'
     )
-  } else {
-    Write-Host 'WARN: 7-Zip < 21.02，SFX 不支持 InstallPath 环境变量展开，回退为解压到当前目录'
+    if ($szMajor -ge 21) {
+      $cfgLines = @(
+        ';!@Install@!UTF-8!',
+        'Title="DSH Desktop Installer"',
+        'InstallPath="%%LOCALAPPDATA%%\DSH\stage"',
+        'RunProgram="cmd /c setup.bat"',
+        ';!@InstallEnd@!'
+      )
+    }
+    Set-Content -Path $cfg -Encoding ASCII -Value $cfgLines
+    cmd /c "copy /b `"$sfx`" + `"$cfg`" + `"$sz7file`" `"$exeOut`" >nul"
+    if ($LASTEXITCODE -ne 0) { throw 'copy /b sfx failed' }
+    Remove-Item $cfg -Force -ErrorAction SilentlyContinue
+    Write-Host ("  7-Zip SFX Setup.exe: {0:N0} MB" -f ((Get-Item $exeOut).Length / 1MB))
   }
-  Set-Content -Path $cfg -Encoding ASCII -Value $cfgLines
-  $exeOut = Join-Path $dist "$name-Setup.exe"
-  cmd /c "copy /b `"$sfx`" + `"$cfg`" + `"$sz7file`" `"$exeOut`" >nul"
-  if ($LASTEXITCODE -ne 0) { throw 'copy /b sfx failed' }
-  Remove-Item $cfg -Force -ErrorAction SilentlyContinue
-  Write-Host ("  {0:N0} MB" -f ((Get-Item $exeOut).Length / 1MB))
 }
 Write-Host "=== Done ==="
 Get-ChildItem $dist -File | Select-Object Name, @{N='MB';E={[math]::Round($_.Length/1MB,1)}} | Format-Table -AutoSize

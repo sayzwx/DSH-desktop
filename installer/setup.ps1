@@ -12,7 +12,8 @@ param(
   [string]$NodeVersion   = 'v22.23.2',
   [string]$NpmRegistry   = '',   # 例：https://registry.npmmirror.com（npm 网络受限时）
   [switch]$SkipHarness,
-  [switch]$EngineOnly     # 只安装/修复 harness 引擎（%LOCALAPPDATA%\DSH\harness + tools\node），不重装 app/快捷方式/配置
+  [switch]$EngineOnly,    # 只安装/修复 harness 引擎（%LOCALAPPDATA%\DSH\harness + tools\node），不重装 app/快捷方式/配置
+  [switch]$InnoSetup      # 由 Inno Setup 安装器调用：app/tools 已就位，跳过复制，仅做快捷方式/配置/引擎
 )
 $ErrorActionPreference = 'Stop'
 $Dest     = Join-Path $env:LOCALAPPDATA 'DSH'
@@ -175,19 +176,23 @@ New-Item -ItemType Directory -Path $Dest -Force | Out-Null
 
 if (-not $EngineOnly) {
   Write-Host ''
-  Write-Host '[1/3] Installing application ...'
-  Copy-Tree (Join-Path $Src 'app') (Join-Path $Dest 'app')
+  if (-not $InnoSetup) {
+    Write-Host '[1/3] Installing application ...'
+    Copy-Tree (Join-Path $Src 'app') (Join-Path $Dest 'app')
 
-  # 自带便携 Node（tools\node）随包分发：搬到 %LOCALAPPDATA%\DSH\tools\node，
-  # 引擎安装/启动都优先用它 → 本机不再需要任何 Node 环境
-  Write-Host ''
-  Write-Host 'Installing bundled Node.js (portable tools\node) ...'
-  $srcTools = Join-Path $Src 'tools'
-  $dstTools = Join-Path $Dest 'tools'
-  if (Test-Path (Join-Path $srcTools 'node\node.exe')) {
-    Copy-Tree (Join-Path $srcTools 'node') (Join-Path $dstTools 'node')
+    # 自带便携 Node（tools\node）随包分发：搬到 %LOCALAPPDATA%\DSH\tools\node，
+    # 引擎安装/启动都优先用它 → 本机不再需要任何 Node 环境
+    Write-Host ''
+    Write-Host 'Installing bundled Node.js (portable tools\node) ...'
+    $srcTools = Join-Path $Src 'tools'
+    $dstTools = Join-Path $Dest 'tools'
+    if (Test-Path (Join-Path $srcTools 'node\node.exe')) {
+      Copy-Tree (Join-Path $srcTools 'node') (Join-Path $dstTools 'node')
+    } else {
+      Write-Host '  WARN: 包内未发现 tools\node（旧版构建产物？），将回退为联网自动获取 Node（见 [3/3]）'
+    }
   } else {
-    Write-Host '  WARN: 包内未发现 tools\node（旧版构建产物？），将回退为联网自动获取 Node（见 [3/3]）'
+    Write-Host '[1/3] app / tools 已由 Inno Setup 就位，跳过复制'
   }
 
   # 应用装好立刻创建快捷方式（即使后续引擎拉取失败，快捷方式也已存在）

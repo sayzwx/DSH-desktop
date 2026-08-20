@@ -223,6 +223,8 @@ function autoInstallHarness() {
       else { pushLog('stderr', '[安装完成但未找到引擎，请查看上方日志]'); setState('stopped'); }
     }, 1500);
   };
+  // 源码安装是否可用：依赖同目录（打包后 %LOCALAPPDATA%\DSH\app\resources\app\installer\setup.ps1）
+  const installFromSourceAvailable = () => fs.existsSync(path.join(__dirname, 'installer', 'setup.ps1'));
   const installViaNpm = () => {
     pushLog('stdout', `[npm install -g @deepseek-ai/dsh (官方发行包)]`);
     const p = npmSpawn(['install', '-g', '@deepseek-ai/dsh'], { env: { ...process.env } });
@@ -252,10 +254,10 @@ function autoInstallHarness() {
     });
   };
   const proceed = () => {
-    // 环境已合格：npm 可用则发行包（快），否则回退源码安装
-    const npmOk = (() => { try { return npmSpawnSync(['--version']).status === 0; } catch { return false; } })();
-    if (npmOk) installViaNpm();
-    else installFromSource();
+    // 默认先尝试源码安装到「安装根目录」（%LOCALAPPDATA%\DSH\harness，与 app 同根，符合分发布局）；
+    // 源码安装失败或脚本缺失时，再回退到 npm 全局发行包（兜底，装到系统全局）。
+    if (!installFromSourceAvailable()) return installViaNpm();
+    installFromSource();
   };
 
   // 1) 环境体检

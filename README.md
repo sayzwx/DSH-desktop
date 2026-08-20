@@ -2,9 +2,14 @@
 
 基于 Electron 的 [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeek-Harness) 桌面端 UI——「深空观测站」。
 
-> 当前版本：**v0.4.0**
+> 当前版本：**v0.4.1**
 
 用一套星际主题界面把 harness 的 Web 服务（`pnpm dsh web`）封装成桌面应用：一键启停、实时日志、会话对话、使用统计、GitHub 仓库浏览，以及完整的**工作区**支持。
+
+## v0.4.1 更新日志
+
+- **全新一键安装向导（Inno Setup）**：`Setup.exe` 从"自解压压缩包"升级为真正的 Windows 安装向导——双击 → 下一步 → 自动安装到 `%LOCALAPPDATA%\DSH` → 自动拉取引擎 / 建快捷方式 / 启动应用。不再需要手动解压或运行 setup.bat。安装包内置便携 Node，目标机器无需任何 Node 环境。
+- **harness 引擎统一到安装根目录**：自动检测 / 下载的 harness 默认安装在 `%LOCALAPPDATA%\DSH\harness`（与 `app` 同根），不再散落到系统全局 npm。卸载仅移除 app/tools/config，会话与引擎数据保留。
 
 ## v0.4.0 更新日志
 
