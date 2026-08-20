@@ -176,6 +176,18 @@ stopBtn.addEventListener('click', async () => {
 });
 
 openWebBtn.addEventListener('click', () => api.openWeb());
+
+// 左侧边栏「插件市场」：打开 Harness Web 界面（设置 → 插件市场）；未运行时先提示启动
+const navMarket = document.getElementById('navMarket');
+if (navMarket) {
+  navMarket.addEventListener('click', () => {
+    if (state !== 'running') {
+      (window.__modal ? window.__modal.alert('请先启动 Harness，再打开插件市场。', '提示') : alert('请先启动 Harness，再打开插件市场。'));
+      return;
+    }
+    api.openWeb();
+  });
+}
 clearLogBtn.addEventListener('click', () => {
   logLines = [];
   logView.textContent = '';

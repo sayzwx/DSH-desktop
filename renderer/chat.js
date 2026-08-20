@@ -481,7 +481,8 @@
     if (preset === 'danger-full-access') {
       const ok = await themedConfirm(
         `切换到「全权限」将关闭文件操作的审批提示（sandbox: danger-full-access + approval: never）。\n确认切换当前会话的权限预设？`,
-        '权限风险确认'
+        '权限风险确认',
+        { okText: '启用全权限' }
       );
       if (!ok) return;
     }
@@ -1324,7 +1325,7 @@
 
   async function deleteSession(sessionId) {
     const s = sessions.find((x) => x.sessionId === sessionId);
-    const ok = await themedConfirm(`确定删除历史会话「${s?.title || sessionId}」？\n会话将从列表移除，无法在此恢复。`);
+    const ok = await themedConfirm(`确定删除历史会话「${s?.title || sessionId}」？\n会话将从列表移除，无法在此恢复。`, '删除会话', { okText: '确认删除' });
     if (!ok) return;
     const r = await api.chatArchiveSession(sessionId);
     if (!r.ok) {
@@ -1638,6 +1639,11 @@
         handleQuestionRequested({ rpcId: msg.rpcId, sessionId: p.sessionId, questions: p.questions || [] });
       } else if (p.type === 'question/resolved') {
         handleQuestionResolved({ sessionId: p.sessionId, questionRpcId: p.questionRpcId, outcome: p.outcome });
+      } else if (p.type === 'approval/requested') {
+        // 工具权限审批（approval/requested）：rpcId 在 server-request 帧顶层，桌面端必须弹出可见批准卡片
+        handleApprovalRequested({ rpcId: msg.rpcId, sessionId: p.sessionId, approvalId: p.approvalId, toolName: p.toolName, reason: p.reason });
+      } else if (p.type === 'approval/resolved') {
+        handleApprovalResolved({ sessionId: p.sessionId, approvalId: p.approvalId, outcome: p.outcome });
       }
     }
   }
@@ -1672,7 +1678,10 @@
     });
   }
 
-  const themedConfirm = (message, title = '确认操作') => openModal({ title, message, okText: '确认删除', danger: true });
+  // 通用确认框：okText 必须由调用方语义决定（删除类操作传「确认删除」，风险确认传对应动作），
+  // 不再全局硬编码为删除文案。
+  const themedConfirm = (message, title = '确认操作', { okText = '确定', danger = true } = {}) =>
+    openModal({ title, message, okText, danger });
   const themedAlert = (message, title = '提示') => openModal({ title, message, okText: '知道了', cancelText: '' });
   // 供 app.js / settings.js 复用
   window.__modal = {
@@ -1820,6 +1829,96 @@
     inner.appendChild(tag);
     el.classList.add('resolved');
     scrollBottom(false);
+  }
+
+  // ---------------- 工具权限审批（approval/requested 卡片） ----------------
+  // 引擎需要人工批准工具执行（如沙箱权限升级、危险命令）时推送 approval/requested；
+  // 桌面端必须弹出可见卡片：允许一次（allowed-once）/ 拒绝（rejected），避免审批在桌面端不可见。
+  const approvalCards = new Map(); // approvalId -> { rpcId, sessionId, approvalId, toolName, reason, el }
+
+  function handleApprovalRequested(a) {
+    if (!a || !a.rpcId || !a.approvalId) return;
+    const prev = approvalCards.get(a.approvalId);
+    if (prev && prev.el && prev.el.isConnected) removeApprovalCard(prev.el);
+    const card = {
+      rpcId: a.rpcId,
+      sessionId: a.sessionId,
+      approvalId: a.approvalId,
+      toolName: a.toolName || '未知工具',
+      reason: a.reason || '',
+      el: null,
+    };
+    approvalCards.set(a.approvalId, card);
+    // 只渲染当前会话；其它会话的未决审批在切过去时由 mux 重放重新送达
+    if (a.sessionId === currentSessionId) card.el = renderApprovalCard(card);
+  }
+
+  function handleApprovalResolved(p) {
+    const card = approvalCards.get(p.approvalId);
+    if (!card) return;
+    if (card.el && card.el.isConnected) markApprovalResolved(card.el, p.outcome || 'rejected');
+    approvalCards.delete(p.approvalId);
+  }
+
+  function removeApprovalCard(cardEl) {
+    if (cardEl && cardEl.isConnected) cardEl.remove();
+    scrollBottom(false);
+  }
+
+  function markApprovalResolved(el, outcome) {
+    if (!el || !el.isConnected) return;
+    const inner = el.querySelector('.question-card');
+    if (!inner) return;
+    const tag = document.createElement('div');
+    tag.className = 'q-resolved';
+    tag.textContent = outcome === 'allowed-once'
+      ? '🔐 已允许执行'
+      : outcome === 'cancelled' ? '🔐 审批已取消' : '🔐 已拒绝执行';
+    inner.innerHTML = '';
+    inner.appendChild(tag);
+    el.classList.add('resolved');
+    scrollBottom(false);
+  }
+
+  function renderApprovalCard(card) {
+    const el = document.createElement('div');
+    el.className = 'msg msg-question';
+    const inner = document.createElement('div');
+    inner.className = 'question-card';
+    el.appendChild(inner);
+    messagesEl.appendChild(el);
+    scrollBottom(true);
+
+    inner.innerHTML =
+      '<div class="q-title">🔐 权限审批</div>' +
+      `<div class="a-line">工具 <code>${esc(card.toolName)}</code> 请求执行，需要你批准。</div>` +
+      (card.reason ? `<div class="q-detail">${esc(card.reason)}</div>` : '') +
+      '<div class="q-actions">' +
+      '<button type="button" class="mini-btn q-cancel approve-reject">拒绝</button>' +
+      '<button type="button" class="primary-btn a-allow">允许一次</button>' +
+      '</div>';
+
+    inner.querySelector('.a-allow').addEventListener('click', async () => {
+      const btn = inner.querySelector('.a-allow');
+      btn.disabled = true;
+      btn.textContent = '提交中…';
+      try {
+        const r = await api.answerApproval(card.rpcId, card.sessionId, card.approvalId, 'allowed-once');
+        if (r.accepted !== true) {
+          btn.disabled = false;
+          btn.textContent = '允许一次';
+          inner.querySelector('.q-title').textContent = `🔐 提交失败${r.reason ? `（${r.reason}）` : (r.error ? `（${r.error}）` : '')}，请重试`;
+        }
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = '允许一次';
+        inner.querySelector('.q-title').textContent = `🔐 提交失败（${err.message || err}），请重试`;
+      }
+    });
+    inner.querySelector('.approve-reject').addEventListener('click', () => {
+      api.answerApproval(card.rpcId, card.sessionId, card.approvalId, 'rejected');
+    });
+    return el;
   }
 
   // ---------------- 输入框焦点保护 ----------------

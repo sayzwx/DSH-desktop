@@ -46,6 +46,8 @@ contextBridge.exposeInMainWorld('api', {
   pickFiles: () => ipcRenderer.invoke('chat:pickFiles'),
   chatAnswerQuestion: (rpcId, sessionId, answers) =>
     ipcRenderer.invoke('chat:answerQuestion', { rpcId, sessionId, answers }),
+  answerApproval: (rpcId, sessionId, approvalId, outcome) =>
+    ipcRenderer.invoke('chat:answerApproval', { rpcId, sessionId, approvalId, outcome }),
   chatAttachment: (sessionId, attachmentId) =>
     ipcRenderer.invoke('chat:attachment', { sessionId, attachmentId }),
   chatCancel: (sessionId) => ipcRenderer.invoke('chat:cancel', sessionId),

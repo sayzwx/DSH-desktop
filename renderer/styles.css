@@ -2402,6 +2402,11 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
 .q-resolved { color: var(--text-dim); font-size: 0.9em; line-height: 1.6; }
 .msg-question.resolved .question-card { opacity: 0.7; }
 
+/* ============ 权限审批卡片（approval/requested） ============ */
+.msg-question .question-card .a-line { color: var(--text); font-weight: 500; margin: 4px 0 6px; line-height: 1.6; }
+.msg-question .question-card .a-line code { color: var(--accent); font-weight: 600; }
+.msg-question .question-card .a-allow:disabled { opacity: 0.55; cursor: not-allowed; }
+
 /* ============ 文件附件（草稿 + 气泡 chip） ============ */
 #chatDrafts { display: flex; flex-wrap: wrap; gap: 6px; }
 .draft-file {

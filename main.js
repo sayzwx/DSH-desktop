@@ -1476,6 +1476,28 @@ ipcMain.handle('chat:answerQuestion', async (_e, { rpcId, sessionId, answers }) 
   }
 });
 
+// 工具权限审批（approval/requested 应答）：把渲染层决定作为 client-response 发给 harness
+ipcMain.handle('chat:answerApproval', async (_e, { rpcId, sessionId, approvalId, outcome }) => {
+  const body = {
+    type: 'client-response',
+    rpcId: String(rpcId),
+    result: { ok: true, value: { sessionId, approvalId, outcome } },
+  };
+  try {
+    const res = await fetch(`http://127.0.0.1:${PORT}/api/respond`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
+    });
+    const parsed = await res.json();
+    const accepted = parsed?.accepted === true;
+    return { ok: accepted, accepted, reason: parsed?.reason };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 // ---------- 软件更新（检查 sayzwx/DSH-desktop 的 GitHub Releases） ----------
 const APP_VERSION = (() => {
   try { return require('./package.json').version; } catch { return '0.0.0'; }

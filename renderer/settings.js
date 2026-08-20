@@ -225,7 +225,7 @@
       const rmBtn = card.querySelector('.mg-rm');
       if (rmBtn) rmBtn.addEventListener('click', async () => {
         const ok = window.__modal
-          ? await window.__modal.confirm(`确定删除提供商 <strong>${esc(provider)}</strong> 的整份配置与对应 API 密钥？\n（此操作不可撤销，将移除其全部自定义模型）`, '删除提供商')
+          ? await window.__modal.confirm(`确定删除提供商 <strong>${esc(provider)}</strong> 的整份配置与对应 API 密钥？\n（此操作不可撤销，将移除其全部自定义模型）`, '删除提供商', { okText: '确认删除' })
           : confirm(`确定删除提供商 ${provider} 的配置与密钥？`);
         if (!ok) return;
         rmBtn.disabled = true; rmBtn.textContent = '删除中…';
@@ -611,7 +611,7 @@
       const rmBtn = block.querySelector('.mg-rm');
       if (rmBtn) rmBtn.addEventListener('click', async () => {
         const ok = window.__modal
-          ? await window.__modal.confirm(`确定删除提供商 <strong>${esc(provider)}</strong> 的整份配置与对应 API 密钥？\n（此操作不可撤销，将移除其全部自定义模型）`, '删除提供商')
+          ? await window.__modal.confirm(`确定删除提供商 <strong>${esc(provider)}</strong> 的整份配置与对应 API 密钥？\n（此操作不可撤销，将移除其全部自定义模型）`, '删除提供商', { okText: '确认删除' })
           : confirm(`确定删除提供商 ${provider} 的配置与密钥？`);
         if (!ok) return;
         rmBtn.disabled = true; rmBtn.textContent = '删除中…';
