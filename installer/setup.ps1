@@ -146,6 +146,18 @@ if (-not $EngineOnly) {
   Write-Host '[1/3] Installing application ...'
   Copy-Tree (Join-Path $Src 'app') (Join-Path $Dest 'app')
 
+  # 自带便携 Node（tools\node）随包分发：搬到 %LOCALAPPDATA%\DSH\tools\node，
+  # 引擎安装/启动都优先用它 → 本机不再需要任何 Node 环境
+  Write-Host ''
+  Write-Host 'Installing bundled Node.js (portable tools\node) ...'
+  $srcTools = Join-Path $Src 'tools'
+  $dstTools = Join-Path $Dest 'tools'
+  if (Test-Path (Join-Path $srcTools 'node\node.exe')) {
+    Copy-Tree (Join-Path $srcTools 'node') (Join-Path $dstTools 'node')
+  } else {
+    Write-Host '  WARN: 包内未发现 tools\node（旧版构建产物？），将回退为联网自动获取 Node（见 [3/3]）'
+  }
+
   # 应用装好立刻创建快捷方式（即使后续引擎拉取失败，快捷方式也已存在）
   Write-Host ''
   Write-Host 'Creating shortcuts ...'

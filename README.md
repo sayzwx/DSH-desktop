@@ -106,7 +106,7 @@ GitHub Releases 直连在国内可能较慢，可用以下任一方式：
 
 - **应用内更新**：v0.2.1 起「设置 → 检查更新 → 下载」会自动按 **加速镜像优先 → GitHub 官方回源** 的顺序下载（内置 ghfast.top / ghproxy.net / gh-proxy.com / gh.ddlc.top），无需手动处理。
 - **手动下载加速链**：把官方下载链接前面拼上镜像前缀即可。例如官方链接
-  `https://github.com/sayzwx/DSH-desktop/releases/download/v0.2.1/DSH-Desktop-v0.2.1-Setup.exe`，
+  `https://github.com/sayzwx/DSH-desktop/releases/download/v0.3.0/DSH-Desktop-v0.3.0-Setup.exe`，
   加速后为
   `https://ghfast.top/https://github.com/sayzwx/DSH-desktop/releases/download/v0.2.1/DSH-Desktop-v0.2.1-Setup.exe`
   （`ghfast.top` / `ghproxy.net` / `gh-proxy.com` / `gh.ddlc.top` 均可，任选其一）。

@@ -2452,3 +2452,167 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
 }
 .settings-module-body #updateProgressText { margin-top: 6px; }
 
+/* ============================================================
+   星际插件市场（#page-market）
+   ============================================================ */
+.mk-head-actions { gap: 10px; align-items: center; }
+
+/* 全局横幅 */
+.mk-banner {
+  display: flex; align-items: center; gap: 12px;
+  margin: 10px 0; padding: 12px 16px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+}
+.mk-banner .mk-banner-icon { font-size: 1.2em; }
+.mk-banner span:nth-child(2) { flex: 1; line-height: 1.6; }
+
+/* 进度条 */
+.mk-progress {
+  margin: 10px 0; padding: 12px 16px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+}
+.mk-progress-info { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.mk-progress-label { flex: 1; color: var(--text); font-weight: 500; }
+.mk-track { height: 8px; border-radius: 999px; background: rgba(255,255,255,0.08); overflow: hidden; }
+.mk-fill { height: 100%; border-radius: 999px; background: var(--gradient-aurora); transition: width 0.3s var(--ease-light); }
+.mk-fill.indet { width: 40% !important; animation: mk-indet 1.2s ease-in-out infinite; }
+@keyframes mk-indet { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
+#mkProgressLine { margin-top: 6px; font-family: var(--font-mono); font-size: 0.85em; }
+
+/* 未就绪占位 */
+.mk-notready {
+  margin: 40px auto; text-align: center; color: var(--text);
+  max-width: 460px; padding: 32px;
+  border: 1px dashed var(--border-strong); border-radius: 16px;
+  background: var(--float);
+}
+.mk-notready p { margin: 8px 0; }
+
+/* 标签页 */
+.mk-tabs {
+  display: flex; gap: 6px; margin: 8px 0 0;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.mk-tab {
+  padding: 9px 18px; cursor: pointer;
+  background: transparent; border: none; border-bottom: 2px solid transparent;
+  color: var(--text-dim); font-size: 0.95em; font-family: var(--font-sans);
+}
+.mk-tab:hover { color: var(--text); }
+.mk-tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+
+.mk-body { padding-top: 14px; }
+.mk-panel { display: none; }
+.mk-panel.active { display: block; }
+
+/* 工具栏 */
+.mk-toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.mk-space { flex: 1; }
+.mk-search {
+  min-width: 260px; flex: 1;
+  background: var(--float); border: 1px solid var(--border-strong); border-radius: 10px;
+  color: var(--text); padding: 8px 12px; font-family: var(--font-sans); font-size: 0.95em;
+}
+.mk-search:focus { outline: none; border-color: var(--accent); }
+.mk-cats { display: flex; gap: 6px; flex-wrap: wrap; }
+.mk-cat {
+  padding: 5px 12px; border-radius: 999px; cursor: pointer;
+  background: var(--float); border: 1px solid var(--border);
+  color: var(--text-dim); font-size: 0.85em; font-family: var(--font-sans);
+}
+.mk-cat:hover { color: var(--text); border-color: var(--border-strong); }
+.mk-cat.active { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: 600; }
+
+/* 卡片网格 */
+.mk-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px; margin-top: 10px;
+}
+.mk-card {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 14px 16px; border-radius: 14px;
+  background: var(--panel); border: 1px solid var(--border);
+  transition: border-color 0.2s var(--ease-light), transform 0.2s var(--ease-light);
+}
+.mk-card:hover { border-color: var(--border-strong); transform: translateY(-2px); }
+.mk-card-head { display: flex; align-items: baseline; gap: 8px; }
+.mk-card-name { font-family: var(--font-mono); font-weight: 600; color: var(--text); font-size: 0.98em; word-break: break-all; }
+.mk-card-owner { color: var(--text-dim); font-size: 0.82em; font-family: var(--font-mono); }
+.mk-card-desc {
+  color: var(--text); opacity: 0.9; font-size: 0.9em; line-height: 1.55;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  flex: 1;
+}
+.mk-card-tags { display: flex; gap: 6px; flex-wrap: wrap; }
+.mk-badge {
+  padding: 2px 8px; border-radius: 999px; font-size: 0.75em;
+  background: var(--float); border: 1px solid var(--border); color: var(--text-dim);
+}
+.mk-badge-star { color: var(--accent-3); border-color: rgba(255,215,0,0.3); }
+.mk-badge-up { color: var(--ok); border-color: rgba(0,212,170,0.4); background: rgba(0,212,170,0.1); }
+.mk-badge-self { color: var(--accent-2); border-color: rgba(123,97,255,0.4); background: rgba(123,97,255,0.12); }
+.mk-card-actions { display: flex; align-items: center; gap: 8px; }
+.mk-installed-tag { color: var(--ok); font-size: 0.85em; }
+.mk-btn-ver { color: var(--text-dim); }
+
+/* 已安装列表行 */
+.mk-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.mk-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px; border-radius: 12px;
+  background: var(--panel); border: 1px solid var(--border);
+}
+.mk-row-main { flex: 1; min-width: 0; }
+.mk-row-name { font-family: var(--font-mono); font-weight: 600; color: var(--text); word-break: break-all; font-size: 0.95em; }
+.mk-row-meta { color: var(--text-dim); font-size: 0.82em; margin-top: 3px; font-family: var(--font-mono); }
+.mk-row-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+/* 状态 chip */
+.mk-state { padding: 1px 8px; border-radius: 999px; font-size: 0.75em; margin-left: 6px; }
+.mk-state-ok { color: var(--ok); background: rgba(0,212,170,0.12); }
+.mk-state-warn { color: var(--accent-3); background: rgba(255,215,0,0.12); }
+.mk-state-danger { color: var(--warn); background: rgba(255,108,51,0.12); }
+.mk-state-dim { color: var(--text-dim); background: rgba(107,123,141,0.12); }
+
+/* 启用/停用开关 */
+.mk-switch { position: relative; display: inline-block; width: 40px; height: 22px; flex-shrink: 0; }
+.mk-switch input { opacity: 0; width: 0; height: 0; }
+.mk-switch span {
+  position: absolute; inset: 0; cursor: pointer;
+  background: rgba(255,255,255,0.12); border-radius: 999px;
+  transition: background 0.2s var(--ease-light);
+}
+.mk-switch span::before {
+  content: ''; position: absolute; left: 3px; top: 3px; width: 16px; height: 16px;
+  border-radius: 50%; background: var(--starlight);
+  transition: transform 0.2s var(--ease-light);
+}
+.mk-switch input:checked + span { background: var(--accent); }
+.mk-switch input:checked + span::before { transform: translateX(18px); }
+
+/* 备份与恢复 */
+.mk-backup-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.mk-backup-card {
+  padding: 16px; border-radius: 14px;
+  background: var(--panel); border: 1px solid var(--border);
+}
+.mk-backup-title { font-weight: 600; color: var(--text); margin-bottom: 8px; }
+.mk-bk-field { margin: 8px 0; }
+.mk-bk-field input {
+  width: 100%; box-sizing: border-box;
+  background: var(--float); border: 1px solid var(--border-strong); border-radius: 8px;
+  color: var(--text); padding: 7px 10px; font-family: var(--font-sans); font-size: 0.9em;
+}
+.mk-bk-field input:focus { outline: none; border-color: var(--accent); }
+.mk-bk-actions { display: flex; gap: 8px; margin-top: 10px; }
+
+/* 空态 */
+.mk-grid .empty, .mk-list .empty { color: var(--text-dim); padding: 24px 0; text-align: center; grid-column: 1 / -1; }
+
+

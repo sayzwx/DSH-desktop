@@ -48,6 +48,12 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('chat:answerQuestion', { rpcId, sessionId, answers }),
   answerApproval: (rpcId, sessionId, approvalId, outcome) =>
     ipcRenderer.invoke('chat:answerApproval', { rpcId, sessionId, approvalId, outcome }),
+  marketGet: (path) => ipcRenderer.invoke('market:get', path),
+  marketPost: (path, body) => ipcRenderer.invoke('market:post', { path, body }),
+  marketBackup: () => ipcRenderer.invoke('market:backup'),
+  marketPickBackup: () => ipcRenderer.invoke('market:pickBackup'),
+  marketLogExport: () => ipcRenderer.invoke('market:logExport'),
+  relaunchApp: () => ipcRenderer.invoke('app:relaunch'),
   chatAttachment: (sessionId, attachmentId) =>
     ipcRenderer.invoke('chat:attachment', { sessionId, attachmentId }),
   chatCancel: (sessionId) => ipcRenderer.invoke('chat:cancel', sessionId),

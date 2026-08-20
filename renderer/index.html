@@ -46,7 +46,7 @@
       <button class="nav-btn" data-page="settings">
         <span class="nav-icon">☾</span><span class="nav-label">设置与主题</span>
       </button>
-      <button class="nav-btn" id="navMarket" title="打开插件市场（Harness Web 界面 → 设置 → 插件市场）">
+      <button class="nav-btn" id="navMarket" data-page="market" title="浏览 / 搜索 / 一键安装社区插件，管理已装插件与主题">
         <span class="nav-icon">🛒</span><span class="nav-label">插件市场</span>
       </button>
       <div class="nav-divider"></div>
@@ -353,6 +353,97 @@
 
       </div>
     </section>
+
+    <section class="page" id="page-market">
+      <div class="page-head">
+        <div class="cosmic-title">
+          <h1>🛒 星际插件市场</h1>
+          <p class="subtitle" id="mkSubtitle">浏览 / 搜索 / 一键安装社区插件 · 管理已装插件与主题 · 备份恢复配置</p>
+        </div>
+        <div class="head-actions mk-head-actions">
+          <span class="meta" id="mkMeta">连接市场服务…</span>
+          <select id="mkChannel" class="ct-inline-select" title="市场自身更新通道（仅影响市场更新）">
+            <option value="stable">Stable</option>
+            <option value="beta">Beta</option>
+            <option value="dev">Dev</option>
+          </select>
+          <button class="mini-btn" id="mkRefresh" type="button">刷新</button>
+          <button class="mini-btn" id="mkExportLog" type="button" title="导出市场运行日志">导出日志</button>
+        </div>
+      </div>
+
+      <div class="mk-progress" id="mkProgress" hidden>
+        <div class="mk-progress-info">
+          <span class="mk-progress-label" id="mkProgressLabel">操作进行中…</span>
+          <button class="mini-btn" id="mkCancel" type="button">取消</button>
+        </div>
+        <div class="mk-track"><div class="mk-fill" id="mkProgressFill"></div></div>
+        <div class="meta" id="mkProgressLine"></div>
+      </div>
+
+      <div class="mk-banner" id="mkRestartBanner" hidden>
+        <span class="mk-banner-icon">♻️</span>
+        <span id="mkRestartText">有插件变更需要重启桌面端才能生效。</span>
+        <button class="primary-btn" id="mkRestartApp" type="button">重启桌面端</button>
+      </div>
+
+      <div class="mk-banner" id="mkBuildBanner" hidden>
+        <span class="mk-banner-icon">⚙️</span>
+        <span id="mkBuildText">部分插件构建脚本被 pnpm 默认拦截。</span>
+        <button class="primary-btn" id="mkApproveBuilds" type="button">允许构建并重试</button>
+      </div>
+
+      <div class="mk-banner" id="mkErrorBanner" hidden>
+        <span class="mk-banner-icon">⚠️</span>
+        <span id="mkErrorText"></span>
+        <button class="mini-btn" id="mkErrorClose" type="button">✕</button>
+      </div>
+
+      <div class="mk-notready" id="mkNotReady" hidden>
+        <div class="chat-ph-icon">🛒</div>
+        <p>插件市场服务未就绪</p>
+        <p class="meta" id="mkNotReadyText">请先启动 Harness。</p>
+        <div class="row-actions" style="justify-content:center">
+          <button class="primary-btn" id="mkNotReadyRetry" type="button">重试</button>
+        </div>
+      </div>
+
+      <div class="mk-tabs" id="mkTabs" hidden>
+        <button class="mk-tab active" data-mktab="discover" type="button">发现</button>
+        <button class="mk-tab" data-mktab="installed" type="button">已安装</button>
+        <button class="mk-tab" data-mktab="themes" type="button">主题</button>
+        <button class="mk-tab" data-mktab="backup" type="button">备份与恢复</button>
+      </div>
+
+      <div class="mk-body" id="mkBody" hidden>
+        <div class="mk-panel active" data-mkpanel="discover">
+          <div class="mk-toolbar">
+            <input id="mkSearch" class="mk-search" type="text" placeholder="搜索插件：名称 / 作者 / 描述…" />
+            <div class="mk-cats" id="mkCats"></div>
+          </div>
+          <div class="meta" id="mkCount"></div>
+          <div class="mk-grid" id="mkGrid"></div>
+        </div>
+
+        <div class="mk-panel" data-mkpanel="installed">
+          <div class="mk-toolbar">
+            <span class="meta" id="mkInstCount"></span>
+            <div class="mk-space"></div>
+            <button class="mini-btn" id="mkUpdateAll" type="button">全部更新</button>
+          </div>
+          <div class="mk-list" id="mkInstList"></div>
+        </div>
+
+        <div class="mk-panel" data-mkpanel="themes">
+          <div class="meta" id="mkThemeNote" style="margin-bottom:12px"></div>
+          <div class="mk-grid" id="mkThemeGrid"></div>
+        </div>
+
+        <div class="mk-panel" data-mkpanel="backup">
+          <div class="mk-backup-cols" id="mkBackupCols"></div>
+        </div>
+      </div>
+    </section>
   </main>
 
   <footer class="statusbar">
@@ -386,5 +477,6 @@
   <script src="bg-moon.js"></script>
   <script src="app.js"></script>
   <script src="chat.js"></script>
+  <script src="market.js"></script>
 </body>
 </html>

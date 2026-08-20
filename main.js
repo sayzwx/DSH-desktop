@@ -23,6 +23,21 @@ function resolveNodeExe() {
   return 'node';
 }
 
+// 首启兜底：确保桌面快捷方式存在（安装器已创建；这里防止安装器异常/手改布局后缺失时补上）。
+// 仅打包形态（DSH.exe）执行，dev 运行（electron .）跳过。实现走独立 ps1 文件（-File 传参，
+// 避免 -Command 内嵌引号被 Windows 命令行解析破坏）。
+function ensureShortcut() {
+  if (process.platform !== 'win32' || process.defaultApp) return;
+  try {
+    const script = path.join(__dirname, 'ensure-shortcut.ps1');
+    if (!fs.existsSync(script)) return;
+    const exe = process.execPath;
+    const dir = path.dirname(exe);
+    const ico = path.join(dir, 'DSH.ico');
+    spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-ExePath', exe, '-WorkingDir', dir, '-IconPath', ico], { windowsHide: true, stdio: 'ignore' }).on('error', () => {});
+  } catch { /* 非 Windows/无桌面会话等环境忽略 */ }
+}
+
 // 当前实际使用的 harness 目录（用于插件目录扫描等路径逻辑；启动后动态刷新）
 let HARNESS_DIR = '';
 
@@ -1498,6 +1513,109 @@ ipcMain.handle('chat:answerApproval', async (_e, { rpcId, sessionId, approvalId,
   }
 });
 
+// ---------- 插件市场（原生桌面页面：直连本机 /dsh-market/* 路由） ----------
+// 变更路由要求 sameOrigin（Origin.host === Host）且 loopback 直连；Electron 主进程
+// fetch 需显式带 Origin 头，且绝不能带 x-forwarded-* 等转发头。
+const MARKET_BASE = () => `http://127.0.0.1:${PORT}`;
+
+async function marketFetchJSON(pathName, { method = 'GET', body } = {}) {
+  const headers = { accept: 'application/json' };
+  const opts = { method, headers };
+  if (method === 'POST') {
+    opts.headers['content-type'] = 'application/json';
+    opts.headers['origin'] = MARKET_BASE(); // sameOrigin 校验：new URL(origin).host === Host
+    opts.body = JSON.stringify(body || {});
+  }
+  const res = await fetch(`${MARKET_BASE()}${pathName}`, opts);
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  return { status: res.status, ok: res.ok, data };
+}
+
+function marketError(r) {
+  const d = r && r.data;
+  const msg = (d && (typeof d.error === 'string' ? d.error : d.message)) || String(d || '');
+  return (r.ok ? undefined : (msg || `HTTP ${r.status}`));
+}
+
+ipcMain.handle('market:get', async (_e, pathName) => {
+  try {
+    const r = await marketFetchJSON(String(pathName || ''));
+    return { ok: r.ok, status: r.status, data: r.data, error: marketError(r) };
+  } catch (err) {
+    return { ok: false, status: 0, error: err.message };
+  }
+});
+
+ipcMain.handle('market:post', async (_e, { path: pathName, body } = {}) => {
+  try {
+    const r = await marketFetchJSON(String(pathName || ''), { method: 'POST', body });
+    return { ok: r.ok, status: r.status, data: r.data, error: marketError(r) };
+  } catch (err) {
+    return { ok: false, status: 0, error: err.message };
+  }
+});
+
+ipcMain.handle('market:backup', async () => {
+  try {
+    const res = await fetch(`${MARKET_BASE()}/dsh-market/backup`, { headers: { accept: 'application/json' } });
+    if (!res.ok) { const t = await res.text().catch(() => ''); return { ok: false, error: `HTTP ${res.status} ${t.slice(0, 300)}` }; }
+    const data = await res.json();
+    const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const r = await dialog.showSaveDialog(mainWindow, {
+      title: '导出插件配置备份',
+      defaultPath: `dsh-market-backup-${ts}.json`,
+      filters: [{ name: 'JSON 备份', extensions: ['json'] }],
+    });
+    if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+    fs.writeFileSync(r.filePath, JSON.stringify(data, null, 2), 'utf8');
+    return { ok: true, path: r.filePath };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('market:pickBackup', async () => {
+  try {
+    const r = await dialog.showOpenDialog(mainWindow, {
+      title: '选择备份文件',
+      properties: ['openFile'],
+      filters: [{ name: 'JSON 备份', extensions: ['json'] }],
+    });
+    if (r.canceled || !r.filePaths || !r.filePaths[0]) return { ok: false, canceled: true };
+    const data = JSON.parse(fs.readFileSync(r.filePaths[0], 'utf8'));
+    return { ok: true, path: r.filePaths[0], data };
+  } catch (err) {
+    return { ok: false, error: `备份解析失败：${err.message}` };
+  }
+});
+
+ipcMain.handle('market:logExport', async () => {
+  try {
+    const res = await fetch(`${MARKET_BASE()}/dsh-market/logs`);
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const text = await res.text();
+    const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const r = await dialog.showSaveDialog(mainWindow, {
+      title: '导出市场日志',
+      defaultPath: `dsh-market-log-${ts}.txt`,
+      filters: [{ name: '文本日志', extensions: ['txt'] }],
+    });
+    if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+    fs.writeFileSync(r.filePath, text, 'utf8');
+    return { ok: true, path: r.filePath };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('app:relaunch', async () => {
+  app.relaunch();
+  app.exit(0);
+  return { ok: true };
+});
+
 // ---------- 软件更新（检查 sayzwx/DSH-desktop 的 GitHub Releases） ----------
 const APP_VERSION = (() => {
   try { return require('./package.json').version; } catch { return '0.0.0'; }
@@ -1664,6 +1782,7 @@ ipcMain.handle('updater:download', async (_e, url) => {
 
 app.whenReady().then(() => {
   createWindow();
+  ensureShortcut();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

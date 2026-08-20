@@ -1,11 +1,15 @@
-﻿# Build the DSH Desktop distributables (small installer style):
-#   DSH-Desktop-v<ver>.zip / -Setup.exe : small app package
-#   (desktop UI + Electron runtime + installer; ~220 MB, like any Electron app)
+﻿# Build the DSH Desktop distributables (installer style):
+#   DSH-Desktop-v<ver>.zip / -Setup.exe : app package incl. portable Node
+#   (desktop UI + Electron runtime + installer + bundled tools\node; ~250 MB)
 #   The heavy harness engine is NOT packaged: setup.exe pulls it from the official
 #   deepseek-ai/DeepSeek-Harness source at install time (see installer\setup.ps1).
-# Run:  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-dist.ps1 [-Version 0.2.1] [-Root C:\path\to\repo]
+#   Bundled portable Node: shipped inside the package and installed to
+#   %LOCALAPPDATA%\DSH\tools\node — the desktop and the engine use it first,
+#   so the target machine needs NO system Node at all.
+# Run:  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-dist.ps1 [-Version 0.2.1] [-NodeVersion v22.23.2] [-Root C:\path\to\repo]
 param(
   [string]$Version = '0.2.1',
+  [string]$NodeVersion = 'v22.23.2',  # 自带便携 Node 版本（随包分发，替换本机 Node 依赖）
   [string]$Root = ''   # 仓库根目录，默认取脚本所在目录的上级（scripts 的父目录）
 )
 $ErrorActionPreference = 'Stop'
@@ -31,6 +35,33 @@ function Make-Zip([string]$stage, [string]$zip) {
   Write-Host "zipping -> $zip ..."
   Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal -Force
   Write-Host ("  {0:N0} MB" -f ((Get-Item $zip).Length / 1MB))
+}
+
+# 获取/复用便携 Node（nodejs.org 官方 zip；构建机缓存到 dist\node-cache，
+# 内容打进安装包 tools\node —— 目标机器不再需要本机 Node 环境）
+function Get-BundledNode([string]$nodeVer) {
+  $cache = Join-Path $dist 'node-cache'
+  $cacheExe = Join-Path $cache "node-$nodeVer-win-x64\node.exe"
+  if (-not (Test-Path $cacheExe)) {
+    $zip = Join-Path $cache "node-$nodeVer-win-x64.zip"
+    New-Item -ItemType Directory -Path $cache -Force | Out-Null
+    if (-not (Test-Path $zip)) {
+      Write-Host "downloading Node.js $nodeVer (official nodejs.org, ~30 MB, cached at dist\node-cache) ..."
+      $url = "https://nodejs.org/dist/$nodeVer/node-$nodeVer-win-x64.zip"
+      $i = 0; $ok = $false
+      do {
+        try { Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing; $ok = $true }
+        catch {
+          $i++
+          if ($i -ge 3) { throw "Node.js 下载失败: $($_.Exception.Message)" }
+          Write-Host "  attempt $i failed, retrying ..."; Start-Sleep -Seconds 3
+        }
+      } while (-not $ok)
+    }
+    Write-Host "extracting portable Node $nodeVer ..."
+    Expand-Archive -Path $zip -DestinationPath $cache -Force
+  }
+  return $cacheExe
 }
 
 # ---------- 1. small app package ----------
@@ -79,6 +110,16 @@ Copy-Item (Join-Path $root 'installer\setup.bat')    (Join-Path $stage 'setup.ba
 Copy-Item (Join-Path $root 'installer\check-env.ps1') (Join-Path $stage 'check-env.ps1') -Force
 # 说明文档（中文名）随构建复制；编码由 scripts\check-encoding.ps1 统一把关
 Get-ChildItem (Join-Path $root 'installer') -Filter '*.txt' | Copy-Item -Destination $stage -Force
+
+# 自带便携 Node：装进安装包 tools\node —— 安装器会搬到 %LOCALAPPDATA%\DSH\tools\node，
+# 桌面端启动与引擎安装都优先使用它，本机不需要任何 Node 环境
+Write-Host '=== Bundling portable Node.js (tools\\node) ==='
+$nodeExe = Get-BundledNode $NodeVersion
+$stageTools = Join-Path $stage 'tools\node'
+robocopy (Split-Path -Parent $nodeExe) $stageTools /E /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
+if ($LASTEXITCODE -ge 8) { throw 'staging bundled node failed' }
+Write-Host ("  bundled Node: {0:N0} MB" -f ((Get-ChildItem $stageTools -Recurse -File | Measure-Object Length -Sum).Sum / 1MB))
+
 $zip = Join-Path $dist "$name.zip"
 Make-Zip $stage $zip
 
@@ -101,12 +142,30 @@ if (-not $sz7 -or -not (Test-Path $sfx)) {
   Pop-Location
   if ($LASTEXITCODE -ne 0) { throw '7z failed' }
   $cfg = Join-Path $dist 'sfx-config.txt'
-  Set-Content -Path $cfg -Encoding ASCII -Value @(
+  # InstallPath 指向固定安装暂存目录（%%LOCALAPPDATA%% 需要 7-Zip 21.02+；
+  #   旧版 7-Zip 回退为解压到当前目录的旧行为）。GUIMode=1 提供安装器风格的进度对话框。
+  $cfgLines = @(
     ';!@Install@!UTF-8!',
     'Title="DSH Desktop Installer"',
+    'GUIMode="1"',
     'RunProgram="setup.bat"',
     ';!@InstallEnd@!'
   )
+  $verLine = & $sz7 i 2>$null | Select-String '^7-Zip (\d+)\.' | Select-Object -First 1
+  $szMajor = if ($verLine -and $verLine.Matches.Count -gt 0) { [int]$verLine.Matches[0].Groups[1].Value } else { 0 }
+  if ($szMajor -ge 21) {
+    $cfgLines = @(
+      ';!@Install@!UTF-8!',
+      'Title="DSH Desktop Installer"',
+      'GUIMode="1"',
+      'InstallPath="%%LOCALAPPDATA%%\DSH\stage"',
+      'RunProgram="setup.bat"',
+      ';!@InstallEnd@!'
+    )
+  } else {
+    Write-Host 'WARN: 7-Zip < 21.02，SFX 不支持 InstallPath 环境变量展开，回退为解压到当前目录'
+  }
+  Set-Content -Path $cfg -Encoding ASCII -Value $cfgLines
   $exeOut = Join-Path $dist "$name-Setup.exe"
   cmd /c "copy /b `"$sfx`" + `"$cfg`" + `"$sz7file`" `"$exeOut`" >nul"
   if ($LASTEXITCODE -ne 0) { throw 'copy /b sfx failed' }

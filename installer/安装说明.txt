@@ -1,25 +1,31 @@
-﻿# DSH Desktop 一键安装包（v0.2.1 · 小体积安装器模式：引擎安装时从官方拉取）
+﻿# DSH Desktop 一键安装包（安装器模式：自带便携 Node，引擎安装时从官方拉取）
 
 ## 这是什么
-DSH 桌面端 UI 应用安装包（含 Electron 运行时，约 220MB，和普通 Electron 应用一样）。
-重型的 DeepSeek Harness 引擎**不打包进安装包**：安装时自动从 DeepSeek 官方源拉取
-（官方源码 + 官方 Node 运行时），并在本机完成依赖安装与构建（一次性，需数分钟）。
+DSH 桌面端 UI 应用安装包（含 Electron 运行时 + 便携版 Node.js，约 250MB，和普通 Electron 应用一样）。
+- **自带便携 Node**（`tools\node`）：应用启动与 Harness 引擎安装/运行都优先使用它，
+  目标机器**不需要安装任何 Node.js 环境**。
+- 重型的 DeepSeek Harness 引擎**不打包进安装包**：安装时自动从 DeepSeek 官方源拉取
+  （官方源码），并使用自带 Node 在本机完成依赖安装与构建（一次性，需数分钟）。
 
 ## 安装方法（二选一）
-- 方式 A：下载 `DSH-Desktop-v...-Setup.exe`，双击运行（自解压后自动执行 setup.bat）
+- 方式 A：下载 `DSH-Desktop-v...-Setup.exe`，双击运行。这是真正的安装器：
+  自动解压到 `%LOCALAPPDATA%\DSH\stage` → 弹出安装进度 → 自动执行安装脚本 →
+  完成后自动清理 `stage` 临时目录并启动应用。
 - 方式 B：解压 `DSH-Desktop-v...-Setup.exe` 同级的 zip，双击里面的 `setup.bat`
 
 安装器会：
 1. 安装桌面端应用到 `%LOCALAPPDATA%\DSH\app`
-2. 写入纯净默认的 Harness 配置（`~/.dsh/settings.yaml`，仅首次，已有配置不覆盖；
+2. 安装自带便携 Node 到 `%LOCALAPPDATA%\DSH\tools\node`（无需系统 Node）
+3. **自动创建桌面快捷方式「DSH」**（桌面 + 开始菜单；应用首启还会兜底补齐）
+4. 写入纯净默认的 Harness 配置（`~/.dsh/settings.yaml`，仅首次，已有配置不覆盖；
    **不包含任何开发者个人配置 / 密钥**）
-3. 环境预检（`check-env.ps1`）：检查 CPU 架构、网络可达、磁盘空间与 Node.js 版本
-4. 拉取 Harness 引擎到 `%LOCALAPPDATA%\DSH\harness`：
-   - Node.js 缺失或版本过低时**优先用 winget 安装最新 LTS**，winget 不可用则下载官方
-     nodejs.org 的 Node → 下载 DeepSeek-Harness 官方源码
-     （github.com/deepseek-ai，zip 优先、git clone 兜底）→ pnpm 安装依赖 + 构建
+5. 环境预检（`check-env.ps1`）：检查 CPU 架构、网络可达、磁盘空间
+6. 拉取 Harness 引擎到 `%LOCALAPPDATA%\DSH\harness`：
+   - 使用自带 Node（缺失时才回退 winget 或下载官方 nodejs.org 的 Node）
+   - 下载 DeepSeek-Harness 官方源码（github.com/deepseek-ai，zip 优先、git clone 兜底）
+     → pnpm 安装依赖 + 构建
    - 需要网络：github.com / nodejs.org / npm registry
-5. 创建桌面/开始菜单快捷方式「DSH」并启动
+7. 启动 DSH Desktop
 
 ## 网络受限（如国内无法访问 npm registry）
 安装时给 setup 传镜像参数，例如：
