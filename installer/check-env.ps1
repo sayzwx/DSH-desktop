@@ -101,15 +101,36 @@ function Install-NodeViaWinget {
 
 # ---------- 回退：下载官方 Node zip 到 %LOCALAPPDATA%\DSH\tools\node ----------
 function Install-NodeFallback {
-  $url = "https://nodejs.org/dist/${NodeVersion}/node-${NodeVersion}-win-x64.zip"
-  Write-Log "winget 不可用/失败，回退下载官方 Node.js ${NodeVersion}（约 30 MB）..."
+  Write-Log "winget 不可用/失败，回退下载官方 Node.js ${NodeVersion}（约 30 MB，多镜像尝试）..."
   $tmpZip = Join-Path $env:TEMP "node-${NodeVersion}-win-x64.zip"
   $tmpDir = Join-Path $env:TEMP "node-${NodeVersion}-extract"
-  $i = 0; $ok = $false
-  do {
-    try { Invoke-WebRequest -Uri $url -OutFile $tmpZip -UseBasicParsing; $ok = $true }
-    catch { $i++; if ($i -ge 3) { throw "Node.js 下载失败: $($_.Exception.Message)" }; Write-Log "  第 ${i} 次失败，重试..."; Start-Sleep -Seconds 3 }
-  } while (-not $ok)
+  $candidates = @(
+    "https://nodejs.org/dist/${NodeVersion}/node-${NodeVersion}-win-x64.zip",
+    "https://registry.npmmirror.com/-/binary/node/${NodeVersion}/node-${NodeVersion}-win-x64.zip",
+    "https://mirrors.cloud.tencent.com/nodejs-release/${NodeVersion}/node-${NodeVersion}-win-x64.zip",
+    "https://mirrors.huaweicloud.com/nodejs/${NodeVersion}/node-${NodeVersion}-win-x64.zip"
+  )
+  $got = $false
+  foreach ($u in $candidates) {
+    Write-Log "  尝试下载: ${u}"
+    $i = 0; $ok = $false
+    do {
+      try { Invoke-WebRequest -Uri $u -OutFile $tmpZip -UseBasicParsing -TimeoutSec 120; $ok = $true }
+      catch { $i++; if ($i -ge 2) { break }; Write-Log "  第 ${i} 次失败，重试..."; Start-Sleep -Seconds 3 }
+    } while (-not $ok)
+    if ($ok -and (Test-Path $tmpZip) -and (Get-Item $tmpZip).Length -gt 100000) { $got = $true; break }
+    Remove-Item $tmpZip -Force -ErrorAction SilentlyContinue
+  }
+  if (-not $got) {
+    Write-Log ''
+    Write-Log '  ================= 手动下载 Node.js ================='
+    Write-Log "  下载地址（任一可用）："
+    Write-Log "    官方: https://nodejs.org/dist/${NodeVersion}/node-${NodeVersion}-win-x64.zip"
+    Write-Log "    镜像: https://registry.npmmirror.com/-/binary/node/${NodeVersion}/node-${NodeVersion}-win-x64.zip"
+    Write-Log "  下载后解压，把 node-${NodeVersion}-win-x64 目录放到 $(Join-Path $Dest 'tools\node')"
+    Write-Log '  =================================================='
+    throw "Node.js 下载失败（多镜像均失败），请按上方指引手动下载。"
+  }
   Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
   Expand-Archive -Path $tmpZip -DestinationPath $tmpDir -Force
   New-Item -ItemType Directory -Path (Join-Path $Dest 'tools') -Force | Out-Null

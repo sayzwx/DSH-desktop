@@ -54,18 +54,34 @@ function Get-NodeExe {
       }
     }
   }
-  $url = "https://nodejs.org/dist/$NodeVersion/node-$NodeVersion-win-x64.zip"
-  Write-Host "  falling back to download Node.js $NodeVersion (official nodejs.org, ~30 MB) ..."
+  $nodeZipCandidates = @(
+    "https://nodejs.org/dist/$NodeVersion/node-$NodeVersion-win-x64.zip",   # 官方
+    "https://registry.npmmirror.com/-/binary/node/$NodeVersion/node-$NodeVersion-win-x64.zip",  # 国内镜像(npmmirror)
+    "https://mirrors.cloud.tencent.com/nodejs-release/$NodeVersion/node-$NodeVersion-win-x64.zip", # 腾讯云镜像
+    "https://mirrors.huaweicloud.com/nodejs/$NodeVersion/node-$NodeVersion-win-x64.zip"            # 华为云镜像
+  )
   $tmpZip = Join-Path $env:TEMP "node-$NodeVersion-win-x64.zip"
-  $i = 0; $ok = $false
-  do {
-    try { Invoke-WebRequest -Uri $url -OutFile $tmpZip -UseBasicParsing; $ok = $true }
-    catch {
-      $i++
-      if ($i -ge 3) { throw "Node.js 下载失败: $($_.Exception.Message)" }
-      Write-Host "  attempt $i failed, retrying ..."; Start-Sleep -Seconds 3
-    }
-  } while (-not $ok)
+  $got = $false
+  foreach ($u in $nodeZipCandidates) {
+    Write-Host "  downloading Node.js $NodeVersion from $u ..."
+    $i = 0; $ok = $false
+    do {
+      try { Invoke-WebRequest -Uri $u -OutFile $tmpZip -UseBasicParsing -TimeoutSec 120; $ok = $true }
+      catch { $i++; if ($i -ge 2) { break }; Write-Host "    attempt $i failed, retrying ..."; Start-Sleep -Seconds 3 }
+    } while (-not $ok)
+    if ($ok -and (Test-Path $tmpZip) -and (Get-Item $tmpZip).Length -gt 100000) { $got = $true; break }
+    Remove-Item $tmpZip -Force -ErrorAction SilentlyContinue
+  }
+  if (-not $got) {
+    Write-Host ''
+    Write-Host '  ================= 手动下载 Node.js ================='
+    Write-Host "  下载地址（任一）："
+    Write-Host "    官方: https://nodejs.org/dist/$NodeVersion/node-$NodeVersion-win-x64.zip"
+    Write-Host "    镜像: https://registry.npmmirror.com/-/binary/node/$NodeVersion/node-$NodeVersion-win-x64.zip"
+    Write-Host "  下载后解压，把 node-$NodeVersion-win-x64 整个目录放到: $(Join-Path $Dest 'tools\node')"
+    Write-Host '  =================================================='
+    throw "Node.js 下载失败（多镜像均失败），请按上方指引手动下载。"
+  }
   $tmpDir = Join-Path $env:TEMP "node-$NodeVersion-extract"
   Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
   Expand-Archive -Path $tmpZip -DestinationPath $tmpDir -Force
@@ -96,16 +112,30 @@ function Install-Harness([string]$NodeExe) {
     $got = $true
     $build = $true
   } else {
-    # 1) 官方源码：zip 优先，git clone 兜底
+    # 1) 官方源码：zip 优先（GitHub 官方直链 + 国内加速镜像多跳），git clone 兜底
+    #    GitHub 源码下载在国内不稳定 → 依次尝试官方与 ghfast.top / ghproxy.net 等镜像，
+    #    任一成功即可；全部失败给出手动下载指引。
     $tmpZip = Join-Path $env:TEMP 'dsh-harness-src.zip'
     $tmpDir = Join-Path $env:TEMP 'dsh-harness-src'
-    $i = 0
-    do {
-      try { Invoke-WebRequest -Uri $HarnessSource -OutFile $tmpZip -UseBasicParsing; $got = $true }
-      catch { $i++; if ($i -ge 3) { break }; Write-Host "  zip attempt $i failed, retrying ..."; Start-Sleep -Seconds 3 }
-    } while (-not $got)
+    $srcCandidates = @(
+      $HarnessSource,                                                      # 官方
+      "https://ghfast.top/$HarnessSource",                                  # 镜像1
+      "https://ghproxy.net/$HarnessSource",                                 # 镜像2
+      "https://gh-proxy.com/$HarnessSource",                                # 镜像3
+      "https://gh.ddlc.top/$HarnessSource"                                  # 镜像4
+    )
+    foreach ($srcUrl in $srcCandidates) {
+      Write-Host "  downloading harness source: $srcUrl"
+      $i = 0; $ok = $false
+      do {
+        try { Invoke-WebRequest -Uri $srcUrl -OutFile $tmpZip -UseBasicParsing -TimeoutSec 120; $ok = $true }
+        catch { $i++; if ($i -ge 2) { break }; Write-Host "    attempt $i failed, retrying ..."; Start-Sleep -Seconds 3 }
+      } while (-not $ok)
+      if ($ok -and (Test-Path $tmpZip) -and (Get-Item $tmpZip).Length -gt 10000) { $got = $true; break }
+      Remove-Item $tmpZip -Force -ErrorAction SilentlyContinue
+    }
     if ($got) {
-      Write-Host '  extracting DeepSeek-Harness source (official github.com) ...'
+      Write-Host '  extracting DeepSeek-Harness source ...'
       Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
       Expand-Archive -Path $tmpZip -DestinationPath $tmpDir -Force
       $inner = Get-ChildItem $tmpDir -Directory | Select-Object -First 1
@@ -116,9 +146,21 @@ function Install-Harness([string]$NodeExe) {
       Remove-Item $tmpZip -Force -ErrorAction SilentlyContinue
       Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
     } else {
-      Write-Host '  zip 下载失败，尝试 git clone（需要本机装有 git）...'
+      Write-Host '  zip 下载失败（官方与镜像均失败），尝试 git clone（需要本机装有 git）...'
       $git = (Get-Command git -ErrorAction SilentlyContinue).Source
-      if (-not $git) { throw '官方源码下载失败且未安装 git：请检查网络（需可访问 github.com），或用 -SkipHarness 后手动配置引擎。' }
+      if (-not $git) {
+        # 给出手动下载指引，而不是直接失败
+        Write-Host ''
+        Write-Host '  ================= 手动下载 Harness 引擎 ================='
+        Write-Host "  引擎源码包下载地址（任一可用）："
+        Write-Host "    官方: $HarnessSource"
+        Write-Host '    镜像: https://ghfast.top/<上面官方地址>'
+        Write-Host '    镜像: https://ghproxy.net/<上面官方地址>'
+        Write-Host "  下载后解压，把整个仓库根目录放到: $harnessDir"
+        Write-Host '  （也可直接 git clone --depth 1 --branch {0} {1} "{2}"）' -f $HarnessBranch, $HarnessGit, $harnessDir
+        Write-Host '  ========================================================'
+        throw '官方源码下载失败且未安装 git：请按上面的指引手动下载引擎（或用 -SkipHarness 后手动配置）。'
+      }
       New-Item -ItemType Directory -Path $harnessDir -Force | Out-Null
       & $git clone --depth 1 --branch $HarnessBranch $HarnessGit $harnessDir
       if ($LASTEXITCODE -ne 0) { throw 'git clone 失败：请检查网络或 git 配置。' }
@@ -140,6 +182,16 @@ function Install-Harness([string]$NodeExe) {
     Set-Content -Path $pnpmShim -Encoding Ascii -Value $shimContent
   }
   if ($NpmRegistry) { $env:COREPACK_NPM_REGISTRY = $NpmRegistry }
+  # npm registry 候选：用户指定 > 国内镜像(npmmirror 等) > 官方。pnpm install 失败时依次换源重试。
+  # ERR_MODULE_NOT_FOUND（@deepseek-ai/dsh-app-boot 缺失）正是依赖下载不完整所致，多源重试可显著缓解。
+  $npmRegistries = @()
+  if ($NpmRegistry) { $npmRegistries += $NpmRegistry }
+  $npmRegistries += @(
+    'https://registry.npmmirror.com',   # 国内镜像1
+    'https://registry.npmjs.org',        # 官方回源
+    'https://mirrors.cloud.tencent.com/npm/',  # 镜像2
+    'https://registry.npmmirror.com'     # 重复兜底
+  )
   Push-Location $harnessDir
   try {
     if (-not (Test-Path $corepack)) { throw '未找到 corepack（Node 目录缺 corepack.cmd）' }
@@ -147,9 +199,26 @@ function Install-Harness([string]$NodeExe) {
     $env:PATH = "$nodeDir;$oldPath"
     try {
       if ($build) {
-        Write-Host '  installing dependencies (pnpm install, 一次性, 可能数百 MB) ...'
-        & $corepack pnpm install --frozen-lockfile
-        if ($LASTEXITCODE -ne 0) { throw 'pnpm install 失败：检查网络/npm 源；npm 源受限时加参数 -NpmRegistry https://registry.npmmirror.com' }
+        $installOk = $false
+        foreach ($reg in $npmRegistries) {
+          Write-Host "  installing dependencies via $reg (pnpm install, 一次性, 可能数百 MB) ..."
+          $env:COREPACK_NPM_REGISTRY = $reg
+          & $corepack pnpm install --frozen-lockfile
+          if ($LASTEXITCODE -eq 0) { $installOk = $true; break }
+          Write-Host "    该镜像失败 (code=$LASTEXITCODE)，尝试下一个镜像 ..."
+        }
+        if (-not $installOk) {
+          Write-Host ''
+          Write-Host '  ================= 依赖安装失败 → 手动下载指引 ================='
+          Write-Host '  pnpm install 在多个 npm 镜像均失败（网络/磁盘/代理问题）。请人工处理：'
+          Write-Host ('  1) 打开 `{0}` 目录' -f $harnessDir)
+          Write-Host '  2) 运行：corepack pnpm install --frozen-lockfile'
+          Write-Host '     若慢/失败，先执行：$env:COREPACK_NPM_REGISTRY="https://registry.npmmirror.com"'
+          Write-Host '  3) 再运行：corepack pnpm build'
+          Write-Host '  4) 完成后重启本安装器（引擎已存在会跳过源码下载，直接补构建）'
+          Write-Host '  ==========================================================='
+          throw 'pnpm install 失败：多镜像均失败，请按上方指引手动安装依赖。'
+        }
         Write-Host '  building harness (pnpm build, 一次性, 需数分钟) ...'
         & $corepack pnpm build
         if ($LASTEXITCODE -ne 0) { throw 'pnpm build 失败' }
@@ -260,6 +329,24 @@ if ($harnessReady) {
   $nodeExe = Get-NodeExe
   Install-Harness -NodeExe $nodeExe
   Write-Host '  harness engine installed (from official DeepSeek-Harness).'
+}
+
+# 插件市场（dshmarket）随引擎固定安装：引擎就绪后自动 `dsh plugin --profile web add dshmarket`。
+# 幂等：已安装则跳过；失败不阻塞安装（可下次启动时由应用内补装）。
+$dshCli = Join-Path $harnessDir 'apps\cli\lib\bin.js'
+$nodeExe = Join-Path $Dest 'tools\node\node.exe'
+if ((Test-Path $dshCli) -and (Test-Path $nodeExe)) {
+  Write-Host '  installing plugin market (dshmarket) ...'
+  Push-Location $harnessDir
+  try {
+    & $nodeExe $dshCli plugin --profile web add dshmarket 2>&1 | ForEach-Object { Write-Host "    $_" }
+    if ($LASTEXITCODE -eq 0) { Write-Host '  plugin market installed.' }
+    else { Write-Host '  WARN: dshmarket 安装未成功（可下次启动自动补装，不影响其余安装）' }
+  } catch {
+    Write-Host "  WARN: dshmarket 安装异常: $($_.Exception.Message)"
+  } finally { Pop-Location }
+} else {
+  Write-Host '  WARN: 引擎 CLI 未就绪，跳过插件市场安装（启动后应用内自动补装）'
 }
 
 if (-not $EngineOnly) {

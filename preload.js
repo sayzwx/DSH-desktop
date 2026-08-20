@@ -53,6 +53,8 @@ contextBridge.exposeInMainWorld('api', {
   marketBackup: () => ipcRenderer.invoke('market:backup'),
   marketPickBackup: () => ipcRenderer.invoke('market:pickBackup'),
   marketLogExport: () => ipcRenderer.invoke('market:logExport'),
+  marketEnsure: () => ipcRenderer.invoke('market:ensure'),
+  marketCheck: () => ipcRenderer.invoke('market:check'),
   relaunchApp: () => ipcRenderer.invoke('app:relaunch'),
   chatAttachment: (sessionId, attachmentId) =>
     ipcRenderer.invoke('chat:attachment', { sessionId, attachmentId }),

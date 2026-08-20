@@ -166,7 +166,19 @@
     if (!harnessRunning) return { ok: false, reason: '请先启动 Harness 引擎。' };
     if (!r.ok) {
       if (r.status === 404) {
-        return { ok: false, reason: '市场服务未随引擎加载 —— 需重启桌面端，让「dshmarket」插件组入引擎（设置 → 插件市场应已可用）。' };
+        // 市场插件未随引擎加载（dshmarket 缺失）→ 自动补装，装完需重启桌面端让引擎重新组合
+        try {
+          const ensure = await api.marketEnsure();
+          if (ensure && ensure.ok) {
+            return { ok: false, reason: '已自动安装市场插件（dshmarket）——请重启桌面端让引擎重新加载后使用。' };
+          }
+          if (ensure && ensure.needsRestart) {
+            return { ok: false, reason: '市场插件已安装，需要重启桌面端后生效（设置 → 插件市场）。' };
+          }
+          return { ok: false, reason: '市场插件自动安装未完成：' + ((ensure && ensure.error) || '未知原因') + '，请检查网络后重试。' };
+        } catch (e) {
+          return { ok: false, reason: '市场插件自动安装出错：' + (e && e.message) };
+        }
       }
       return { ok: false, reason: '市场服务应答异常：' + (r.error || ('HTTP ' + r.status)) };
     }

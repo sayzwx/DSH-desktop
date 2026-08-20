@@ -225,16 +225,32 @@ function autoInstallHarness() {
   };
   // 源码安装是否可用：依赖同目录（打包后 %LOCALAPPDATA%\DSH\app\resources\app\installer\setup.ps1）
   const installFromSourceAvailable = () => fs.existsSync(path.join(__dirname, 'installer', 'setup.ps1'));
+  const NPM_MIRRORS = [
+    'https://registry.npmmirror.com',
+    'https://mirrors.cloud.tencent.com/npm/',
+    'https://registry.npmjs.org',
+  ];
   const installViaNpm = () => {
-    pushLog('stdout', `[npm install -g @deepseek-ai/dsh (官方发行包)]`);
-    const p = npmSpawn(['install', '-g', '@deepseek-ai/dsh'], { env: { ...process.env } });
-    p.stdout.on('data', (d) => pushLog('stdout', d.toString()));
-    p.stderr.on('data', (d) => pushLog('stderr', d.toString()));
-    p.on('error', (err) => { pushLog('stderr', `[npm 启动失败] ${err.message}`); installFromSource(); });
-    p.on('close', (code) => {
-      if (code === 0) afterInstall();
-      else { pushLog('stderr', `[npm 安装退出 code=${code}，回退官方源码安装…]`); installFromSource(); }
-    });
+    // 逐镜像尝试，任一成功即继续
+    let mirrorIndex = 0;
+    const tryMirror = () => {
+      if (mirrorIndex >= NPM_MIRRORS.length) {
+        pushLog('stderr', '[npm 多镜像均失败，回退官方源码安装…]');
+        installFromSource();
+        return;
+      }
+      const reg = NPM_MIRRORS[mirrorIndex++];
+      pushLog('stdout', `[npm install -g @deepseek-ai/dsh (镜像 ${reg})]`);
+      const p = npmSpawn(['install', '-g', '@deepseek-ai/dsh', '--registry', reg], { env: { ...process.env } });
+      p.stdout.on('data', (d) => pushLog('stdout', d.toString()));
+      p.stderr.on('data', (d) => pushLog('stderr', d.toString()));
+      p.on('error', () => tryMirror());
+      p.on('close', (code) => {
+        if (code === 0) afterInstall();
+        else { pushLog('stderr', `[npm 镜像 ${reg} 失败 code=${code}，尝试下一个镜像…]`); tryMirror(); }
+      });
+    };
+    tryMirror();
   };
   const installFromSource = () => {
     const script = path.join(__dirname, 'installer', 'setup.ps1');
@@ -243,7 +259,7 @@ function autoInstallHarness() {
       setState('stopped');
       return;
     }
-    pushLog('stdout', `[运行引擎安装: ${script} -EngineOnly（下载官方源码+Node，首次需数分钟）]`);
+    pushLog('stdout', `[运行引擎安装: ${script} -EngineOnly（下载官方源码+Node，多镜像自动重试，首次需数分钟）]`);
     const p = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-EngineOnly'], { windowsHide: true, env: { ...process.env } });
     p.stdout.on('data', (d) => pushLog('stdout', d.toString()));
     p.stderr.on('data', (d) => pushLog('stderr', d.toString()));
@@ -1709,6 +1725,37 @@ ipcMain.handle('market:logExport', async () => {
     return { ok: false, error: err.message };
   }
 });
+
+// ---------- 插件市场自动补装：探测 /dsh-market/status，缺失则用捆绑 node 安装 dshmarket ----------
+// 幂等：已就绪直接返回；未就绪则跑 `node <harness>/apps/cli/lib/bin.js plugin --profile web add dshmarket`，
+// 完成后提示重启让引擎重新组合。
+async function marketStatusOk() {
+  try {
+    const r = await marketFetchJSON('/dsh-market/status');
+    return r.ok && r.status === 200;
+  } catch { return false; }
+}
+ipcMain.handle('market:ensure', async () => {
+  if (await marketStatusOk()) return { ok: true, status: 'ready' };
+  const nodeExe = resolveNodeExe();
+  const harness = discoverHarness();
+  const cli = harness && harness.dir ? path.join(harness.dir, 'apps', 'cli', 'lib', 'bin.js') : null;
+  if (!cli || !fs.existsSync(cli)) {
+    return { ok: false, status: 'no-harness', error: '未定位到 harness 引擎，无法安装市场插件' };
+  }
+  pushLog('stdout', '[市场] 未检测到 dshmarket 插件，自动安装…');
+  const p = spawn(nodeExe, [cli, 'plugin', '--profile', 'web', 'add', 'dshmarket'], { cwd: harness.dir, windowsHide: true, env: { ...process.env } });
+  p.stdout.on('data', (d) => pushLog('stdout', d.toString()));
+  p.stderr.on('data', (d) => pushLog('stderr', d.toString()));
+  return new Promise((resolve) => {
+    p.on('error', (err) => resolve({ ok: false, status: 'install-error', error: err.message }));
+    p.on('close', async (code) => {
+      const ready = await marketStatusOk();
+      resolve({ ok: ready, status: ready ? 'ready' : `install-finished-${code}`, code, needsRestart: !ready });
+    });
+  });
+});
+ipcMain.handle('market:check', async () => ({ ok: true, ready: await marketStatusOk() }));
 
 ipcMain.handle('app:relaunch', async () => {
   app.relaunch();
