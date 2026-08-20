@@ -1356,6 +1356,97 @@ async function skillsFor(sessionId) {
   return { ok: true, skills: r.value?.skills || [] };
 }
 
+// ---------- OpenCode Zen 免费模型 UA 代理（解决免费模型 429 FreeUsageLimitError） ----------
+// 根因：OpenCode Zen 免费模型 deepseek-v4-flash-free 做客户端识别，带 deepseek-harness 归因 UA
+//       会返回 429；UA=opencode/0.1.0 则正常。DSH 强制附加归因 UA 且不允许 settings 覆盖，
+//       因此提供本地 UA 重写代理（config/zen-ua-proxy.mjs → 127.0.0.1:8790 → opencode.ai/zen）。
+let zenUaProc = null;
+const ZEN_UA_SCRIPT = path.join(__dirname, 'config', 'zen-ua-proxy.mjs');
+const ZEN_UA_HOME_SCRIPT = path.join(DSH_HOME, 'zen-ua-proxy.mjs');
+const ZEN_UA_PORT = 8790;
+
+function zenUaIsUp() {
+  return !!zenUaProc && !zenUaProc.killed;
+}
+function zenUaInstallTemplate() {
+  // 把内置模板拷贝到 ~/.dsh/zen-ua-proxy.mjs（供开机自启与 setup.ps1 共用）
+  try {
+    fs.mkdirSync(DSH_HOME, { recursive: true });
+    if (fs.existsSync(ZEN_UA_SCRIPT)) fs.copyFileSync(ZEN_UA_SCRIPT, ZEN_UA_HOME_SCRIPT);
+  } catch { /* ignore */ }
+  return ZEN_UA_HOME_SCRIPT;
+}
+function startZenUaProxy() {
+  if (zenUaIsUp()) return { ok: true, running: true };
+  const script = fs.existsSync(ZEN_UA_HOME_SCRIPT) ? ZEN_UA_HOME_SCRIPT : (fs.existsSync(ZEN_UA_SCRIPT) ? ZEN_UA_SCRIPT : null);
+  if (!script) return { ok: false, error: '缺少 zen-ua-proxy.mjs 模板' };
+  const nodeExe = resolveNodeExe();
+  zenUaProc = spawn(nodeExe, [script, String(ZEN_UA_PORT)], { windowsHide: true, env: { ...process.env } });
+  zenUaProc.stdout?.on('data', (d) => pushLog('stdout', `[zen-ua] ${d.toString()}`));
+  zenUaProc.stderr?.on('data', (d) => pushLog('stderr', `[zen-ua] ${d.toString()}`));
+  zenUaProc.on('exit', () => { zenUaProc = null; });
+  return { ok: true, running: true };
+}
+function stopZenUaProxy() {
+  if (zenUaProc && !zenUaProc.killed) { try { zenUaProc.kill(); } catch { /* ignore */ } }
+  zenUaProc = null;
+  return { ok: true };
+}
+// 写开机自启（与 setup.ps1 一致：Startup 目录放 vbs）
+function installZenUaAutostart() {
+  try {
+    const script = zenUaInstallTemplate();
+    const startup = path.join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
+    fs.mkdirSync(startup, { recursive: true });
+    // 用启动时解析的 node（优先 %LOCALAPPDATA%\DSH\tools\node，其次系统 node）
+    const nodeExe = resolveNodeExe();
+    const vbsLine = `WshShell.Run """${nodeExe}"" ""${script}""", 0, False`;
+    fs.writeFileSync(path.join(DSH_HOME, 'zen-ua-proxy.vbs'), [
+      "' DSH zen-ua-proxy (OpenCode Zen UA rewrite) logon autostart.",
+      'Set WshShell = CreateObject("WScript.Shell")',
+      vbsLine,
+    ].join('\r\n'), 'ascii');
+    fs.copyFileSync(path.join(DSH_HOME, 'zen-ua-proxy.vbs'), path.join(startup, 'zen-ua-proxy.vbs'));
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+ipcMain.handle('zenua:enable', async () => {
+  // 1) 安装模板到 ~/.dsh 并写开机自启
+  zenUaInstallTemplate();
+  installZenUaAutostart();
+  // 2) 启动本地代理
+  const started = startZenUaProxy();
+  // 3) 把 opencode provider 的 baseURL 指向代理（写 llm-pi-ai settings）
+  try {
+    const d = await rpcCall('settings.describe', {});
+    const ns = d.ok ? (d.value?.namespaces || []).find((n) => n.ns === 'llm-pi-ai') : null;
+    const mut = await rpcCall('settings.mutate', {
+      ns: 'llm-pi-ai',
+      ops: [
+        { op: 'set', path: ['providers', 'opencode', 'baseURL'], value: `http://127.0.0.1:${ZEN_UA_PORT}/v1` },
+        { op: 'set', path: ['providers', 'opencode', 'apiKeyEnv'], value: 'OPENCODE_API_KEY' },
+      ],
+      expectedRevision: ns ? ns.revision : undefined,
+    });
+    return { ok: started.ok && mut.ok, proxy: started, settings: mut.ok, error: started.error || (mut.ok ? undefined : mut.error?.message) };
+  } catch (e) {
+    return { ok: false, proxy: started, error: e.message };
+  }
+});
+ipcMain.handle('zenua:status', () => ({ ok: true, running: zenUaIsUp(), port: ZEN_UA_PORT, script: ZEN_UA_HOME_SCRIPT }));
+ipcMain.handle('zenua:disable', async () => {
+  // 移除 baseURL（回到提供方默认）
+  try {
+    const d = await rpcCall('settings.describe', {});
+    const ns = d.ok ? (d.value?.namespaces || []).find((n) => n.ns === 'llm-pi-ai') : null;
+    await rpcCall('settings.mutate', { ns: 'llm-pi-ai', ops: [{ op: 'unset', path: ['providers', 'opencode', 'baseURL'] }], expectedRevision: ns ? ns.revision : undefined });
+  } catch { /* ignore */ }
+  stopZenUaProxy();
+  return { ok: true };
+});
+
 // ---------- 凭据（API Key）IPC ----------
 function loadDotEnv() {
   const file = path.join(DSH_HOME, '.env');
@@ -1623,6 +1714,32 @@ ipcMain.handle('app:relaunch', async () => {
   return { ok: true };
 });
 
+// ---------- 更新安装：下载完成后运行 Setup.exe 自解压安装，随后重启 ----------
+// Setup.exe 为 7-Zip SFX：自解压到 %LOCALAPPDATA%\DSH\stage 并执行 setup.bat，
+// setup.bat → setup.ps1 覆盖安装到同一 %LOCALAPPDATA%\DSH（配置/引擎/数据都在）。
+// 这里把下载好的 exe 交给 shell 启动（不加参数，SFX 自带 RunProgram=setup.bat），
+// 应用立即退出，让出文件锁；setup 完成后由 setup.ps1 启动新版 DSH。
+let updaterInstalling = false;
+ipcMain.handle('updater:install', async (_e, exePath) => {
+  if (!exePath) return { ok: false, error: '缺少安装包路径' };
+  if (!fs.existsSync(exePath)) return { ok: false, error: `安装包不存在: ${exePath}` };
+  try {
+    updaterInstalling = true;
+    // windowsHide:false 但 SFX 自带 GUI（GUIMode=1）；detached 让安装器独立于本进程存活
+    const child = spawn(exePath, [], { detached: true, stdio: 'ignore', windowsHide: false });
+    child.unref();
+    pushLog('stdout', `[更新] 已启动安装器: ${exePath}`);
+    // 等 1.2s 让安装器接管后再退出本进程（避免过早关窗导致安装器未被接受）
+    setTimeout(() => {
+      if (harnessProc) { try { harnessProc.kill(); } catch { /* ignore */ } }
+      app.exit(0);
+    }, 1200);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 // ---------- 软件更新（检查 sayzwx/DSH-desktop 的 GitHub Releases） ----------
 const APP_VERSION = (() => {
   try { return require('./package.json').version; } catch { return '0.0.0'; }
@@ -1745,6 +1862,9 @@ ipcMain.handle('updater:download', async (_e, url) => {
   const dir = path.join(os.tmpdir(), 'DSH-update');
   fs.mkdirSync(dir, { recursive: true });
   const target = path.join(dir, name);
+  let startedAt = 0;
+  let lastAt = 0;
+  let lastRecv = 0;
 
   // 下载候选序列：加速镜像优先，最后回源 GitHub（国内环境经镜像明显更快）
   const candidates = mirrorOf(url, { github: url });
@@ -1753,7 +1873,8 @@ ipcMain.handle('updater:download', async (_e, url) => {
     const cand = candidates[i];
     const via = cand !== url ? `（镜像 ${i + 1}/${candidates.length - 1}）` : '（GitHub 官方）';
     pushLog('stdout', `[下载] ${name} ${via}: ${cand}`);
-    sendUpdaterProgress({ received: 0, total: 0, pct: 0, phase: 'downloading', name, via });
+    sendUpdaterProgress({ received: 0, total: 0, pct: 0, phase: 'downloading', name, via, speed: 0 });
+    startedAt = Date.now(); lastAt = Date.now(); lastRecv = 0;
     try {
       const res = await net.fetch(cand, { headers: { 'User-Agent': 'dsh-desktop' }, signal: AbortSignal.timeout(120000) });
       if (!res.ok) {
@@ -1769,11 +1890,28 @@ ipcMain.handle('updater:download', async (_e, url) => {
         if (done) break;
         received += value.byteLength;
         ws.write(value);
-        sendUpdaterProgress({ received, total, pct: total ? Math.min(100, Math.round((received / total) * 100)) : 0, phase: 'downloading', name, via });
+        const now = Date.now();
+        const dt = now - lastAt;
+        if (dt >= 250) {
+          const speed = ((received - lastRecv) / 1024 / 1024) / (dt / 1000); // MB/s
+          lastAt = now; lastRecv = received;
+          sendUpdaterProgress({
+            received, total, pct: total ? Math.min(100, Math.round((received / total) * 100)) : 0,
+            phase: 'downloading', name, via, speed,
+          });
+        }
       }
       ws.end();
       await new Promise((resolve) => ws.on('finish', resolve));
-      sendUpdaterProgress({ received, total, pct: 100, phase: 'done', name, via });
+      const speedAvg = startedAt ? (received / 1024 / 1024) / ((Date.now() - startedAt) / 1000) : 0;
+      sendUpdaterProgress({ received, total, pct: 100, phase: 'done', name, via, speed: speedAvg });
+      // 完成后：若为 Setup.exe 则自动触发安装并重启（正常软件更新体验），否则打开所在目录
+      const isExe = /\.exe$/i.test(name);
+      pushLog('stdout', `[下载] 完成 ${name} (${(received / 1048576).toFixed(1)} MB, ${speedAvg.toFixed(2)} MB/s)；${isExe ? '即将安装并重启' : '已就绪'}`);
+      if (isExe) {
+        sendUpdaterResult({ ok: true, path: target, name, via, autoInstall: true });
+        return { ok: true, path: target, name, via, autoInstall: true };
+      }
       try { shell.openPath(target); } catch { /* ignore */ }
       sendUpdaterResult({ ok: true, path: target, name, via });
       return { ok: true, path: target, name, via };
@@ -1796,6 +1934,8 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  if (harnessProc) stopHarness();
+  // 正在执行更新安装时：不杀 harness（harness 是安装器 setup.ps1 会用到的引擎，
+  // 且安装完成后 setup.ps1 会启动新版 DSH），直接退出应用进程
+  if (!updaterInstalling && harnessProc) stopHarness();
   app.quit();
 });

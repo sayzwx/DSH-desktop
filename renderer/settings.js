@@ -156,12 +156,36 @@
     renderProviderSelect(sel);
     renderModelGroups();
     const active = providersAll.filter((p) => p.active).length;
+    const anyKey = Object.values(credStates || {}).some((c) => c && c.configured);
     stats.innerHTML =
       `<span class="pstat">${providersAll.length} 个提供商可选</span>` +
       `<span class="pstat ok">${active} 个已启用</span>` +
       `<span class="pstat">${modelGroupsAll.length} 个有可用模型</span>` +
       (modelFailures.length ? `<span class="pstat warn">${modelFailures.length} 个加载失败</span>` : '') +
       (settingsWritable ? '' : '<span class="pstat warn">设置只读</span>');
+    renderFirstRunGuide(active, anyKey, modelGroupsAll.length);
+  }
+
+  // 无任何已配置密钥/模型时的引导说明（首次使用引导）
+  function renderFirstRunGuide(activeCount, anyKey, modelGroupCount) {
+    const list = $('#modelGroupList');
+    if (!list) return;
+    if (activeCount > 0 || anyKey || modelGroupCount > 0) return; // 已配置过，不需要引导
+    const guide = document.createElement('div');
+    guide.className = 'model-first-run';
+    guide.innerHTML = `
+      <div class="mfr-title">🚀 首次使用：先配置一个模型</div>
+      <div class="mfr-desc">还没有可用的模型。在上方选择一个提供商，粘贴 API 密钥即可启用；</div>
+      <div class="mfr-desc">或者直接使用 <strong>DeepSeek 官方 API</strong>（官方模型路由最稳定）。</div>
+      <div class="mfr-actions">
+        <button type="button" class="mini-btn mfr-goto-deepseek">配置 DeepSeek 官方 API</button>
+        <button type="button" class="mini-btn mfr-open-select">查看其它提供商</button>
+      </div>`;
+    list.prepend(guide);
+    const ds = guide.querySelector('.mfr-goto-deepseek');
+    if (ds) ds.addEventListener('click', () => { $('#providerSelect').value = 'deepseek-official'; renderModelGroups(); });
+    const os = guide.querySelector('.mfr-open-select');
+    if (os) os.addEventListener('click', () => { $('#providerSelect').focus(); (window.__modal || { alert: () => {} }).alert('请从下拉框选择提供商（如 opencode / anthropic / openai 等），粘贴对应 API 密钥即可。', '选择提供商'); });
   }
 
   /** 下拉选项文案：带模型数 / 失败标记，让 37 个提供商一目了然。 */
@@ -222,6 +246,8 @@
         renderProviderEditor(editBox, provider);
       });
 
+      wireZenUaBtn(card, provider);
+
       const rmBtn = card.querySelector('.mg-rm');
       if (rmBtn) rmBtn.addEventListener('click', async () => {
         const ok = window.__modal
@@ -279,8 +305,10 @@
       </div>
       <div class="mg-key-actions">
         <button class="mini-btn mg-edit" type="button" title="修改 API 类型 / baseURL / 模型列表">编辑提供商配置</button>
+        ${p.provider === 'opencode' || p.provider === 'opencode-go' ? '<button class="mini-btn mg-zenua" type="button" title="OpenCode Zen 免费模型需本地 UA 代理（否则 429 FreeUsageLimitError）">⚡ 免费模型（UA 代理）</button>' : ''}
         ${removable ? '<button class="mini-btn danger-btn mg-rm" type="button">删除提供商</button>' : ''}
       </div>
+      <div class="mg-zenua-box" hidden></div>
       <div class="mg-edit-box" hidden></div>
       <div class="mg-key-msg"></div>
     </div>`;
@@ -545,6 +573,71 @@
     return { close: () => { editBox.hidden = true; editBox.innerHTML = ''; } };
   }
 
+  // OpenCode Zen 免费模型 UA 代理（429 FreeUsageLimitError 处理）
+  function wireZenUaBtn(scope, provider) {
+    if (!provider || !['opencode', 'opencode-go'].includes(provider)) return;
+    const btn = scope.querySelector('.mg-zenua');
+    const box = scope.querySelector('.mg-zenua-box');
+    if (!btn || !box || box.dataset.wired) return;
+    box.dataset.wired = '1';
+
+    const renderState = async () => {
+      const st = await api.zenuaStatus();
+      const running = !!(st && st.ok && st.running);
+      box.innerHTML = `
+        <div class="mg-zenua-note">
+          ⚡ OpenCode Zen 免费模型（<code>deepseek-v4-flash-free</code>）需要本地 UA 代理：
+          DSH 的归因 User-Agent 会被识别为"非官方客户端"而返回 <code>429 FreeUsageLimitError</code>。
+          启用后会用本地代理（127.0.0.1:${st && st.port ? st.port : 8790}）改写成 <code>opencode/0.1.0</code>，
+          并把 opencode 路由的 baseURL 指向该代理。
+          ${running ? '<span class="mg-zenua-state on">● 代理运行中</span>' : '<span class="mg-zenua-state off">○ 代理未运行</span>'}
+        </div>
+        <div class="mg-zenua-actions">
+          ${running
+            ? '<button class="mini-btn mg-zenua-disable" type="button">停用 UA 代理</button>'
+            : '<button class="mini-btn primary-btn mg-zenua-enable" type="button">启用 UA 代理（免费模型）</button>'}
+        </div>
+        <div class="mg-zenua-msg"></div>`;
+      box.hidden = false;
+      const en = box.querySelector('.mg-zenua-enable');
+      const de = box.querySelector('.mg-zenua-disable');
+      const msg = box.querySelector('.mg-zenua-msg');
+      if (en) en.addEventListener('click', async () => {
+        en.disabled = true; en.textContent = '启用中…';
+        try {
+          const r = await api.zenuaEnable();
+          msg.textContent = (r && r.ok)
+            ? (r.settings ? '已启用并通过代理改写 UA，保存 key 后即可使用免费模型。' : '代理已启动，但写入 opencode baseURL 可能失败：' + (r.error || 'unknown'))
+            : '启用失败：' + ((r && r.error) || 'unknown');
+          msg.className = 'mg-zenua-msg' + (r && r.ok ? ' ok' : ' bad');
+          renderState();
+        } catch (e) {
+          msg.textContent = '启用出错：' + (e.message || String(e)); msg.className = 'mg-zenua-msg bad';
+        } finally {
+          en.disabled = false; en.textContent = '启用 UA 代理（免费模型）';
+        }
+      });
+      if (de) de.addEventListener('click', async () => {
+        de.disabled = true; de.textContent = '停用中…';
+        try {
+          const r = await api.zenuaDisable();
+          msg.textContent = (r && r.ok) ? '已停用 UA 代理并恢复 opencode 默认地址。' : '停用失败：' + ((r && r.error) || 'unknown');
+          msg.className = 'mg-zenua-msg' + (r && r.ok ? ' ok' : ' bad');
+          renderState();
+        } catch (e) {
+          msg.textContent = '停用出错：' + (e.message || String(e)); msg.className = 'mg-zenua-msg bad';
+        } finally {
+          de.disabled = false; de.textContent = '停用 UA 代理';
+        }
+      });
+    };
+
+    btn.addEventListener('click', () => {
+      if (box.hidden) renderState();
+      else box.hidden = true;
+    });
+  }
+
   function wireKeyEditors() {
     document.querySelectorAll('.mg-key').forEach((block) => {
       if (block.dataset.wired) return;
@@ -606,6 +699,8 @@
           renderProviderEditor(editBox, provider);
         });
       }
+
+      wireZenUaBtn(block, provider);
 
       // ---- 删除整个提供商（仅 user 层新增的可删） ----
       const rmBtn = block.querySelector('.mg-rm');
@@ -1088,8 +1183,9 @@
       if (!r.ok && !r.opened) (window.__modal ? window.__modal.alert('打开配置文档失败：' + (r.error || 'unknown'), '提示') : alert('打开配置文档失败：' + (r.error || 'unknown')));
     });
 
-    // ---- 软件更新（检查 sayzwx/DSH-desktop 的 GitHub Releases，一键下载） ----
+    // ---- 软件更新（检查 sayzwx/DSH-desktop 的 GitHub Releases，下载→应用自动安装重启） ----
     let updateInfo = null;
+    let updateDownloading = false;
     const updateCurrentVer = $('#updateCurrentVer');
     const updateStatus = $('#updateStatus');
     const updateActionRow = $('#updateActionRow');
@@ -1100,24 +1196,47 @@
     const checkUpdateBtn = $('#checkUpdateBtn');
     const downloadUpdateBtn = $('#downloadUpdateBtn');
     const renderMb = (n) => (n ? `${Math.round(n / 1048576)} MB` : '—');
+    const renderSpeed = (mb) => (mb != null ? `${mb.toFixed(2)} MB/s` : '');
 
     api.onUpdaterProgress((p) => {
       updateProgressFill.style.width = `${p.pct || 0}%`;
       const recv = renderMb(p.received || 0);
       const total = renderMb(p.total || 0);
+      const speed = renderSpeed(p.speed);
       updateProgressText.textContent = p.phase === 'done'
-        ? `下载完成：${recv}`
-        : `正在下载 ${p.name || ''} … ${recv} / ${total}（${p.pct || 0}%）`;
+        ? `下载完成：${recv}${speed ? ` · ${speed}` : ''}`
+        : total && total !== '—'
+          ? `正在下载 ${p.name || ''} … ${recv} / ${total}（${p.pct || 0}%）${speed ? ` · ${speed}` : ''}${p.via ? '\n' + p.via : ''}`
+          : `正在下载 ${p.name || ''} … ${recv}${speed ? ` · ${speed}` : ''}${p.via ? `（${p.via}）` : ''}`;
     });
     api.onUpdaterResult((p) => {
-      downloadUpdateBtn.disabled = false;
+      updateDownloading = false;
       updateProgressWrap.hidden = false;
+      if (p.ok && p.autoInstall && p.path) {
+        updateStatus.textContent = `安装包已就绪，正在安装并重启…`;
+        downloadUpdateBtn.disabled = true;
+        downloadUpdateBtn.textContent = '正在安装…';
+        api.installUpdate(p.path).then((r) => {
+          if (r && r.ok) {
+            // 主进程稍后自动退出并拉起安装器
+            updateStatus.textContent = '正在安装新版并重启，请稍候…';
+          } else {
+            updateStatus.textContent = `启动安装失败：${(r && r.error) || 'unknown'}（安装包已保存在 ${p.path}，可手动运行）`;
+            downloadUpdateBtn.disabled = false;
+            downloadUpdateBtn.textContent = '一键更新';
+          }
+        });
+        return;
+      }
+      downloadUpdateBtn.disabled = false;
+      downloadUpdateBtn.textContent = '一键更新';
       updateStatus.textContent = p.ok
-        ? `更新下载完成：${p.name}（已打开安装包/所在位置，重启后生效）。`
+        ? `更新下载完成：${p.name}（已打开所在位置，重启后生效）。`
         : `更新失败：${p.error || '未知错误'}`;
     });
 
     checkUpdateBtn.addEventListener('click', async () => {
+      if (updateDownloading) { updateStatus.textContent = '正在下载更新，请等待完成…'; return; }
       checkUpdateBtn.disabled = true;
       updateStatus.textContent = '正在检查更新…';
       updateActionRow.hidden = true;
@@ -1140,19 +1259,28 @@
     });
 
     downloadUpdateBtn.addEventListener('click', async () => {
+      if (updateDownloading) {
+        updateStatus.textContent = '正在下载更新，请勿重复点击…';
+        return;
+      }
       const assets = (updateInfo && updateInfo.assets) || [];
-      const pick = assets.find((a) => /\.(exe|zip)$/i.test(a.name || '')) || assets[0];
+      // 优先选 Setup.exe（支持自动安装重启），没有则 zip
+      const pick = assets.find((a) => /\.exe$/i.test(a.name || '')) || assets.find((a) => /\.zip$/i.test(a.name || '')) || assets[0];
       if (!pick || !pick.url) {
         updateStatus.textContent = '该发布里没有可下载的安装包附件。';
         return;
       }
+      updateDownloading = true;
       downloadUpdateBtn.disabled = true;
+      downloadUpdateBtn.textContent = '正在下载…';
       updateProgressWrap.hidden = false;
       updateProgressFill.style.width = '0%';
       updateProgressText.textContent = '开始下载…';
       const r = await api.downloadUpdate(pick.url);
       if (!r || !r.ok) {
+        updateDownloading = false;
         downloadUpdateBtn.disabled = false;
+        downloadUpdateBtn.textContent = '一键更新';
         updateStatus.textContent = `下载失败：${(r && r.error) || 'unknown'}`;
       }
     });

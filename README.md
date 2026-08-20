@@ -2,9 +2,25 @@
 
 基于 Electron 的 [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeek-Harness) 桌面端 UI——「深空观测站」。
 
-> 当前版本：**v0.2.1**
+> 当前版本：**v0.4.0**
 
 用一套星际主题界面把 harness 的 Web 服务（`pnpm dsh web`）封装成桌面应用：一键启停、实时日志、会话对话、使用统计、GitHub 仓库浏览，以及完整的**工作区**支持。
+
+## v0.4.0 更新日志
+
+- **更新即装即用**：应用内"一键更新"下载完成后，自动运行安装包、关闭旧版并启动新版——不再需要手动解压 / 删除旧目录；配置、会话、引擎均保留在 `%LOCALAPPDATA%\DSH` 与 `~/.dsh`，更新后重启即最新版。
+- **首次配置引导**：检测到未配置任何模型 / API 密钥时，模型配置页顶部显示引导卡（推荐 DeepSeek 官方 API，并提供其它提供商入口），引导用户先配置模型。
+- **OpenCode Zen 免费模型 429 修复**：设置 → 模型 → opencode 卡片新增「⚡ 免费模型（UA 代理）」——一键启用本地 UA 重写代理（127.0.0.1:8790 → opencode.ai/zen,UA 改写为 opencode/0.1.0），解决免费模型 deepseek-v4-flash-free 因 DSH 归因 UA 被识别为非官方客户端而返回 429 FreeUsageLimitError 的问题；同时写好开机自启。
+- **更新体验**：更新进度显示实时速率（MB/s）与命中镜像；下载期间按钮禁用，防止重复点击重置下载；优先走国内加速镜像（ghfast.top / ghproxy.net / gh-proxy.com / gh.ddlc.top），失败自动回源 GitHub。
+- **打包修复**：`frontend dist not built` 已修复——引擎安装时使用捆绑 Node 工具链并强制校验 web 前端 dist，缺失自动补 `build:web`；安装包内置便携 Node，目标机器无需任何 Node 环境。
+
+## v0.3.1 更新日志
+
+- **原生插件市场**：发现 / 已安装 / 主题 / 备份恢复页面
+- **会话压缩插件**：compact 工具 + 输入栏压缩按钮
+- **权限审批卡片可视化**、修复确认弹窗按钮文案
+- **引擎升级 rc.8**、捆绑工具链构建、强制校验 web 前端 dist
+- **修复**：`.env` 不再注入 harness 环境（凭据服务恢复可写）；紫月主题缺视频修复
 
 ## v0.2.1 更新日志
 

@@ -80,8 +80,13 @@ contextBridge.exposeInMainWorld('api', {
   onChatFrame: (cb) => ipcRenderer.on('chat:frame', (_e, msg) => cb(msg)),
   checkUpdate: () => ipcRenderer.invoke('updater:check'),
   downloadUpdate: (url) => ipcRenderer.invoke('updater:download', url),
+  installUpdate: (exePath) => ipcRenderer.invoke('updater:install', exePath),
+  relaunchApp: () => ipcRenderer.invoke('app:relaunch'),
   onUpdaterProgress: (cb) => ipcRenderer.on('updater:progress', (_e, p) => cb(p)),
   onUpdaterResult: (cb) => ipcRenderer.on('updater:result', (_e, p) => cb(p)),
   getApiKey: () => ipcRenderer.invoke('settings:getApiKey'),
   setApiKey: (key) => ipcRenderer.invoke('settings:setApiKey', key),
+  zenuaStatus: () => ipcRenderer.invoke('zenua:status'),
+  zenuaEnable: () => ipcRenderer.invoke('zenua:enable'),
+  zenuaDisable: () => ipcRenderer.invoke('zenua:disable'),
 });

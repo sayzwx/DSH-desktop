@@ -6,9 +6,9 @@
 #   Bundled portable Node: shipped inside the package and installed to
 #   %LOCALAPPDATA%\DSH\tools\node — the desktop and the engine use it first,
 #   so the target machine needs NO system Node at all.
-# Run:  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-dist.ps1 [-Version 0.2.1] [-NodeVersion v22.23.2] [-Root C:\path\to\repo]
+# Run:  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-dist.ps1 [-Version 0.4.0] [-NodeVersion v22.23.2] [-Root C:\path\to\repo]
 param(
-  [string]$Version = '0.2.1',
+  [string]$Version = '0.4.0',
   [string]$NodeVersion = 'v22.23.2',  # 自带便携 Node 版本（随包分发，替换本机 Node 依赖）
   [string]$Root = ''   # 仓库根目录，默认取脚本所在目录的上级（scripts 的父目录）
 )
