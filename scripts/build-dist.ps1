@@ -1,4 +1,4 @@
-﻿# Build the DSH Desktop distributables (installer style):
+# Build the DSH Desktop distributables (installer style):
 #   DSH-Desktop-v<ver>.zip / -Setup.exe : app package incl. portable Node
 #   (desktop UI + Electron runtime + installer + bundled tools\node; ~250 MB)
 #   The heavy harness engine is NOT packaged: setup.exe pulls it from the official
@@ -93,6 +93,12 @@ if ($LASTEXITCODE -ge 8) { throw 'robocopy app failed' }
 $bgAni = Join-Path $root 'renderer\bg-animated.mp4'
 if (Test-Path $bgAni) {
   Copy-Item $bgAni (Join-Path $resApp 'renderer\bg-animated.mp4') -Force
+}
+# 紫月主题背景（renderer\bg-moon-loop.mp4，无缝循环视频）一并放回，否则 紫月 主题会因
+# 缺少视频文件而显示空白。
+$bgMoon = Join-Path $root 'renderer\bg-moon-loop.mp4'
+if (Test-Path $bgMoon) {
+  Copy-Item $bgMoon (Join-Path $resApp 'renderer\bg-moon-loop.mp4') -Force
 }
 
 $cfg = Join-Path $stage 'config'
