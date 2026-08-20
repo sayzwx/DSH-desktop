@@ -1,4 +1,4 @@
-# Build the DSH Desktop distributables (installer style):
+﻿# Build the DSH Desktop distributables (installer style):
 #   DSH-Desktop-v<ver>.zip / -Setup.exe : app package incl. portable Node
 #   (desktop UI + Electron runtime + installer + bundled tools\node; ~250 MB)
 #   The heavy harness engine is NOT packaged: setup.exe pulls it from the official
