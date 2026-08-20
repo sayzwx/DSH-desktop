@@ -212,9 +212,11 @@ apiKey.addEventListener('change', async () => {
     status.textContent =
       r.live === 'ok'
         ? '已保存到 ~/.dsh/.env，并同步到运行中的 Harness 凭据服务 ✓'
-        : r.live
-          ? `已写入 ~/.dsh/.env（运行中的 Harness 同步失败：${r.live}）`
-          : '已保存到 ~/.dsh/.env，下次启动 Harness 时生效';
+        : (typeof r.live === 'string' && r.live.includes('read-only by the launching environment'))
+          ? '已保存到 ~/.dsh/.env；当前 Harness 以「启动环境只读」提供该密钥（多为 Windows 环境变量 DEEPSEEK_API_KEY）。重启桌面端后即由凭据服务接管并实时同步 ✓（建议顺带从系统/用户环境变量里移除该条目）'
+          : r.live
+            ? `已写入 ~/.dsh/.env（运行中的 Harness 同步失败：${r.live}；重启桌面端后生效）`
+            : '已保存到 ~/.dsh/.env，下次启动 Harness 时生效';
     apiKey.value = '';
   } else {
     status.textContent = '保存失败: ' + r.error;

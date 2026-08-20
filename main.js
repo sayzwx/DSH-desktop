@@ -147,7 +147,14 @@ function launchHarness(found) {
   HARNESS_DIR = found.dir;
   setState('starting');
   startDeadline = Date.now() + 90 * 1000;
-  const env = { ...process.env, ...loadDotEnv(), DSH_HOME };
+  // 构建子进程环境：父进程环境 + ~/.dsh/.env。但由 .env 托管的密钥（DEEPSEEK_API_KEY）
+  // 不注入启动环境——否则 harness 的 credentials-local 视其为「启动环境只读」（source:'env',
+  // writable:false），credentials.set/setApiKey 的实时同步会被拒（"supplied read-only by the
+  // launching environment"）。harness 会自己读 ~/.dsh/.env 与 ~/.dsh/.credentials.yaml，
+  // 路由不受影响，且凭据服务恢复可写。
+  const harnessEnv = loadDotEnv();
+  const env = { ...process.env, ...harnessEnv, DSH_HOME };
+  if (harnessEnv.DEEPSEEK_API_KEY) delete env.DEEPSEEK_API_KEY;
   const nodeExe = resolveNodeExe();
   harnessProc = spawn(nodeExe, [found.bin, 'web'], {
     cwd: found.dir,
