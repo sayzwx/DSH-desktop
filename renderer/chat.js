@@ -1242,6 +1242,187 @@
     });
   }
 
+  // =====================================================================
+// 命令面板：输入 / 时弹出命令/技能选择面板
+// =====================================================================
+class CommandPanel {
+  constructor(inputEl, api, getSessionId) {
+    this.inputEl = inputEl;
+    this.api = api;
+    this.getSessionId = getSessionId;
+    this.isOpen = false;
+    this.commands = [];
+    this.skills = [];
+    this.filtered = [];
+    this.selectedIndex = -1;
+    this.panel = null;
+    this.searchQuery = '';
+    this.debounceTimer = null;
+    this.createPanel();
+  }
+
+  createPanel() {
+    this.panel = document.createElement('div');
+    this.panel.className = 'cmd-panel';
+    this.panel.style.display = 'none';
+    this.panel.innerHTML = `
+      <div class="cmd-search">
+        <span class="cmd-search-ic">/</span>
+        <input type="text" class="cmd-search-input" placeholder="搜索命令、技能…" spellcheck="false" />
+      </div>
+      <div class="cmd-list" role="listbox"></div>
+      <div class="cmd-hint">↑↓ 选择 · Enter 执行 · Tab 补全 · Esc 关闭</div>
+    `;
+    document.body.appendChild(this.panel);
+
+    this.searchInput = this.panel.querySelector('.cmd-search-input');
+    this.listEl = this.panel.querySelector('.cmd-list');
+
+    // 搜索输入
+    this.searchInput.addEventListener('input', (e) => {
+      this.searchQuery = e.target.value.toLowerCase();
+      this.filterAndRender();
+    });
+    this.searchInput.addEventListener('keydown', (e) => this.onSearchKeydown(e));
+    this.searchInput.addEventListener('focus', () => { this.searchInput.select(); });
+
+    // 点击外部关闭
+    document.addEventListener('mousedown', (e) => {
+      if (this.isOpen && !this.panel.contains(e.target) && e.target !== this.inputEl) {
+        this.close();
+      }
+    });
+  }
+
+  async open() {
+    if (this.isOpen) return;
+    const sessionId = this.getSessionId();
+    if (!sessionId) return;
+
+    this.isOpen = true;
+    this.selectedIndex = -1;
+    this.searchInput.value = '';
+    this.searchQuery = '';
+    this.panel.style.display = 'flex';
+    this.positionPanel();
+    this.searchInput.focus();
+
+    // 加载命令和技能
+    try {
+      const [cmdRes, skillRes] = await Promise.all([
+        this.api.chatCommandsList(this.getSessionId()),
+        this.api.skillsList(this.getSessionId()),
+      ]);
+      this.commands = (cmdRes.ok && cmdRes.commands) ? cmdRes.commands : [];
+      this.skills = (skillRes.ok && skillRes.skills) ? skillRes.skills : [];
+    } catch (e) {
+      console.warn('加载命令列表失败:', e);
+      this.commands = [];
+      this.skills = [];
+    }
+    this.filterAndRender();
+    window.addEventListener('resize', this.positionPanel.bind(this));
+  }
+
+  close() {
+    if (!this.isOpen) return;
+    this.isOpen = false;
+    this.panel.style.display = 'none';
+    this.searchInput.value = '';
+    this.searchQuery = '';
+    this.filtered = [];
+    this.selectedIndex = -1;
+    window.removeEventListener('resize', this.positionPanel.bind(this));
+  }
+
+  positionPanel() {
+    if (!this.isOpen) return;
+    const rect = this.inputEl.getBoundingClientRect();
+    this.panel.style.left = rect.left + 'px';
+    this.panel.style.top = (rect.bottom + 4) + 'px';
+    this.panel.style.width = Math.min(rect.width, 420) + 'px';
+  }
+
+  filterAndRender() {
+    const q = this.searchQuery;
+    const all = [
+      ...this.commands.map(c => ({ type: 'command', name: c.name, description: c.description || '', raw: c })),
+      ...this.skills.map(s => ({ type: 'skill', name: s.name, description: s.description || '', raw: s })),
+    ];
+    this.filtered = q
+      ? all.filter(item => item.name.toLowerCase().includes(q) || (item.description && item.description.toLowerCase().includes(q)))
+      : all;
+    this.selectedIndex = -1;
+    this.renderList();
+  }
+
+  renderList() {
+    if (!this.listEl) return;
+    if (this.filtered.length === 0) {
+      this.listEl.innerHTML = '<div class="cmd-empty">无匹配命令或技能</div>';
+      return;
+    }
+    this.listEl.innerHTML = this.filtered.map((item, idx) => `
+      <div class="cmd-item ${idx === this.selectedIndex ? 'selected' : ''}" role="option" data-idx="${idx}" data-type="${item.type}" data-name="${esc(item.name)}">
+        <span class="cmd-type">${item.type === 'command' ? '⚡' : '🛠'}</span>
+        <span class="cmd-name">${esc(item.name)}</span>
+        ${item.description ? `<span class="cmd-desc">${esc(item.description)}</span>` : ''}
+      </div>
+    `).join('');
+    // 确保选中项可见
+    const selectedEl = this.listEl.querySelector('.cmd-item.selected');
+    if (selectedEl) selectedEl.scrollIntoView({ block: 'nearest' });
+  }
+
+  onSearchKeydown(e) {
+    if (!this.isOpen) return;
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault();
+        this.selectedIndex = Math.min(this.selectedIndex + 1, this.filtered.length - 1);
+        this.renderList();
+        break;
+      case 'ArrowUp':
+        e.preventDefault();
+        this.selectedIndex = Math.max(this.selectedIndex - 1, 0);
+        this.renderList();
+        break;
+      case 'Enter':
+        e.preventDefault();
+        this.executeSelected();
+        break;
+      case 'Tab':
+        e.preventDefault();
+        this.completeSelected();
+        break;
+      case 'Escape':
+        e.preventDefault();
+        this.close();
+        break;
+    }
+  }
+
+  executeSelected() {
+    if (this.selectedIndex >= 0 && this.filtered[this.selectedIndex]) {
+      const item = this.filtered[this.selectedIndex];
+      const line = '/' + item.name;
+      this.close();
+      // 执行命令
+      this.api.chatCommandsExecute(this.getSessionId(), line).catch(console.error);
+    }
+  }
+
+  completeSelected() {
+    if (this.selectedIndex >= 0 && this.filtered[this.selectedIndex]) {
+      const item = this.filtered[this.selectedIndex];
+      this.inputEl.value = '/' + item.name + ' ';
+      this.close();
+      this.inputEl.focus();
+    }
+  }
+}
+
+// 需要 esc 函数（文件顶部已有）
   async function send() {
     const text = inputEl.value.trim();
     if ((!text && draftImages.length === 0 && draftFiles.length === 0) || !currentSessionId) return;
@@ -1250,6 +1431,22 @@
     inputEl.value = '';
     autoGrow();
     document.querySelector('.chat-empty')?.remove();
+
+    // 斜杠命令检测：以 / 开头的直接走 commands/execute（如 /compact /permission 等）
+    if (text.startsWith('/')) {
+      pendingUserEl = makeUserMsg(text);
+      scrollBottom(true);
+      const r = await api.chatCommandsExecute(currentSessionId, text);
+      if (r.ok) {
+        // 命令执行成功，结果会通过 mux 推送回来（command/run -> command/done）
+        // 这里不清空草稿，因为可能有图片/文件附件（虽然命令通常不带附件）
+      } else {
+        if (pendingUserEl) pendingUserEl.textContent = `⚠ 命令失败: ${r.error}`;
+      }
+      pendingUserEl = null;
+      return;
+    }
+
     pendingUserEl = makeUserMsg(text || ((sentImages.length || sentFiles.length) ? '' : ''));
     for (const d of sentImages) {
       const img = document.createElement('img');
@@ -1980,7 +2177,21 @@
     inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
   }
 
+  let commandPanel = null;
+
+  function initCommandPanel() {
+    if (commandPanel) return;
+    commandPanel = new CommandPanel(inputEl, api, () => currentSessionId);
+  }
+
   inputEl.addEventListener('keydown', (e) => {
+    // 命令面板触发：输入框为空且按下 / 时打开面板
+    if (e.key === '/' && inputEl.value === '' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      initCommandPanel();
+      commandPanel.open();
+      return;
+    }
     // Enter 发送；Shift/Alt+Enter 换行（不拦截，走默认换行）
     if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();

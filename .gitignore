@@ -24,3 +24,7 @@ scripts/.scratch/
 # 分发安装包构建产物
 dist/
 
+
+# 便携版应用运行时（含 Electron 二进制，不入库）
+app/
+

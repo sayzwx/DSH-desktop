@@ -59,6 +59,8 @@ contextBridge.exposeInMainWorld('api', {
   chatAttachment: (sessionId, attachmentId) =>
     ipcRenderer.invoke('chat:attachment', { sessionId, attachmentId }),
   chatCancel: (sessionId) => ipcRenderer.invoke('chat:cancel', sessionId),
+  chatCommandsExecute: (sessionId, line) => ipcRenderer.invoke('chat:commandsExecute', { sessionId, line }),
+  chatCommandsList: (sessionId) => ipcRenderer.invoke('chat:commandsList', { sessionId }),
   chatModels: (sessionId) => ipcRenderer.invoke('chat:models', sessionId),
   chatSelectModel: (sessionId, provider, model, reasoningEffort) =>
     ipcRenderer.invoke('chat:selectModel', { sessionId, provider, model, reasoningEffort }),

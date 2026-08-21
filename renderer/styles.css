@@ -2657,4 +2657,113 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
 /* 空态 */
 .mk-grid .empty, .mk-list .empty { color: var(--text-dim); padding: 24px 0; text-align: center; grid-column: 1 / -1; }
 
+/* =====================================================================
+   命令面板 (Command Panel) - 输入 / 时弹出的命令/技能选择面板
+   ===================================================================== */
+.cmd-panel {
+  position: fixed;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  background: var(--float);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), 0 0 0 1px var(--border-strong);
+  font-family: var(--font-sans);
+  font-size: 0.88em;
+  overflow: hidden;
+  animation: cmd-pop-in 0.12s var(--ease-light);
+}
+@keyframes cmd-pop-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.cmd-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.cmd-search-ic {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 1.1em;
+  flex-shrink: 0;
+}
+.cmd-search-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 0.92em;
+  padding: 4px 0;
+}
+.cmd-search-input::placeholder { color: var(--text-dim); }
+.cmd-list {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 320px;
+  padding: 4px 6px;
+}
+.cmd-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.1s var(--ease-light);
+  border-radius: 8px;
+}
+.cmd-item:hover, .cmd-item.selected {
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+}
+.cmd-item:active {
+  background: color-mix(in srgb, var(--accent) 28%, var(--panel));
+}
+.cmd-type {
+  font-size: 1.05em;
+  flex-shrink: 0;
+  width: 1.4em;
+  text-align: center;
+}
+.cmd-name {
+  flex: 1;
+  color: var(--text);
+  font-weight: 500;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cmd-desc {
+  color: var(--text-dim);
+  font-size: 0.8em;
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cmd-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 0.88em;
+}
+.cmd-hint {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 0.78em;
+  color: var(--text-dim);
+  text-align: center;
+  font-family: var(--font-mono);
+}
+.cmd-search-input:focus { outline: none; }
+
 

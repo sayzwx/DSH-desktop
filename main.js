@@ -761,6 +761,20 @@ ipcMain.handle('chat:permissionSet', async (_e, { sessionId, preset }) => {
   return { ok: true, command: r.value?.result || null };
 });
 
+// 通用斜杠命令执行：支持 /compact 等任意 harness 命令
+ipcMain.handle('chat:commandsExecute', async (_e, { sessionId, line }) => {
+  const r = await rpcCallTypert('commands/execute', { agentId: sessionId, line });
+  if (!r.ok) return { ok: false, error: r.error?.message || 'commands/execute failed' };
+  return { ok: true, command: r.value?.result || null };
+});
+
+// 获取可用命令列表（用于命令面板自动补全）
+ipcMain.handle('chat:commandsList', async (_e, { sessionId }) => {
+  const r = await rpcCallTypert('commands/list', { agentId: sessionId });
+  if (!r.ok) return { ok: false, error: r.error?.message || 'commands/list failed' };
+  return { ok: true, commands: r.value || [] };
+});
+
 // ---------- 设置：插件（agent preset）与模型配置 IPC ----------
 ipcMain.handle('settings:presets', async () => {
   const r = await rpcCall('agentPreset.list', {});
