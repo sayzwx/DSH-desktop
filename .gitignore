@@ -18,9 +18,14 @@ Thumbs.db
 __pycache__/
 *.pyc
 
-# ʵ��/��ʱ����
+# 实测/临时产物
 scripts/.scratch/
 
-# �ַ���װ����������
+# 分发安装包构建产物
 dist/
 
+# WorkBuddy 本地元数据（含记忆/可能的本地密钥，禁止入库）
+.workbuddy/
+
+# DSH 桌面端安装产物（本机安装目录，勿入库）
+DSH/

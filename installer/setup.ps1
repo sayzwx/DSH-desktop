@@ -4,19 +4,79 @@
 # （官方源码 + 官方 Node 运行时），在本机完成依赖安装与构建（一次性）。
 # 需要网络：github.com（源码）/ nodejs.org（Node）/ npm registry（pnpm 依赖）。
 # 网络受限时可传 -NpmRegistry 指定镜像（如 https://registry.npmmirror.com）。
-# Run:  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1" [-SkipHarness]
+# Run:  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1" [-SkipHarness] [-DestDir "D:\path"]
 param(
   [string]$HarnessSource = 'https://github.com/deepseek-ai/DeepSeek-Harness/archive/refs/tags/dsh-v0.1.0-rc.8.zip',
   [string]$HarnessGit    = 'https://github.com/deepseek-ai/DeepSeek-Harness.git',
   [string]$HarnessBranch = 'dsh-v0.1.0-rc.8',
   [string]$NodeVersion   = 'v22.23.2',
   [string]$NpmRegistry   = '',   # 例：https://registry.npmmirror.com（npm 网络受限时）
+  [string]$DestDir       = '',   # 用户所选安装目录；留空则默认 %LOCALAPPDATA%\DSH
   [switch]$SkipHarness,
-  [switch]$EngineOnly,    # 只安装/修复 harness 引擎（%LOCALAPPDATA%\DSH\harness + tools\node），不重装 app/快捷方式/配置
+  [switch]$EngineOnly,    # 只安装/修复 harness 引擎（安装根目录\harness + tools\node），不重装 app/快捷方式/配置
   [switch]$InnoSetup      # 由 Inno Setup 安装器调用：app/tools 已就位，跳过复制，仅做快捷方式/配置/引擎
 )
 $ErrorActionPreference = 'Stop'
-$Dest     = Join-Path $env:LOCALAPPDATA 'DSH'
+
+# ---- 输出编码强制 UTF-8：避免 main.js spawn 收集日志时中文乱码 ----
+# 中文 Windows 的 PowerShell 控制台默认 GBK(936)，Write-Host 输出的中文是 GBK 字节，
+# 而 main.js 的 pushLog 按 UTF-8 解码 → 乱码。这里把控制台输出编码改为 UTF8 对齐。
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+try { $OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+
+# ---- 脚本执行策略防呆：若机器策略禁止脚本且 -ExecutionPolicy Bypass 也被覆盖，明确提示用户 ----
+$effectivePolicy = Get-ExecutionPolicy
+if ($effectivePolicy -eq 'Restricted' -or $effectivePolicy -eq 'AllSigned') {
+  $procPolicy = try { (Get-ExecutionPolicy -Scope Process -ErrorAction Stop) } catch { $effectivePolicy }
+  if ($procPolicy -eq 'Restricted' -or $procPolicy -eq 'AllSigned') {
+    Write-Host '======================================================' -ForegroundColor Yellow
+    Write-Host ' 检测到 PowerShell 执行策略禁止运行脚本（Restricted/AllSigned）。' -ForegroundColor Yellow
+    Write-Host ' 这会阻止安装器拉取引擎。请以管理员身份打开 PowerShell 执行：' -ForegroundColor Yellow
+    Write-Host '   Set-ExecutionPolicy -Scope CurrentUser RemoteSigned' -ForegroundColor Yellow
+    Write-Host ' 然后重新运行本安装器。或直接运行 DSH Desktop 的 Setup.exe（已内置 Bypass）。' -ForegroundColor Yellow
+    Write-Host '======================================================' -ForegroundColor Yellow
+    throw 'PowerShell 执行策略禁止脚本运行，请按上方提示以管理员身份调整后重试。'
+  }
+}
+
+# ---- 安装失败可见化：任何未捕获异常 → 写 install.log + 保底手动指引 + exit 1 ----
+# 历史教训：0.5.0 引擎拉取失败时安装器静默继续，用户装完没有引擎也无提示（ERR_MODULE_NOT_FOUND）。
+# 这里保证失败一定有日志与可执行的手动方案，不再静默。
+trap {
+  $msg = $_.Exception.Message
+  $ts  = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+  $logDir = if ($Dest) { $Dest } else { Join-Path $env:LOCALAPPDATA 'DSH' }
+  try { New-Item -ItemType Directory -Path $logDir -Force | Out-Null } catch { }
+  $log = Join-Path $logDir 'install.log'
+  $guide = @(
+    "[$ts] DSH Desktop 安装失败：$msg",
+    '',
+    '自动拉取引擎失败。以下手动安装办法 100% 可成功，任选其一后重启应用即可：',
+    '  办法 1（最快）：若本机已有 DeepSeek-Harness 源码目录，设环境变量指向它后重启应用：',
+    '      setx DSH_HARNESS_DIR "你的引擎源码目录"',
+    '  办法 2：浏览器手动下载引擎源码压缩包（任一链接）：',
+    '      官方: https://github.com/deepseek-ai/DeepSeek-Harness/archive/refs/tags/dsh-v0.1.0-rc.8.zip',
+    '      镜像: https://ghfast.top/https://github.com/deepseek-ai/DeepSeek-Harness/archive/refs/tags/dsh-v0.1.0-rc.8.zip',
+    "      解压后把整个仓库目录放到: $logDir\harness",
+    '      （若该目录没有 node_modules，以管理员身份在 cmd 中执行：',
+    "         cd /d `"$logDir\harness`"",
+    '         corepack pnpm install --frozen-lockfile',
+    '         corepack pnpm build）',
+    '  办法 3：以管理员身份运行 cmd，安装官方发行包：',
+    '      npm install -g @deepseek-ai/dsh --registry https://registry.npmmirror.com',
+    ''
+  )
+  $guide | Set-Content -Path $log -Encoding UTF8
+  Write-Host ''
+  Write-Host "安装失败，详情已写入日志: $log"
+  Write-Host '----------------------------------------------'
+  $guide | ForEach-Object { Write-Host $_ }
+  Write-Host '----------------------------------------------'
+  exit 1
+}
+# 安装根目录：用户所选目录优先（app / harness / tools 全部落在该目录下，自动适配所选路径）
+if ($DestDir) { $Dest = [System.IO.Path]::GetFullPath($DestDir) }
+else          { $Dest = Join-Path $env:LOCALAPPDATA 'DSH' }
 $UserHome = $env:USERPROFILE  # 不要用 $Home：$HOME 是 PowerShell 只读自动变量
 $Src      = Split-Path -Parent $MyInvocation.MyCommand.Path
 
@@ -45,7 +105,7 @@ function Get-NodeExe {
     $envCheck = Join-Path $Src 'check-env.ps1'
     if (Test-Path $envCheck) {
       Write-Host '  尝试 winget 安装最新 Node LTS ...'
-      & powershell -NoProfile -ExecutionPolicy Bypass -File $envCheck -Fix -NodeMinMajor 22
+      & powershell -NoProfile -ExecutionPolicy Bypass -File $envCheck -Fix -NodeMinMajor 22 -DestDir "$Dest"
       if ($LASTEXITCODE -eq 0) {
         $toolsNew = Join-Path $Dest 'tools\node\node.exe'
         if (Test-Path $toolsNew) { Write-Host '  using tools\node (installed via check-env)'; return $toolsNew }

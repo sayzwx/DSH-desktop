@@ -148,6 +148,21 @@
     if (sd.ok) {
       settingsWritable = sd.writable !== false;
       for (const n of sd.namespaces || []) nsViews[n.ns] = n;
+      // 合并 llm-pi-ai 中用户自定义的提供商：写入 settings 但尚未出现在 llm.providers
+      // 目录时，也能在下拉框/卡片中显示、编辑与删除（与官方 webUI 一致）。
+      const pi = nsViews['llm-pi-ai'];
+      const userProviders = pi && pi.value && pi.value.providers ? pi.value.providers : {};
+      for (const [id, profile] of Object.entries(userProviders)) {
+        if (!profile || typeof profile !== 'object') continue;
+        if (providersAll.some((p) => p.provider === id)) continue;
+        providersAll.push({
+          provider: id,
+          displayName: (typeof profile.displayName === 'string' && profile.displayName) ? profile.displayName : id,
+          active: !!profile.apiKeyEnv || !!(profile.baseURL && Array.isArray(profile.models) && profile.models.length > 0),
+          settingsNs: 'llm-pi-ai',
+          settingsPath: ['providers', id],
+        });
+      }
     }
     // 批量查询每个提供商实际使用的密钥引用状态（一个往返）
     const refs = [...new Set(providersAll.map((p) => apiKeyEnvOf(p.provider) || deriveKeyRef(p.provider)))];
@@ -571,6 +586,76 @@
     });
 
     return { close: () => { editBox.hidden = true; editBox.innerHTML = ''; } };
+  }
+
+  /** 添加自定义提供商（对齐官方 webUI）：填写 ID/名称/协议/baseURL/密钥/Headers →
+   *  保存密钥到 credentials + 把 profile 写入 llm-pi-ai.providers.<id>，保存后出现在提供商列表。 */
+  function renderCustomProviderForm() {
+    const btn = $('#addCustomProviderBtn');
+    const form = $('#customProviderForm');
+    if (!btn || !form) return;
+    btn.addEventListener('click', () => {
+      form.hidden = !form.hidden;
+      if (!form.hidden) { const m = form.querySelector('.cp-msg'); if (m) m.textContent = ''; }
+    });
+    const save = form.querySelector('.cp-save');
+    const cancel = form.querySelector('.cp-cancel');
+    const msg = form.querySelector('.cp-msg');
+    const show = (html, kind) => { msg.innerHTML = html; msg.className = 'cp-msg' + (kind ? ' ' + kind : ''); };
+    const reset = () => {
+      for (const s of ['.cp-id', '.cp-name', '.cp-url', '.cp-key']) {
+        const el = form.querySelector(s);
+        if (el) el.value = '';
+      }
+      const h = form.querySelector('.cp-headers');
+      if (h) h.value = '';
+      form.hidden = true;
+      if (msg) { msg.textContent = ''; msg.className = 'cp-msg'; }
+    };
+    cancel.addEventListener('click', reset);
+    save.addEventListener('click', async () => {
+      const id = (form.querySelector('.cp-id').value || '').trim().toLowerCase();
+      const name = (form.querySelector('.cp-name').value || '').trim();
+      const api2 = form.querySelector('.cp-api').value;
+      const url = (form.querySelector('.cp-url').value || '').trim();
+      const key = (form.querySelector('.cp-key').value || '').trim();
+      const headersRaw = (form.querySelector('.cp-headers').value || '').trim();
+      if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(id)) { show('提供商 ID 只能是小写字母/数字/连字符（如 my-provider）', 'bad'); return; }
+      if (!/^https?:\/\//.test(url)) { show('API 地址必须以 http:// 或 https:// 开头', 'bad'); return; }
+      if (!settingsWritable) { show('设置当前为只读（read-only settings provider），无法保存', 'bad'); return; }
+      if (providerOf(id)) { show(`提供商 <code>${esc(id)}</code> 已存在，请换一个 ID`, 'bad'); return; }
+      // 解析自定义 Headers（每行 key: value，可选）
+      const headers = {};
+      for (const line of headersRaw.split(/\r?\n/)) {
+        const t = line.trim();
+        if (!t) continue;
+        const m = /^([^:]+):\s*(.*)$/.exec(t);
+        if (!m) { show(`Headers 格式错误：${esc(t)}（应为 key: value）`, 'bad'); return; }
+        headers[m[1].trim()] = m[2].trim();
+      }
+      const keyRef = id.toUpperCase().replace(/[^A-Z0-9]+/g, '_') + '_API_KEY';
+      save.disabled = true; save.textContent = '保存中…';
+      try {
+        if (key) {
+          const st = await api.setCredential(keyRef, key);
+          if (!st.ok) { show('保存密钥失败：' + esc(st.error || 'unknown'), 'bad'); return; }
+        }
+        const ns = nsViews['llm-pi-ai'];
+        const patch = { apiKeyEnv: keyRef, displayName: name || id, api: api2, baseURL: url, models: [] };
+        if (Object.keys(headers).length) patch.headers = headers;
+        const mut = await api.mutateSettings('llm-pi-ai',
+          [{ op: 'set', path: ['providers', id], value: patch }],
+          ns ? ns.revision : undefined);
+        if (!mut.ok) { show('保存失败：' + esc(mut.error || 'unknown'), 'bad'); return; }
+        show(`已保存自定义提供商 <code>${esc(id)}</code>，正在刷新…`, 'ok');
+        reset();
+        refreshModels();
+      } catch (e) {
+        show('保存出错：' + esc(e.message || String(e)), 'bad');
+      } finally {
+        save.disabled = false; save.textContent = '保存提供商';
+      }
+    });
   }
 
   // OpenCode Zen 免费模型 UA 代理（429 FreeUsageLimitError 处理）
@@ -1144,6 +1229,7 @@
   function bind() {
     $('#providerSelect').addEventListener('change', renderModelGroups);
     $('#refreshModelsBtn').addEventListener('click', refreshModels);
+    renderCustomProviderForm();
     $('#applyDefaultPresetBtn').addEventListener('click', async () => {
       const sel = $('#defaultPresetSelect');
       const r = await api.setPresetDefault(sel.value);

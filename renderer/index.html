@@ -287,6 +287,40 @@
             <div class="sm-row">
               <label class="sm-label" for="providerSelect">提供商</label>
               <select id="providerSelect" class="sm-select"></select>
+              <button class="mini-btn" id="addCustomProviderBtn" type="button" title="添加一个自定义的 OpenAI 兼容 / Anthropic 兼容提供商（同官方 webUI）">＋ 添加自定义提供商</button>
+            </div>
+            <div id="customProviderForm" hidden>
+              <div class="custom-provider-form">
+                <div class="cp-grid">
+                  <label>提供商 ID<span class="cp-req">*</span>
+                    <input type="text" class="sm-input cp-id" placeholder="如 my-provider（小写字母/数字/连字符，唯一标识）" />
+                  </label>
+                  <label>显示名称
+                    <input type="text" class="sm-input cp-name" placeholder="如 我的模型服务（可留空，默认用 ID）" />
+                  </label>
+                  <label>API 协议<span class="cp-req">*</span>
+                    <select class="sm-input cp-api">
+                      <option value="openai-completions">OpenAI Completions</option>
+                      <option value="openai-responses">OpenAI Responses</option>
+                      <option value="anthropic-messages">Anthropic Messages</option>
+                    </select>
+                  </label>
+                  <label>API 地址（baseURL）<span class="cp-req">*</span>
+                    <input type="text" class="sm-input cp-url" placeholder="https://api.example.com/v1" />
+                  </label>
+                  <label>API 密钥
+                    <input type="password" class="sm-input cp-key" autocomplete="off" placeholder="粘贴密钥（可选，稍后在提供商卡片里也能填）" />
+                  </label>
+                  <label>自定义 Headers（可选）
+                    <textarea class="sm-input cp-headers" rows="2" placeholder="每行一个，如：&#10;Authorization: Bearer xxx&#10;X-Custom: 1"></textarea>
+                  </label>
+                </div>
+                <div class="cp-actions">
+                  <button class="mini-btn primary-btn cp-save" type="button">保存提供商</button>
+                  <button class="mini-btn cp-cancel" type="button">取消</button>
+                  <span class="cp-msg"></span>
+                </div>
+              </div>
             </div>
             <div class="provider-stats" id="providerStats"></div>
             <div class="model-group-list" id="modelGroupList"></div>

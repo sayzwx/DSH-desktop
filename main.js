@@ -4,15 +4,28 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-// 分发安装布局：app（含 DSH.exe）与 harness、tools/node 同级（%LOCALAPPDATA%\DSH\{app,harness,tools}）。
-// harness 引擎不再写死某个路径：点击启动时自动探测本机已有安装（可用 DSH_HARNESS_DIR 显式指定源码目录），
-// 探测不到就自动安装官方发行包/运行 installer/setup.ps1 -EngineOnly 拉取官方引擎。
-const DSH_ROOT = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'DSH') : '';
+// 分发安装布局：app（含 DSH.exe）与 harness、tools/node 同级（用户所选安装目录\{app,harness,tools}）。
+// 安装根目录必须动态推导（不能写死 %LOCALAPPDATA%\DSH）——用户在安装向导里可选任意目录，
+// 应用要能找到自己所在的真实安装根，否则换目录后所有路径（引擎/Node/配置）全部失配。
+function detectDSHRoot() {
+  // dev 模式（electron .）：execPath 是 electron.exe，process.defaultApp=true，回退默认
+  if (process.defaultApp) return process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'DSH') : '';
+  try {
+    // 打包形态：<安装根>\app\DSH.exe → dirname(dirname(execPath)) = 安装根
+    const root = path.dirname(path.dirname(process.execPath));
+    if (fs.existsSync(path.join(root, 'app', 'DSH.exe')) || fs.existsSync(path.join(root, 'app', 'electron.exe'))) {
+      return root;
+    }
+  } catch { /* ignore */ }
+  // 回退：默认 %LOCALAPPDATA%\DSH（兼容旧布局）
+  return process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'DSH') : '';
+}
+const DSH_ROOT = detectDSHRoot();
 const DSH_HOME = path.join(os.homedir(), '.dsh');
 const PORT = 3080;
 const LOG_LIMIT = 5000;
 
-// 解析 Node 可执行文件：显式 DSH_NODE_EXE → 安装布局 tools\node → 与 app 同级 tools\node → PATH 上的 node
+// 解析 Node 可执行文件：显式 DSH_NODE_EXE → 安装根 tools\node → 与 app 同级 tools\node → PATH 上的 node
 function resolveNodeExe() {
   const cands = [
     process.env.DSH_NODE_EXE || '',
@@ -45,6 +58,7 @@ let mainWindow = null;
 let harnessProc = null;
 let harnessState = 'stopped';
 let startDeadline = 0;
+let webUpAt = 0; // 本次启动进程是否曾就绪（用于区分“崩溃”与“正常退出”）
 const logBuffer = [];
 
 function pushLog(stream, text) {
@@ -71,19 +85,83 @@ function setState(state) {
 // 支持两种形态：
 //   1) 源码目录：apps/cli/lib/bin.js（安装器布局 %LOCALAPPDATA%\DSH\harness 或环境变量 DSH_HARNESS_DIR 指定）
 //   2) 发行包：@deepseek-ai/dsh/lib/bin.js（npm 全局安装或 npx 缓存里的官方发行版）
-// npm 在 Windows 上只有 npm.cmd，spawn 无法直接执行，统一经 cmd.exe 包一层
+// npm 调用统一走「捆绑 Node 的 npm-cli.js」（随安装包分发，目标机无需系统 Node/npm）：
+//   node <tools\node>\node_modules\npm\bin\npm-cli.js <args>
+// 捆绑 node 不可用时才回退系统 npm（Windows 上 npm 只有 .cmd，经 cmd.exe 包一层）。
+function npmCmd() {
+  const nodeExe = resolveNodeExe();
+  if (!nodeExe || nodeExe === 'node') return null;
+  const cli = path.join(path.dirname(nodeExe), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  if (fs.existsSync(cli)) return { nodeExe, cli };
+  return null;
+}
 function npmSpawnSync(args, opts = {}) {
+  const n = npmCmd();
+  if (n) return spawnSync(n.nodeExe, [n.cli, ...args], { windowsHide: true, encoding: 'utf8', ...opts });
   const win = process.platform === 'win32';
   const cmd = win ? 'cmd.exe' : 'npm';
   const params = win ? ['/c', 'npm', ...args] : args;
   return spawnSync(cmd, params, { windowsHide: true, encoding: 'utf8', ...opts });
 }
 function npmSpawn(args, opts = {}) {
+  const n = npmCmd();
+  if (n) return spawn(n.nodeExe, [n.cli, ...args], { windowsHide: true, ...opts });
   const win = process.platform === 'win32';
   const cmd = win ? 'cmd.exe' : 'npm';
   const params = win ? ['/c', 'npm', ...args] : args;
   return spawn(cmd, params, { windowsHide: true, ...opts });
 }
+// 不绑定任何本地路径：仅扫「安装根同级」与「环境变量」指定的引擎位置（用户选什么目录都适配）。
+// 历史教训：扫盘符根/用户目录会绑定开发者本机路径（如 D:\DeepSeek-Harness），换机器就失效。
+function commonEngineCandidatePaths() {
+  const out = [];
+  try {
+    // 安装根同级的 harness（便携/打包布局：app 与 harness 同级）
+    if (DSH_ROOT) out.push(path.join(DSH_ROOT, 'harness'));
+    // app 同级（dev 形态 __dirname/../harness）
+    out.push(path.join(__dirname, '..', 'harness'));
+  } catch { /* ignore */ }
+  return out;
+}
+
+// 引擎完整性检测：bin.js 存在只是“外壳”，依赖安装中断（pnpm 链接失效/空目录）时启动必崩
+// （典型报错 ERR_MODULE_NOT_FOUND）。这里检查 @deepseek-ai 核心包是否真实存在且非空目录。
+function checkHarnessIntegrity(dir, kind) {
+  const missing = [];
+  const keyPkgs = ['dsh-app-boot', 'cordis-plugin-loader'];
+  if (kind === 'source' && !fs.existsSync(path.join(dir, 'apps', 'web', 'dist', 'index.html'))) {
+    missing.push('web 前端 dist 缺失');
+  }
+  // 依赖作用域：源码形态在仓库内 node_modules（pnpm workspace 链接）；发行包形态
+  // 依赖可能与其同级、或被 npm hoist 到上级 node_modules 根（全局安装典型场景），全部覆盖。
+  const scopes = kind === 'dist'
+    ? [
+        path.join(dir, 'node_modules', '@deepseek-ai'),   // 嵌套安装（包自带 node_modules）
+        path.join(dir, '..', '@deepseek-ai'),             // 与 dsh 同级（@deepseek-ai 目录内）
+        path.join(dir, '..', '..', '@deepseek-ai'),       // npm 全局 hoist 到 node_modules 根
+      ]
+    : [
+        path.join(dir, 'node_modules', '@deepseek-ai'),
+        path.join(dir, 'apps', 'cli', 'node_modules', '@deepseek-ai'),
+        path.join(dir, 'apps', 'web', 'node_modules', '@deepseek-ai'),
+      ];
+  let hitScope = false;
+  for (const scope of scopes) {
+    if (!fs.existsSync(scope)) continue;
+    hitScope = true;
+    for (const pkg of keyPkgs) {
+      const p = path.join(scope, pkg);
+      if (!fs.existsSync(p)) { missing.push(`${pkg} 未安装`); continue; }
+      let n = 0;
+      try { n = fs.readdirSync(p).length; } catch { n = 0; }
+      if (n === 0) missing.push(`${pkg} 为空目录（依赖未装全）`);
+    }
+    break; // 命中任一 scope 即视为该引擎的依赖位置
+  }
+  if (!hitScope) missing.push('未找到 @deepseek-ai 依赖目录');
+  return { ok: missing.length === 0, missing };
+}
+
 function discoverHarness() {
   const candidates = [];
   const push = (p) => { if (typeof p === 'string' && p && !candidates.includes(p)) candidates.push(p); };
@@ -93,6 +171,8 @@ function discoverHarness() {
   if (DSH_ROOT) push(path.join(DSH_ROOT, 'harness'));
   // 3) 与 app 同级的 harness（打包/便携布局）
   push(path.join(__dirname, '..', 'harness'));
+  // 3.5) 常见用户目录 / 盘符根目录里的引擎源码（手工解压/克隆的 DeepSeek-Harness）
+  for (const p of commonEngineCandidatePaths()) push(p);
   // 4) npm 全局安装的官方发行包
   try {
     const g = npmSpawnSync(['root', '-g']);
@@ -111,12 +191,21 @@ function discoverHarness() {
       }
     } catch { /* 忽略不可读缓存 */ }
   }
+  // 先收集所有候选形态，再做完整性过滤：不完整的引擎跳过（依赖缺包启动必崩），
+  // 只返回第一个完整可用的引擎；全部不完整则返回 null → 触发自动获取/手动指引。
+  const found = [];
   for (const dir of candidates) {
     const srcBin = path.join(dir, 'apps', 'cli', 'lib', 'bin.js');   // 源码形态
-    if (fs.existsSync(srcBin)) return { dir, bin: srcBin, kind: 'source' };
+    if (fs.existsSync(srcBin)) found.push({ dir, bin: srcBin, kind: 'source' });
     const distBin = path.join(dir, 'lib', 'bin.js');                  // 发行包形态
-    if (fs.existsSync(distBin)) return { dir, bin: distBin, kind: 'dist' };
+    if (fs.existsSync(distBin) && !found.some((f) => f.dir === dir)) found.push({ dir, bin: distBin, kind: 'dist' });
   }
+  for (const f of found) {
+    const chk = checkHarnessIntegrity(f.dir, f.kind);
+    if (chk.ok) return f;
+    pushLog('stderr', `[引擎 ${f.dir} 依赖不完整（${chk.missing.join('、')}），已跳过]`);
+  }
+  if (found.length > 0) pushLog('stderr', '[本机引擎均不完整，将尝试自动修复/给出手动指引]');
   return null;
 }
 
@@ -147,6 +236,7 @@ function launchHarness(found) {
   HARNESS_DIR = found.dir;
   setState('starting');
   startDeadline = Date.now() + 90 * 1000;
+  webUpAt = 0;
   // 构建子进程环境：父进程环境 + ~/.dsh/.env。但由 .env 托管的密钥（DEEPSEEK_API_KEY）
   // 不注入启动环境——否则 harness 的 credentials-local 视其为「启动环境只读」（source:'env',
   // writable:false），credentials.set/setApiKey 的实时同步会被拒（"supplied read-only by the
@@ -172,9 +262,24 @@ function launchHarness(found) {
   });
   harnessProc.on('exit', (code, signal) => {
     pushLog('stderr', `[harness exited] code=${code} signal=${signal}`);
+    const everUp = !!webUpAt;
     harnessProc = null;
     startDeadline = 0;
     setState('stopped');
+    // 启动后从未就绪就退出：多半是引擎不完整（ERR_MODULE_NOT_FOUND / plugin tree failed）。
+    // 给出明确提示与修复指引，不自动重装（避免死循环，用户可点启动触发自动修复）。
+    if (!everUp && code !== 0) {
+      pushLog('stderr', '[引擎未能就绪：可能依赖不完整。正在检测本机引擎完整性…]');
+      const found = discoverHarness();
+      if (!found) {
+        pushLog('stderr', '[未找到完整引擎，自动尝试修复…]');
+        setState('installing');
+        autoInstallHarness();
+      } else {
+        pushLog('stderr', `[检测到可用引擎 ${found.dir}（${found.kind}），请再次点击「启动 Harness」重试]`);
+        setState('stopped');
+      }
+    }
   });
   return { ok: true };
 }
@@ -208,7 +313,9 @@ function fixNodeEnv(onDone) {
   const script = envCheckScript();
   if (!fs.existsSync(script)) { pushLog('stderr', `[缺少环境预检脚本 ${script}]`); onDone(false); return; }
   pushLog('stdout', '[Node.js 缺失或版本过低，正在自动安装最新 LTS（winget 优先）…]');
-  const p = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Fix', '-NodeMinMajor', '22'], { windowsHide: true, env: { ...process.env } });
+  const fixArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Fix', '-NodeMinMajor', '22'];
+  if (DSH_ROOT) fixArgs.push('-DestDir', DSH_ROOT);
+  const p = spawn('powershell.exe', fixArgs, { windowsHide: true, env: { ...process.env } });
   p.stdout.on('data', (d) => pushLog('stdout', d.toString()));
   p.stderr.on('data', (d) => pushLog('stderr', d.toString()));
   p.on('error', (err) => { pushLog('stderr', `[Node 修复脚本启动失败] ${err.message}`); onDone(false); });
@@ -220,7 +327,7 @@ function autoInstallHarness() {
     setTimeout(() => {
       const found = discoverHarness();
       if (found) { launchHarness(found); }
-      else { pushLog('stderr', '[安装完成但未找到引擎，请查看上方日志]'); setState('stopped'); }
+      else { manualFallbackGuide(); }
     }, 1500);
   };
   // 源码安装是否可用：依赖同目录（打包后 %LOCALAPPDATA%\DSH\app\resources\app\installer\setup.ps1）
@@ -256,16 +363,20 @@ function autoInstallHarness() {
     const script = path.join(__dirname, 'installer', 'setup.ps1');
     if (!fs.existsSync(script)) {
       pushLog('stderr', `[缺少安装脚本：${script}，无法自动获取引擎。请手动运行安装器或设置 DSH_HARNESS_DIR]`);
-      setState('stopped');
+      manualFallbackGuide();
       return;
     }
     pushLog('stdout', `[运行引擎安装: ${script} -EngineOnly（下载官方源码+Node，多镜像自动重试，首次需数分钟）]`);
-    const p = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-EngineOnly'], { windowsHide: true, env: { ...process.env } });
+    // 必须传 -DestDir 指向用户实际安装目录（DSH_ROOT 动态推导），否则 setup.ps1 会用
+    // 默认 %LOCALAPPDATA%\DSH——若用户装在自定义目录，会去错地方找捆绑 node 导致 corepack 缺失。
+    const psArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-EngineOnly'];
+    if (DSH_ROOT) psArgs.push('-DestDir', DSH_ROOT);
+    const p = spawn('powershell.exe', psArgs, { windowsHide: true, env: { ...process.env } });
     p.stdout.on('data', (d) => pushLog('stdout', d.toString()));
     p.stderr.on('data', (d) => pushLog('stderr', d.toString()));
-    p.on('error', (err) => { pushLog('stderr', `[脚本启动失败] ${err.message}`); setState('stopped'); });
+    p.on('error', (err) => { pushLog('stderr', `[脚本启动失败] ${err.message}`); manualFallbackGuide(); });
     p.on('close', (code) => {
-      if (code !== 0) { pushLog('stderr', `[引擎安装失败 code=${code}，请检查网络后重试]`); setState('stopped'); return; }
+      if (code !== 0) { pushLog('stderr', `[引擎安装失败 code=${code}，请检查网络后重试]`); manualFallbackGuide(); return; }
       afterInstall();
     });
   };
@@ -283,7 +394,7 @@ function autoInstallHarness() {
     if (fatal.length > 0) {
       for (const i of fatal) pushLog('stderr', `[环境不满足] ${i}`);
       pushLog('stderr', '[请修复上述环境问题后重试（如联网、换 64 位系统、清理磁盘）]');
-      setState('stopped');
+      manualFallbackGuide();
       return;
     }
     if (report.issues && report.issues.length) {
@@ -292,9 +403,9 @@ function autoInstallHarness() {
     // 2) Node 不合格 → 先修复，修复后再复查一次
     if (!report.nodeOk) {
       fixNodeEnv((ok) => {
-        if (!ok) { pushLog('stderr', '[Node.js 安装失败，请检查网络/winget 后重试]'); setState('stopped'); return; }
+        if (!ok) { pushLog('stderr', '[Node.js 安装失败，请检查网络/winget 后重试]'); manualFallbackGuide(); return; }
         const re = readEnvReport();
-        if (re && !re.nodeOk) { pushLog('stderr', '[Node.js 修复后仍不满足要求，请手动安装 Node.js >= 22]'); setState('stopped'); return; }
+        if (re && !re.nodeOk) { pushLog('stderr', '[Node.js 修复后仍不满足要求，请手动安装 Node.js >= 22]'); manualFallbackGuide(); return; }
         proceed();
       });
       return;
@@ -304,6 +415,34 @@ function autoInstallHarness() {
     // 体检脚本缺失时退回旧逻辑：有 npm 就发行包，否则源码安装
     proceed();
   }
+}
+
+// 保底指引：所有自动获取途径失败时，给出 100% 可成功的手动安装办法（面向用户，不绑定任何本地路径）。
+function manualFallbackGuide() {
+  const harnessDir = DSH_ROOT ? path.join(DSH_ROOT, 'harness') : '<安装目录>\\harness';
+  const lines = [
+    '==================================================',
+    '[手动安装指引（100% 可成功的办法）] 自动获取引擎均失败，请任选其一：',
+    `  办法 1（最快）：若你本机已有 DeepSeek-Harness 源码目录，设环境变量指向它后重启应用：`,
+    `      setx DSH_HARNESS_DIR "你的引擎源码目录"`,
+    `  办法 2：浏览器手动下载引擎源码压缩包（任一链接）：`,
+    `    官方: https://github.com/deepseek-ai/DeepSeek-Harness/archive/refs/tags/dsh-v0.1.0-rc.8.zip`,
+    `    镜像: https://ghfast.top/https://github.com/deepseek-ai/DeepSeek-Harness/archive/refs/tags/dsh-v0.1.0-rc.8.zip`,
+    `    解压后把整个仓库目录放到: ${harnessDir}`,
+    `    若该目录没有 node_modules（源码缺依赖），以管理员身份在 cmd 中执行：`,
+    `      cd /d "${harnessDir}"`,
+    `      corepack pnpm install --frozen-lockfile`,
+    `      corepack pnpm build`,
+    `  办法 3：以管理员身份运行 cmd，安装官方发行包：`,
+    `      npm install -g @deepseek-ai/dsh --registry https://registry.npmmirror.com`,
+    '完成后重启本应用，点「启动 Harness」即可。',
+    '==================================================',
+  ];
+  for (const l of lines) pushLog('stderr', l);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('harness:manual-guide', { lines });
+  }
+  setState('stopped');
 }
 
 function findListenerPid() {
@@ -526,6 +665,7 @@ ipcMain.handle('harness:stop', () => stopHarness());
 ipcMain.handle('harness:status', async () => {
   const webUp = await checkWebUp();
   if (webUp) {
+    if (!webUpAt) webUpAt = Date.now();
     if (harnessState !== 'running') setState('running');
   } else if (harnessState === 'running') {
     setState('stopped');

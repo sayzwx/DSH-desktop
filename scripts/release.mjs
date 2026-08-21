@@ -76,17 +76,52 @@ async function main() {
     case 'upload': {
       const [id, file] = rest;
       if (!id || !file) { console.error('用法: release.mjs upload <release_id> <file>'); process.exit(2); }
-      const buf = readFileSync(file);
+      const fs = await import('node:fs');
+      const buf = fs.readFileSync(file);
       const name = basename(file);
-      const url = `https://uploads.github.com/repos/${REPO}/releases/${id}/assets?name=${encodeURIComponent(name)}`;
-      const r = await api(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream' },
-        body: buf,
-      });
-      console.log(`已上传资产 ${r.name}（${(r.size / 1048576).toFixed(1)} MB）`);
-      console.log(r.browser_download_url);
-      return r;
+      const rid = String(id);
+      // 删除同名旧资产（避免同名冲突），失败忽略（可能本来就没有）
+      try {
+        const rel = await api(`https://api.github.com/repos/${REPO}/releases/${rid}`);
+        const old = (rel.assets || []).find((a) => a.name === name);
+        if (old) {
+          // eslint-disable-next-line no-console
+          console.log(`删除同名旧资产 ${name} (id=${old.id}) …`);
+          await api(`https://api.github.com/repos/${REPO}/releases/assets/${old.id}`, { method: 'DELETE' });
+        }
+      } catch { /* 无同名旧资产 */ }
+      const url = `https://uploads.github.com/repos/${REPO}/releases/${rid}/assets?name=${encodeURIComponent(name)}`;
+      // 大文件上传易受网络波动影响：最多重试 RETRY 次，单次超时 90s-15min，间隔递增
+      const RETRY = 5;
+      let lastErr = '';
+      for (let attempt = 1; attempt <= RETRY; attempt++) {
+        try {
+          // eslint-disable-next-line no-console
+          console.log(`上传尝试 ${attempt}/${RETRY} …`);
+          const ac = new AbortController();
+          const timer = setTimeout(() => ac.abort(), 15 * 60 * 1000); // 15 分钟
+          try {
+            const r = await api(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/octet-stream' },
+              body: buf,
+              signal: ac.signal,
+            });
+            clearTimeout(timer);
+            // eslint-disable-next-line no-console
+            console.log(`已上传资产 ${r.name}（${(r.size / 1048576).toFixed(1)} MB）`);
+            // eslint-disable-next-line no-console
+            console.log(r.browser_download_url);
+            return r;
+          } finally { clearTimeout(timer); }
+        } catch (e) {
+          lastErr = e.message || String(e);
+          // eslint-disable-next-line no-console
+          console.log(`  第 ${attempt} 次失败: ${lastErr}`);
+          await new Promise((r) => setTimeout(r, 5000 * attempt)); // 指数递增等待
+        }
+      }
+      throw new Error(`上传失败（重试 ${RETRY} 次）: ${lastErr}`);
     }
     case 'list': {
       const r = await api(`https://api.github.com/repos/${REPO}/releases`);

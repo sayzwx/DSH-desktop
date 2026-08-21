@@ -86,7 +86,7 @@ Copy-Item (Join-Path $root 'DSH.ico') (Join-Path $appDir 'DSH.ico') -Force
 # 应用本体 → resources\app（剔除 .git / dist / electron 运行时 / 大体积非必需资源）
 $resApp = Join-Path $appDir 'resources\app'
 New-Item -ItemType Directory -Path $resApp -Force | Out-Null
-robocopy $root $resApp /E /XD "$root\.git" "$root\dist" "$root\node_modules\electron" "$root\wallpaper-engine" /XF "*.mp4" /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
+robocopy $root $resApp /E /XD "$root\.git" "$root\.workbuddy" "$root\DSH" "$root\dist" "$root\node_modules\electron" "$root\wallpaper-engine" /XF "*.mp4" /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
 if ($LASTEXITCODE -ge 8) { throw 'robocopy app failed' }
 # 动态星空背景（renderer\bg-animated.mp4，~45MB）若存在则放回应用资源（可选动画背景，
 # 体积敏感可自行从仓库删掉该文件后再打包——删除后 UI 自动回落静态星空背景）
@@ -125,6 +125,10 @@ $stageTools = Join-Path $stage 'tools\node'
 robocopy (Split-Path -Parent $nodeExe) $stageTools /E /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
 if ($LASTEXITCODE -ge 8) { throw 'staging bundled node failed' }
 Write-Host ("  bundled Node: {0:N0} MB" -f ((Get-ChildItem $stageTools -Recurse -File | Measure-Object Length -Sum).Sum / 1MB))
+# 校验捆绑 node 含 corepack（引擎安装依赖 corepack pnpm，缺了会在安装时失败）
+if (-not (Test-Path (Join-Path $stageTools 'corepack.cmd')) -and -not (Test-Path (Join-Path $stageTools 'node_modules\corepack\dist\corepack.js'))) {
+  Write-Host 'WARN: 捆绑 node 缺少 corepack（引擎安装需要），安装时可能失败！请检查 node-cache 完整性。'
+}
 
 $zip = Join-Path $dist "$name.zip"
 Make-Zip $stage $zip

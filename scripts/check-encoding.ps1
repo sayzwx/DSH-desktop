@@ -26,7 +26,7 @@ param([switch]$Fix)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
-$skipDirs = @('.git', 'node_modules', 'dist', 'wallpaper-engine', 'scripts\.scratch')
+$skipDirs = @('.git', 'node_modules', 'dist', 'wallpaper-engine', 'scripts\.scratch', 'DSH')
 $requireBom = @('.ps1', '.txt')      # 必须带 BOM
 $forbidBom = @('.bat', '.cmd', '.js', '.mjs', '.json', '.html', '.css', '.md', '.yml', '.yaml')
 
@@ -46,7 +46,9 @@ while ($stack.Count -gt 0) {
   }
   foreach ($f in Get-ChildItem $d -File -Force -ErrorAction SilentlyContinue) {
     $ext = $f.Extension.ToLower()
-    if (($requireBom -contains $ext) -or ($forbidBom -contains $ext)) { $files.Add($f.FullName) }
+    $name = $f.Name
+    # 无扩展名的隐藏配置文件（.gitignore 等）也必须 UTF-8 无 BOM——曾发生 GBK+UTF-8 混杂损坏
+    if (($requireBom -contains $ext) -or ($forbidBom -contains $ext) -or ($name -eq '.gitignore' -or $name -eq '.npmrc' -or $name -eq '.env')) { $files.Add($f.FullName) }
   }
 }
 

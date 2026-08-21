@@ -10,7 +10,12 @@ if %RC% NEQ 0 (
   echo.
   echo Install failed (code %RC%^. See messages above.
   echo.
-  pause
+  rem Inno Setup 调用（参数含 -InnoSetup）时绝不 pause —— 否则安装器会卡死在隐藏窗口；
+  rem 仅手动双击运行（zip 解压方式）时暂停，让用户看到错误信息。
+  echo %* | findstr /i "InnoSetup" >nul 2>&1
+  if errorlevel 1 (
+    pause
+  )
 )
 rem 清理安装暂存目录（SFX 解压位置 %LOCALAPPDATA%\DSH\stage；失败可忽略）
 if /i "%SCRIPT_DIR%"=="%LOCALAPPDATA%\DSH\stage\" (
@@ -18,4 +23,3 @@ if /i "%SCRIPT_DIR%"=="%LOCALAPPDATA%\DSH\stage\" (
   rd /s /q "%LOCALAPPDATA%\DSH\stage" >nul 2>&1
 )
 exit /b %RC%
-
