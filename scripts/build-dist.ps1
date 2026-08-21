@@ -6,9 +6,9 @@
 #   Bundled portable Node: shipped inside the package and installed to
 #   %LOCALAPPDATA%\DSH\tools\node — the desktop and the engine use it first,
 #   so the target machine needs NO system Node at all.
-# Run:  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-dist.ps1 [-Version 0.4.1] [-NodeVersion v22.23.2] [-Root C:\path\to\repo]
+# Run:  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-dist.ps1 [-Version 0.5.0] [-NodeVersion v22.23.2] [-Root C:\path\to\repo]
 param(
-  [string]$Version = '0.4.1',
+  [string]$Version = '0.5.0',
   [string]$NodeVersion = 'v22.23.2',  # 自带便携 Node 版本（随包分发，替换本机 Node 依赖）
   [string]$Root = ''   # 仓库根目录，默认取脚本所在目录的上级（scripts 的父目录）
 )
@@ -135,9 +135,20 @@ Make-Zip $stage $zip
 
 # ---------- 2. Setup.exe 安装器：优先 Inno Setup（真正的一键安装向导），7-Zip SFX 兜底 ----------
 Write-Host "=== Building $name-Setup.exe ==="
+# Inno Setup 探测：不绑定任何开发者本机路径。
+# 顺序：$env:DSH_ISCC（显式指定）→ PATH 上的 iscc → 常见系统安装位置（%ProgramFiles% 等）。
 $inno = ''
-foreach ($p in @('C:\Users\mjsx\AppData\Local\Programs\Inno Setup 6\ISCC.exe', 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe', 'C:\Program Files\Inno Setup 6\ISCC.exe')) { if (Test-Path $p) { $inno = $p; break } }
+if ($env:DSH_ISCC -and (Test-Path $env:DSH_ISCC)) { $inno = $env:DSH_ISCC }
 if (-not $inno) { $inno = (Get-Command iscc -ErrorAction SilentlyContinue).Source }
+if (-not $inno) {
+  $pf = @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA)
+  foreach ($base in ($pf | Where-Object { $_ } | Select-Object -Unique)) {
+    $cand = Join-Path $base 'Inno Setup 6\ISCC.exe'
+    if (Test-Path $cand) { $inno = $cand; break }
+    $cand = Join-Path $base 'Inno Setup 5\ISCC.exe'
+    if (Test-Path $cand) { $inno = $cand; break }
+  }
+}
 $exeOut = Join-Path $dist "$name-Setup.exe"
 if ($inno) {
   # Inno：真正的一键安装向导（双击→下一步→安装→自动拉引擎）。脚本 dsh-installer.iss 引用 stage。
@@ -153,10 +164,17 @@ if ($inno) {
     Write-Host "WARN: 缺 dsh-installer.iss，跳过 Inno (zip is the deliverable)"
   }
 } else {
-  Write-Host 'WARN: Inno Setup 未找到，回退到 7-Zip SFX 自解压'
+  Write-Host 'WARN: Inno Setup 未找到，回退到 7-Zip SFX 自解压（可用 $env:DSH_ISCC=/path/iscc.exe 指定 Inno）'
   $sz7 = ''
-  foreach ($p in @('D:\7-Zip\7z.exe', 'C:\Program Files\7-Zip\7z.exe', 'C:\Program Files (x86)\7-Zip\7z.exe', 'D:\Program Files\7-Zip\7z.exe')) { if (Test-Path $p) { $sz7 = $p; break } }
+  if ($env:DSH_7Z -and (Test-Path $env:DSH_7Z)) { $sz7 = $env:DSH_7Z }
   if (-not $sz7) { $sz7 = (Get-Command 7z -ErrorAction SilentlyContinue).Source }
+  if (-not $sz7) {
+    $pf = @($env:ProgramFiles, ${env:ProgramFiles(x86)}, 'D:\', 'D:\Program Files\')
+    foreach ($base in ($pf | Where-Object { $_ } | Select-Object -Unique)) {
+      $cand = Join-Path $base '7-Zip\7z.exe'
+      if (Test-Path $cand) { $sz7 = $cand; break }
+    }
+  }
   $sfx = if ($sz7) { Join-Path (Split-Path -Parent $sz7) '7z.sfx' } else { '' }
   if (-not $sz7 -or -not (Test-Path $sfx)) {
     Write-Host '7-Zip not found - Setup.exe skipped (zip is the deliverable)'

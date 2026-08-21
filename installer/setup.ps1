@@ -86,7 +86,7 @@ function Copy-Tree([string]$from, [string]$to) {
   if ($LASTEXITCODE -ge 8) { throw "robocopy failed: $from -> $to" }
 }
 
-# 确保 Node >= 22：优先 %LOCALAPPDATA%\DSH\tools\node，其次系统 node；
+# 确保 Node >= 22：优先 安装根目录\tools\node，其次系统 node；
 # 都没有或版本过低时，优先用 winget 安装最新 Node LTS，失败再回退下载官方 Node zip。
 function Get-NodeExe {
   $candidate = Join-Path $Dest 'tools\node\node.exe'

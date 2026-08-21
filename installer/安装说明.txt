@@ -1,29 +1,32 @@
-﻿# DSH Desktop 一键安装包（安装器模式：自带便携 Node，引擎安装时从官方拉取）
+﻿# DSH Desktop 一键安装指南（v0.5.0 安装器）
 
 ## 这是什么
-DSH 桌面端 UI 应用安装包（含 Electron 运行时 + 便携版 Node.js，约 250MB，和普通 Electron 应用一样）。
-- **自带便携 Node**（`tools\node`）：应用启动与 Harness 引擎安装/运行都优先使用它，
+DSH 桌面端 UI 应用安装包（含 Electron 运行时 + 便携版 Node.js，约 240MB，和普通 Electron 应用一样）。
+- **自带便携 Node**（随安装目录的 `tools\node`）：应用启动与 Harness 引擎安装/运行都优先使用它，
   目标机器**不需要安装任何 Node.js 环境**。
 - 重型的 DeepSeek Harness 引擎**不打包进安装包**：安装时自动从 DeepSeek 官方源拉取
   （官方源码），并使用自带 Node 在本机完成依赖安装与构建（一次性，需数分钟）。
 
 ## 安装方法（二选一）
-- 方式 A：下载 `DSH-Desktop-v...-Setup.exe`，双击运行。这是真正的安装器：
-  自动解压到 `%LOCALAPPDATA%\DSH\stage` → 弹出安装进度 → 自动执行安装脚本 →
-  完成后自动清理 `stage` 临时目录并启动应用。
-- 方式 B：解压 `DSH-Desktop-v...-Setup.exe` 同级的 zip，双击里面的 `setup.bat`
+- 方式 A：下载 `DSH-Desktop-v...-Setup.exe`，双击运行。这是**真正的 Windows 安装向导（Inno Setup）**：
+  ① 选择安装目录（默认 `%LOCALAPPDATA%\DSH`，可自选任意目录）→
+  ② 自动**环境预检**（CPU 架构 / 网络 / 磁盘 / Node.js，缺失项明确列出）→
+  ③ 安装 → ④ 自动拉取并构建 Harness 引擎 → ⑤ 创建桌面快捷方式 → ⑥ 启动应用。
+  **app / harness / tools 全部随你选择的目录布局，自动适配所选路径，绝不绑定开发者本机路径。**
+- 方式 B：解压 `DSH-Desktop-v...-Setup.exe` 同级的 zip，双击里面的 `setup.bat`。
 
 安装器会：
-1. 安装桌面端应用到 `%LOCALAPPDATA%\DSH\app`
-2. 安装自带便携 Node 到 `%LOCALAPPDATA%\DSH\tools\node`（无需系统 Node）
+1. 安装桌面端应用到「所选安装目录\app」
+2. 安装自带便携 Node 到「所选安装目录\tools\node」（无需系统 Node）
 3. **自动创建桌面快捷方式「DSH」**（桌面 + 开始菜单；应用首启还会兜底补齐）
 4. 写入纯净默认的 Harness 配置（`~/.dsh/settings.yaml`，仅首次，已有配置不覆盖；
    **不包含任何开发者个人配置 / 密钥**）
-5. 环境预检（`check-env.ps1`）：检查 CPU 架构、网络可达、磁盘空间
-6. 拉取 Harness 引擎到 `%LOCALAPPDATA%\DSH\harness`：
+5. 环境预检（`check-env.ps1`）：检查 CPU 架构、网络可达、磁盘空间、Node.js
+6. 拉取 Harness 引擎到「所选安装目录\harness」：
    - 使用自带 Node（缺失时才回退 winget 或下载官方 nodejs.org 的 Node）
-   - 下载 DeepSeek-Harness 官方源码（github.com/deepseek-ai，zip 优先、git clone 兜底）
-     → pnpm 安装依赖 + 构建
+   - 下载 DeepSeek-Harness 官方源码（github.com/deepseek-ai，zip 优先、git clone 兜底、
+     国内加速镜像自动重试：ghfast.top / ghproxy.net / gh-proxy.com / gh.ddlc.top）
+     → pnpm 安装依赖 + 构建（npm 镜像自动重试：npmmirror / 腾讯云 / 官方）
    - 需要网络：github.com / nodejs.org / npm registry
 7. 启动 DSH Desktop
 
@@ -38,19 +41,31 @@ powershell -NoProfile -ExecutionPolicy Bypass -File setup.ps1 -NpmRegistry https
 ```bat
 powershell -NoProfile -ExecutionPolicy Bypass -File setup.ps1 -SkipHarness
 ```
-之后在应用里配置 harness 路径（环境变量 DSH_HARNESS_DIR，或直接把引擎放到
-`%LOCALAPPDATA%\DSH\harness`）。
+之后在应用里配置 harness 路径（环境变量 DSH_HARNESS_DIR，或直接把引擎放到所选安装目录的 `harness`）。
 
 ## 只修复/重装引擎（不动应用与配置）
 ```bat
 powershell -NoProfile -ExecutionPolicy Bypass -File setup.ps1 -EngineOnly
 ```
 
+## 指定安装目录（命令行安装）
+```bat
+powershell -NoProfile -ExecutionPolicy Bypass -File setup.ps1 -DestDir "D:\MyApps\DSH"
+```
+
+## 应用内更新（v0.5.0 起为正规软件升级）
+- 设置 → 软件更新 → 一键更新：下载走国内加速镜像 → 新版 Setup.exe **静默覆盖安装到原安装目录**
+  （替换旧版，不另建新文件夹）→ 重建桌面快捷方式指向新版 → 自动重启进新版。
+- 配置、会话、引擎数据全部保留。
+
 ## 安装后首次使用
 1. 打开「DSH Desktop」，点「启动 Harness」（Web 界面 http://127.0.0.1:3080）
 2. 模型 API Key：应用「设置 → 模型」里填写（安装包不含任何密钥或个人配置）
 3. GitHub 连接：左侧栏用 SSH 密钥，可自动生成
 4. 对话里可用「排队 / 插话」切换发送模式；模型配置可编辑/删除自己新增的提供商
+5. 关闭窗口 = 隐藏到托盘（服务继续后台运行）；托盘菜单可「退出（停止 Harness 并退出）」
 
 ## 卸载
-删除 `%LOCALAPPDATA%\DSH` 与桌面快捷方式；用户数据在 `%USERPROFILE%\.dsh`。
+用 Windows「设置 → 应用 → DSH Desktop → 卸载」（或安装目录下的 unins000.exe）。
+卸载仅移除 app / tools / config 子目录；Harness 引擎与 ~/.dsh 用户数据保留，由用户自行清理
+（避免卸载误删会话/引擎/配置）。
