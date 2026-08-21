@@ -2,11 +2,20 @@
 
 基于 Electron 的 [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeek-Harness) 桌面端 UI——「深空观测站」。
 
-> 当前版本：**v0.4.1**
+> 当前版本：**v0.5.0**
 
 用一套星际主题界面把 harness 的 Web 服务（`pnpm dsh web`）封装成桌面应用：一键启停、实时日志、会话对话、使用统计、GitHub 仓库浏览，以及完整的**工作区**支持。
 
-## v0.4.1 更新日志
+## v0.5.0 更新日志
+
+- **斜杠命令面板重做（对齐 webUI）**：输入 `/` 后 `/` 保留在输入框里，命令/技能选择框在输入框**上方**弹出、可上下滚动；删除 `/` 选择框随之消失；**点击选项即可直接执行**（此前点击无效的缺陷修复），↑↓ 选择 · Enter 执行 · Tab 补全 · Esc 关闭。
+- **后台常驻服务（关闭窗口不断线）**：关闭窗口只隐藏到托盘，Harness 服务继续在后台运行；再次打开应用/双击快捷方式自动唤回窗口并接管 `:3080`，会话不中断。只有你明确「停止 Harness 并退出」才会真正停止。新增系统托盘菜单（显示主窗口 / 启停服务 / 退出）。
+- **窗口自动检测**：桌面端实时监控本应用创建的所有窗口（含辅助/弹窗），侧边栏显示「窗口」指示器，任何新窗口开闭、标题变化都会被看到——不再有“开了窗口却看不见、以为是卡住”的情况。
+- **插件市场开箱即连**：市场页未就绪时可直接「启动 Harness」一键拉起并自动重连；安装器内置 `dshmarket` 插件，绝大多数用户装完即用，绝不让你卡在“连不上”。
+- **真正的安装器（Inno Setup）**：Release 里的 `Setup.exe` 是标准 Windows 安装向导（非自解压压缩包）——可选择安装目录，进入向导自动做**环境预检**（Node / 网络 / 磁盘），缺失项明确列出，随后在你选择的目录内自动补齐依赖并拉取引擎；**全程不再绑定任何开发者本机路径**。
+- **更新即正规软件升级**：一键更新下载到「应用安装根目录\updates」，用新版 Setup.exe 静默**覆盖安装到原目录**（替换旧版，不另建新文件夹），重建桌面快捷方式指向新版，完成后自动重启进新版。
+- **全局界面质感升级**：更精致的标题字距与渐变、卡片玻璃层次、按钮高亮描边与按压反馈、聚焦光晕、主题化滚动条、选中文字配色。
+
 
 - **全新一键安装向导（Inno Setup）**：`Setup.exe` 从"自解压压缩包"升级为真正的 Windows 安装向导——双击 → 下一步 → 自动安装到 `%LOCALAPPDATA%\DSH` → 自动拉取引擎 / 建快捷方式 / 启动应用。不再需要手动解压或运行 setup.bat。安装包内置便携 Node，目标机器无需任何 Node 环境。
 - **harness 引擎统一到安装根目录**：自动检测 / 下载的 harness 默认安装在 `%LOCALAPPDATA%\DSH\harness`（与 `app` 同根），不再散落到系统全局 npm。卸载仅移除 app/tools/config，会话与引擎数据保留。
@@ -116,27 +125,30 @@ renderer/           渲染层（原生 HTML/JS/CSS）
 
 ## 一键安装包（发行版）
 
-运行 `scripts/build-dist.ps1` 生成小体积安装器（引擎不打包、不托管）：
+运行 `scripts/build-dist.ps1` 生成安装包（引擎不打包、不托管）：
 
-- `dist/DSH-Desktop-v<版本>.zip` 与自解压 `DSH-Desktop-v<版本>-Setup.exe`：仅桌面端 UI + Electron 运行时 + 一键安装器（约 220MB，与普通 Electron 应用相当）；
-- Harness 引擎不在安装包内：安装时由安装器从官方源自动拉取（`deepseek-ai/DeepSeek-Harness` 源码 + nodejs.org 官方 Node），在本机完成依赖安装与构建（一次性）。
+- `dist/DSH-Desktop-v<版本>-Setup.exe`：**真正的 Windows 安装向导（Inno Setup）**——
+  双击 → 选择安装目录 → 自动环境预检（Node / 网络 / 磁盘，缺失项明确列出）→ 安装 →
+  自动从官方源拉取并构建 Harness 引擎 → 建桌面/开始菜单快捷方式 → 启动应用（约 240MB，与普通 Electron 应用相当）。
+- `dist/DSH-Desktop-v<版本>.zip`：便携版（解压后运行 `setup.bat`）。
+- Harness 引擎不在安装包内：安装时由安装器从官方源自动拉取（`deepseek-ai/DeepSeek-Harness` 源码 + nodejs.org 官方 Node），在本机完成依赖安装与构建（一次性）。**app / harness / tools 全部随你选择的安装目录布局，自动适配所选路径**，绝不绑定开发者本机路径。
 
 ### 下载加速（国内用户）
 
 GitHub Releases 直连在国内可能较慢，可用以下任一方式：
 
-- **应用内更新**：v0.2.1 起「设置 → 检查更新 → 下载」会自动按 **加速镜像优先 → GitHub 官方回源** 的顺序下载（内置 ghfast.top / ghproxy.net / gh-proxy.com / gh.ddlc.top），无需手动处理。
+- **应用内更新**：「设置 → 检查更新 → 一键更新」会自动按 **加速镜像优先 → GitHub 官方回源** 的顺序下载（内置 ghfast.top / ghproxy.net / gh-proxy.com / gh.ddlc.top），且更新直接**覆盖安装到原安装目录**（替换旧版、自动重启进新版、桌面图标指向新版），无需手动处理。
 - **手动下载加速链**：把官方下载链接前面拼上镜像前缀即可。例如官方链接
-  `https://github.com/sayzwx/DSH-desktop/releases/download/v0.3.1/DSH-Desktop-v0.3.1-Setup.exe`，
+  `https://github.com/sayzwx/DSH-desktop/releases/download/v0.5.0/DSH-Desktop-v0.5.0-Setup.exe`，
   加速后为
-  `https://ghfast.top/https://github.com/sayzwx/DSH-desktop/releases/download/v0.3.1/DSH-Desktop-v0.3.1-Setup.exe`
+  `https://ghfast.top/https://github.com/sayzwx/DSH-desktop/releases/download/v0.5.0/DSH-Desktop-v0.5.0-Setup.exe`
   （`ghfast.top` / `ghproxy.net` / `gh-proxy.com` / `gh.ddlc.top` 均可，任选其一）。
 
 > 镜像为第三方加速服务，若某天不可用，请回退 GitHub 官方直链或换其它镜像。
 
-使用者：双击 `Setup.exe`（或解压 zip 后运行 `setup.bat`）→ 自动安装到 `%LOCALAPPDATA%\DSH`、
+使用者：双击 `Setup.exe`（或解压 zip 后运行 `setup.bat`）→ 选择安装目录 →
 写入纯净的默认 `~/.dsh/settings.yaml`（首次安装，不覆盖已有配置）、从官方拉取并构建 Harness 引擎、创建桌面快捷方式。
-安装器内置环境预检：Node.js 缺失或版本过低时**优先用 winget 安装最新 LTS**，winget 不可用则下载官方 Node 到 `%LOCALAPPDATA%\DSH\tools\node`。
+安装器内置环境预检：Node.js 缺失或版本过低时**优先用 winget 安装最新 LTS**，winget 不可用则下载官方 Node 到所选安装目录的 `tools\node`。
 网络受限时可用 `-NpmRegistry https://registry.npmmirror.com` 指定 npm 镜像，或 `-SkipHarness` 跳过引擎（之后手动配置 `DSH_HARNESS_DIR`）。
 安装包不含任何 API 密钥及个人配置；模型密钥在应用「设置 → 模型」填写，GitHub 用 SSH 密钥连接。
 

@@ -21,6 +21,34 @@ const apiKey = $('#apiKey');
 const sbStatus = $('#sbStatus');
 const sbDot = $('#sbDot');
 const sbTime = $('#sbTime');
+const winIndicator = $('#winIndicator');
+const winIndicatorText = $('#winIndicatorText');
+
+// ---------- 窗口自动检测指示器（需求#3） ----------
+// 主进程会广播本应用创建的所有 BrowserWindow（含辅助/弹窗）。这里实时显示数量与标题，
+// 任何“开了个窗口却看不到”的情况都能在侧边栏立刻发现。
+function renderWindows(list) {
+  if (!winIndicator || !winIndicatorText) return;
+  const wins = Array.isArray(list) ? list : [];
+  const visible = wins.filter((w) => w.visible);
+  if (wins.length === 0) {
+    winIndicator.hidden = true;
+    return;
+  }
+  winIndicator.hidden = false;
+  const shown = visible.length > 0 ? `${visible.length} 可见` : '';
+  const total = wins.length;
+  winIndicatorText.textContent = `${total} 窗口${shown ? ` · ${shown}` : ''}`;
+  const lines = wins.map((w) => `  · [${w.kind === 'main' ? '主' : '辅'}] ${w.title || w.label}${w.visible ? '（可见）' : '（窗口已隐藏，服务后台运行中）'}`);
+  winIndicator.title = `当前应用窗口（${total}）：\n${lines.join('\n')}\n\n点击打开主窗口`;
+}
+
+// 首次加载 + 实时更新
+api.listWindows().then((r) => { if (r && r.ok) renderWindows(r.windows); }).catch(() => {});
+api.onWindowsChanged((list) => renderWindows(list));
+if (winIndicator) {
+  winIndicator.addEventListener('click', () => { api.showWindow(); });
+}
 
 let state = 'stopped';
 let runStartTime = null;
@@ -254,6 +282,26 @@ api.onState((s) => {
   if (s === 'running') setTimeout(refreshStatus, 500);
 });
 api.onLog((lines) => appendLogs(lines));
+
+// ---------- 后台与退出（需求#4） ----------
+$('#bgHideBtn')?.addEventListener('click', async () => {
+  await api.hideToTray();
+  (window.__modal ? window.__modal.alert('已隐藏到托盘，Harness 服务继续在后台运行。\n点击任务栏托盘的 DSH 图标可随时唤回主窗口。', '后台运行中') : alert('已隐藏到托盘，服务继续运行'));
+});
+$('#bgQuitServiceBtn')?.addEventListener('click', () => {
+  if (window.__modal) {
+    window.__modal.confirm('确认停止 Harness 服务并退出 DSH 桌面端？', '停止服务并退出', { okText: '确认停止并退出' }).then((ok) => { if (ok) api.quitWithService(); });
+  } else if (window.confirm('确认停止 Harness 服务并退出 DSH 桌面端？')) {
+    api.quitWithService();
+  }
+});
+$('#bgQuitOnlyBtn')?.addEventListener('click', () => {
+  if (window.__modal) {
+    window.__modal.confirm('仅退出应用（保留后台 Harness 服务）？\n下次启动将自动接管 :3080，会话不中断。', '仅退出应用', { okText: '仅退出' }).then((ok) => { if (ok) api.quitBackgroundOnly(); });
+  } else if (window.confirm('仅退出应用（保留后台 Harness 服务）？\n下次启动将自动接管 :3080，会话不中断。')) {
+    api.quitBackgroundOnly();
+  }
+});
 
 setInterval(refreshStatus, 5000);
 })();

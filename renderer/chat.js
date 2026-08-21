@@ -1243,7 +1243,9 @@
   }
 
   // =====================================================================
-// 命令面板：输入 / 时弹出命令/技能选择面板
+// 命令面板：输入 / 时在输入框上方弹出命令/技能选择列表（与 webUI 一致）
+//  - "/" 保留在输入框里；删除它就关闭面板
+//  - 面板向上展开、可上下滚动；点击条目直接执行（此前点击无效的缺陷修复）
 // =====================================================================
 class CommandPanel {
   constructor(inputEl, api, getSessionId) {
@@ -1257,7 +1259,14 @@ class CommandPanel {
     this.selectedIndex = -1;
     this.panel = null;
     this.searchQuery = '';
-    this.debounceTimer = null;
+    this._onKeydown = (e) => this.onInputKeydown(e);
+    this._onInput = () => this.refresh();
+    this._onResize = () => this.positionPanel();
+    this._onDocMousedown = (e) => {
+      if (this.isOpen && !this.panel.contains(e.target) && e.target !== this.inputEl && !this.inputEl.contains(e.target)) {
+        this.close();
+      }
+    };
     this.createPanel();
   }
 
@@ -1266,32 +1275,33 @@ class CommandPanel {
     this.panel.className = 'cmd-panel';
     this.panel.style.display = 'none';
     this.panel.innerHTML = `
-      <div class="cmd-search">
-        <span class="cmd-search-ic">/</span>
-        <input type="text" class="cmd-search-input" placeholder="搜索命令、技能…" spellcheck="false" />
-      </div>
+      <div class="cmd-caret"></div>
       <div class="cmd-list" role="listbox"></div>
       <div class="cmd-hint">↑↓ 选择 · Enter 执行 · Tab 补全 · Esc 关闭</div>
     `;
     document.body.appendChild(this.panel);
-
-    this.searchInput = this.panel.querySelector('.cmd-search-input');
     this.listEl = this.panel.querySelector('.cmd-list');
 
-    // 搜索输入
-    this.searchInput.addEventListener('input', (e) => {
-      this.searchQuery = e.target.value.toLowerCase();
-      this.filterAndRender();
+    // 点击条目 → 执行（核心修复：此前点击无任何效果）
+    this.listEl.addEventListener('click', (e) => {
+      const itemEl = e.target.closest('.cmd-item');
+      if (!itemEl) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.selectedIndex = parseInt(itemEl.dataset.idx, 10);
+      this.executeSelected();
     });
-    this.searchInput.addEventListener('keydown', (e) => this.onSearchKeydown(e));
-    this.searchInput.addEventListener('focus', () => { this.searchInput.select(); });
+    this.listEl.addEventListener('dblclick', (e) => {
+      const itemEl = e.target.closest('.cmd-item');
+      if (!itemEl) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.selectedIndex = parseInt(itemEl.dataset.idx, 10);
+      this.executeSelected();
+    });
 
     // 点击外部关闭
-    document.addEventListener('mousedown', (e) => {
-      if (this.isOpen && !this.panel.contains(e.target) && e.target !== this.inputEl) {
-        this.close();
-      }
-    });
+    document.addEventListener('mousedown', this._onDocMousedown);
   }
 
   async open() {
@@ -1300,12 +1310,13 @@ class CommandPanel {
     if (!sessionId) return;
 
     this.isOpen = true;
-    this.selectedIndex = -1;
-    this.searchInput.value = '';
-    this.searchQuery = '';
+    this.loaded = false;
+    this.selectedIndex = 0;
     this.panel.style.display = 'flex';
-    this.positionPanel();
-    this.searchInput.focus();
+    // 面板打开后由主输入框驱动（/ 保留在输入框里）
+    this.inputEl.addEventListener('keydown', this._onKeydown);
+    this.inputEl.addEventListener('input', this._onInput);
+    window.addEventListener('resize', this._onResize);
 
     // 加载命令和技能
     try {
@@ -1320,27 +1331,52 @@ class CommandPanel {
       this.commands = [];
       this.skills = [];
     }
-    this.filterAndRender();
-    window.addEventListener('resize', this.positionPanel.bind(this));
+    this.loaded = true;
+    this.refresh();
   }
 
   close() {
     if (!this.isOpen) return;
     this.isOpen = false;
     this.panel.style.display = 'none';
-    this.searchInput.value = '';
-    this.searchQuery = '';
     this.filtered = [];
     this.selectedIndex = -1;
-    window.removeEventListener('resize', this.positionPanel.bind(this));
+    this.searchQuery = '';
+    this.inputEl.removeEventListener('keydown', this._onKeydown);
+    this.inputEl.removeEventListener('input', this._onInput);
+    window.removeEventListener('resize', this._onResize);
+  }
+
+  // 由输入事件驱动：输入不再以 / 开头 → 关闭面板
+  refresh() {
+    if (!this.isOpen || !this.loaded) return;
+    const v = this.inputEl.value;
+    if (v.charAt(0) !== '/') {
+      this.close();
+      return;
+    }
+    this.searchQuery = v.slice(1).toLowerCase();
+    this.filterAndRender();
+    this.positionPanel();
   }
 
   positionPanel() {
     if (!this.isOpen) return;
     const rect = this.inputEl.getBoundingClientRect();
+    const maxAbove = rect.top - 12;
     this.panel.style.left = rect.left + 'px';
-    this.panel.style.top = (rect.bottom + 4) + 'px';
-    this.panel.style.width = Math.min(rect.width, 420) + 'px';
+    this.panel.style.width = Math.min(rect.width, 460) + 'px';
+    // 向上展开：面板底边紧贴输入框上沿
+    this.panel.style.top = 'auto';
+    this.panel.style.bottom = Math.max(6, window.innerHeight - rect.top + 6) + 'px';
+    this.panel.style.maxHeight = '';
+    // 若向上超出视口顶部则改为顶部对齐并压缩高度（列表内滚动）
+    const h = this.panel.scrollHeight;
+    if (h > maxAbove && maxAbove > 90) {
+      this.panel.style.top = '10px';
+      this.panel.style.bottom = 'auto';
+      this.panel.style.maxHeight = maxAbove + 'px';
+    }
   }
 
   filterAndRender() {
@@ -1352,7 +1388,7 @@ class CommandPanel {
     this.filtered = q
       ? all.filter(item => item.name.toLowerCase().includes(q) || (item.description && item.description.toLowerCase().includes(q)))
       : all;
-    this.selectedIndex = -1;
+    this.selectedIndex = this.filtered.length ? 0 : -1;
     this.renderList();
   }
 
@@ -1369,34 +1405,43 @@ class CommandPanel {
         ${item.description ? `<span class="cmd-desc">${esc(item.description)}</span>` : ''}
       </div>
     `).join('');
-    // 确保选中项可见
+    // 确保选中项在可视区内（面板可滚动）
     const selectedEl = this.listEl.querySelector('.cmd-item.selected');
-    if (selectedEl) selectedEl.scrollIntoView({ block: 'nearest' });
+    if (selectedEl && this.listEl.scrollHeight > this.listEl.clientHeight) {
+      selectedEl.scrollIntoView({ block: 'nearest' });
+    }
   }
 
-  onSearchKeydown(e) {
+  // 面板打开时，主输入框的键盘导航
+  onInputKeydown(e) {
     if (!this.isOpen) return;
     switch (e.key) {
       case 'ArrowDown':
         e.preventDefault();
+        e.stopImmediatePropagation();
         this.selectedIndex = Math.min(this.selectedIndex + 1, this.filtered.length - 1);
         this.renderList();
         break;
       case 'ArrowUp':
         e.preventDefault();
+        e.stopImmediatePropagation();
         this.selectedIndex = Math.max(this.selectedIndex - 1, 0);
         this.renderList();
         break;
       case 'Enter':
+        if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return; // 走默认换行
         e.preventDefault();
+        e.stopImmediatePropagation();
         this.executeSelected();
         break;
       case 'Tab':
         e.preventDefault();
+        e.stopImmediatePropagation();
         this.completeSelected();
         break;
       case 'Escape':
         e.preventDefault();
+        e.stopImmediatePropagation();
         this.close();
         break;
     }
@@ -2186,12 +2231,14 @@ class CommandPanel {
 
   inputEl.addEventListener('keydown', (e) => {
     // 命令面板触发：输入框为空且按下 / 时打开面板
+    // （不 preventDefault —— "/" 保留在输入框里，删除它面板随之消失，与 webUI 一致）
     if (e.key === '/' && inputEl.value === '' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      e.preventDefault();
       initCommandPanel();
       commandPanel.open();
       return;
     }
+    // 命令面板打开时，回车/方向键等由面板接管，不再走发送
+    if (commandPanel && commandPanel.isOpen) return;
     // Enter 发送；Shift/Alt+Enter 换行（不拦截，走默认换行）
     if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();

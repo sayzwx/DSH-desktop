@@ -4,19 +4,22 @@
 # （官方源码 + 官方 Node 运行时），在本机完成依赖安装与构建（一次性）。
 # 需要网络：github.com（源码）/ nodejs.org（Node）/ npm registry（pnpm 依赖）。
 # 网络受限时可传 -NpmRegistry 指定镜像（如 https://registry.npmmirror.com）。
-# Run:  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1" [-SkipHarness]
+# Run:  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1" [-SkipHarness] [-DestDir "D:\path"]
 param(
   [string]$HarnessSource = 'https://github.com/deepseek-ai/DeepSeek-Harness/archive/refs/tags/dsh-v0.1.0-rc.8.zip',
   [string]$HarnessGit    = 'https://github.com/deepseek-ai/DeepSeek-Harness.git',
   [string]$HarnessBranch = 'dsh-v0.1.0-rc.8',
   [string]$NodeVersion   = 'v22.23.2',
   [string]$NpmRegistry   = '',   # 例：https://registry.npmmirror.com（npm 网络受限时）
+  [string]$DestDir       = '',   # 用户所选安装目录（问题#5）；留空则默认 %LOCALAPPDATA%\DSH
   [switch]$SkipHarness,
-  [switch]$EngineOnly,    # 只安装/修复 harness 引擎（%LOCALAPPDATA%\DSH\harness + tools\node），不重装 app/快捷方式/配置
+  [switch]$EngineOnly,    # 只安装/修复 harness 引擎（安装根目录\harness + tools\node），不重装 app/快捷方式/配置
   [switch]$InnoSetup      # 由 Inno Setup 安装器调用：app/tools 已就位，跳过复制，仅做快捷方式/配置/引擎
 )
 $ErrorActionPreference = 'Stop'
-$Dest     = Join-Path $env:LOCALAPPDATA 'DSH'
+# 安装根目录：用户所选目录优先（app / harness / tools 全部落在该目录下，自动适配所选路径）
+if ($DestDir) { $Dest = [System.IO.Path]::GetFullPath($DestDir) }
+else          { $Dest = Join-Path $env:LOCALAPPDATA 'DSH' }
 $UserHome = $env:USERPROFILE  # 不要用 $Home：$HOME 是 PowerShell 只读自动变量
 $Src      = Split-Path -Parent $MyInvocation.MyCommand.Path
 
@@ -26,7 +29,7 @@ function Copy-Tree([string]$from, [string]$to) {
   if ($LASTEXITCODE -ge 8) { throw "robocopy failed: $from -> $to" }
 }
 
-# 确保 Node >= 22：优先 %LOCALAPPDATA%\DSH\tools\node，其次系统 node；
+# 确保 Node >= 22：优先 安装根目录\tools\node，其次系统 node；
 # 都没有或版本过低时，优先用 winget 安装最新 Node LTS，失败再回退下载官方 Node zip。
 function Get-NodeExe {
   $candidate = Join-Path $Dest 'tools\node\node.exe'
@@ -45,7 +48,7 @@ function Get-NodeExe {
     $envCheck = Join-Path $Src 'check-env.ps1'
     if (Test-Path $envCheck) {
       Write-Host '  尝试 winget 安装最新 Node LTS ...'
-      & powershell -NoProfile -ExecutionPolicy Bypass -File $envCheck -Fix -NodeMinMajor 22
+      & powershell -NoProfile -ExecutionPolicy Bypass -File $envCheck -Fix -NodeMinMajor 22 -DestDir "$Dest"
       if ($LASTEXITCODE -eq 0) {
         $toolsNew = Join-Path $Dest 'tools\node\node.exe'
         if (Test-Path $toolsNew) { Write-Host '  using tools\node (installed via check-env)'; return $toolsNew }

@@ -654,6 +654,36 @@
     });
     el.errorClose.addEventListener('click', () => { el.errorBanner.hidden = true; });
     el.notReadyRetry.addEventListener('click', () => boot());
+    // 需求#2：市场未就绪时提供「启动 Harness」一键拉起，让任何人都能直接连通市场
+    const mkStartHarnessBtn = $('#mkStartHarness');
+    if (mkStartHarnessBtn) {
+      mkStartHarnessBtn.addEventListener('click', async () => {
+        mkStartHarnessBtn.disabled = true;
+        mkStartHarnessBtn.textContent = '启动中…';
+        try {
+          const r = await api.startHarness();
+          if (r && r.ok) {
+            mkStartHarnessBtn.textContent = '已启动，等待就绪…';
+            // 等待 harness :3080 起来后自动重试市场探测
+            let tries = 0;
+            const t = setInterval(async () => {
+              tries += 1;
+              if (tries > 30) { clearInterval(t); mkStartHarnessBtn.disabled = false; mkStartHarnessBtn.textContent = '启动 Harness'; return; }
+              const p = await probeMarket();
+              if (p.ok) { clearInterval(t); mkStartHarnessBtn.disabled = false; mkStartHarnessBtn.textContent = '启动 Harness'; boot(); }
+            }, 2000);
+          } else {
+            mkStartHarnessBtn.disabled = false;
+            mkStartHarnessBtn.textContent = '启动 Harness';
+            el.notReadyText.textContent = '启动失败：' + ((r && r.error) || '未知原因');
+          }
+        } catch (e) {
+          mkStartHarnessBtn.disabled = false;
+          mkStartHarnessBtn.textContent = '启动 Harness';
+          el.notReadyText.textContent = '启动异常：' + (e && e.message);
+        }
+      });
+    }
     el.exportLog.addEventListener('click', async () => {
       const r = await api.marketLogExport();
       if (r && r.ok) alertBox(`已导出日志：${r.path}`, '导出日志');

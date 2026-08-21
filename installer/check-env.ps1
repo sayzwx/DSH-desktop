@@ -5,16 +5,18 @@
 #   -Report            只读环境体检：输出日志 + 末尾一行 JSON（main.js 解析用）
 #   -Fix               修复模式：Node 缺失或版本过低时，优先用 winget 安装/升级最新 Node LTS，
 #                      失败则回退官方 zip 下载到 %LOCALAPPDATA%\DSH\tools\node（无需管理员权限）
-# Run:  powershell -NoProfile -ExecutionPolicy Bypass -File check-env.ps1 [-Report|-Fix]
+# Run:  powershell -NoProfile -ExecutionPolicy Bypass -File check-env.ps1 [-Report|-Fix] [-DestDir "D:\path"]
 param(
   [switch]$Report,
   [switch]$Fix,
   [string]$NodeMinMajor = '22',
   [string]$NodeVersion  = 'v22.23.2',   # 回退下载的官方发行版（仅当 winget 不可用时）
-  [string]$NpmRegistry  = ''            # 例：https://registry.npmmirror.com（npm 网络受限时）
+  [string]$NpmRegistry  = '',           # 例：https://registry.npmmirror.com（npm 网络受限时）
+  [string]$DestDir      = ''            # 安装根目录（问题#5）；留空默认 %LOCALAPPDATA%\DSH
 )
 $ErrorActionPreference = 'Stop'
-$Dest      = Join-Path $env:LOCALAPPDATA 'DSH'
+if ($DestDir) { $Dest = [System.IO.Path]::GetFullPath($DestDir) }
+else          { $Dest = Join-Path $env:LOCALAPPDATA 'DSH' }
 $ToolsNode = Join-Path $Dest 'tools\node\node.exe'
 $KNOWN_NODE = @(
   (Join-Path ${env:ProgramFiles} 'nodejs\node.exe'),

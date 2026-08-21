@@ -1231,7 +1231,7 @@
       downloadUpdateBtn.disabled = false;
       downloadUpdateBtn.textContent = '一键更新';
       updateStatus.textContent = p.ok
-        ? `更新下载完成：${p.name}（已打开所在位置，重启后生效）。`
+        ? `更新包已下载：${p.name}（将覆盖安装到应用目录并自动重启，不影响配置/会话/引擎数据）。`
         : `更新失败：${p.error || '未知错误'}`;
     });
 

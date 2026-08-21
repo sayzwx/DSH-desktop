@@ -1,23 +1,32 @@
 const { app, BrowserWindow, ipcMain, shell, dialog, net } = require('electron');
+const { Tray, Menu, nativeImage } = require('electron');
 const { spawn, spawnSync, execFile } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-// 分发安装布局：app（含 DSH.exe）与 harness、tools/node 同级（%LOCALAPPDATA%\DSH\{app,harness,tools}）。
+// 分发安装布局：app（含 DSH.exe）与 harness、tools/node 同级（默认 %LOCALAPPDATA%\DSH\{app,harness,tools}）。
 // harness 引擎不再写死某个路径：点击启动时自动探测本机已有安装（可用 DSH_HARNESS_DIR 显式指定源码目录），
 // 探测不到就自动安装官方发行包/运行 installer/setup.ps1 -EngineOnly 拉取官方引擎。
+// 安装根目录 = 应用自身所在位置向上推导（打包形态 {root}\app\resources\app → {root}）：
+// 用户只要把「安装位置」选到任意目录，app / harness / tools 都会落在该目录下，自动适配，绝不绑开发者本机路径。
+function getLayoutRoot() {
+  if (process.defaultApp) return __dirname; // dev 形态（npm start）：__dirname 即仓库根
+  return path.resolve(__dirname, '..', '..', '..'); // 打包形态
+}
+const LAYOUT_ROOT = getLayoutRoot();
+// 旧版固定布局兼容：默认与安装器一致（%LOCALAPPDATA%\DSH），自定义路径时以推导根为准
 const DSH_ROOT = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'DSH') : '';
 const DSH_HOME = path.join(os.homedir(), '.dsh');
 const PORT = 3080;
 const LOG_LIMIT = 5000;
 
-// 解析 Node 可执行文件：显式 DSH_NODE_EXE → 安装布局 tools\node → 与 app 同级 tools\node → PATH 上的 node
+// 解析 Node 可执行文件：显式 DSH_NODE_EXE → 安装布局 tools\node（安装根目录）→ 与 app 同级 tools\node → PATH 上的 node
 function resolveNodeExe() {
   const cands = [
     process.env.DSH_NODE_EXE || '',
+    path.join(LAYOUT_ROOT, 'tools', 'node', 'node.exe'),
     DSH_ROOT ? path.join(DSH_ROOT, 'tools', 'node', 'node.exe') : '',
-    path.join(__dirname, '..', 'tools', 'node', 'node.exe'),
   ];
   for (const c of cands) if (c && fs.existsSync(c)) return c;
   return 'node';
@@ -47,6 +56,90 @@ let harnessState = 'stopped';
 let startDeadline = 0;
 const logBuffer = [];
 
+// ---------- 后台驻留：托盘 / 关闭窗口不杀服务 / 单实例 ----------
+// 需求 #4：关闭窗口/重启应用不要断掉 harness 服务（除非用户主动停止）。
+// 方案：窗口关闭时隐藏到托盘（不退出进程、不杀 harness），单实例锁保证再次启动时
+// 只是唤回已存在的托盘窗口；只有用户从托盘/UI 明确选择「停止 Harness 并退出」才真正退出。
+let tray = null;
+let isQuitting = false; // 用户主动退出（含更新安装），此时才触发真正退出
+let winWasVisible = false; // 窗口关闭前是否可见（判断是否被用户刚关闭）
+
+function createTray() {
+  if (tray || process.platform !== 'win32') return;
+  let icon;
+  try {
+    const ico = path.join(__dirname, 'DSH.ico');
+    icon = fs.existsSync(ico) ? nativeImage.createFromPath(ico) : null;
+  } catch { /* ignore */ }
+  tray = new Tray(icon || nativeImage.createEmpty());
+  tray.setToolTip('DSH Desktop — 后台服务运行中');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: '显示主窗口', click: () => showMainWindow() },
+    { type: 'separator' },
+    {
+      label: harnessState === 'running' ? '停止 Harness 服务' : '启动 Harness',
+      click: () => {
+        if (harnessState === 'running' || harnessProc) stopHarness();
+        else startHarness();
+        refreshTrayMenu();
+      },
+    },
+    { type: 'separator' },
+    {
+      label: '退出（停止 Harness 并退出）',
+      click: () => {
+        isQuitting = true;
+        try { if (harnessProc) stopHarness(); } catch { /* ignore */ }
+        app.quit();
+      },
+    },
+  ]));
+  tray.on('click', () => showMainWindow());
+  updateTrayState();
+}
+
+function refreshTrayMenu() {
+  if (!tray) return;
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: '显示主窗口', click: () => showMainWindow() },
+    { type: 'separator' },
+    { label: harnessState === 'running' || harnessProc ? '停止 Harness 服务' : '启动 Harness', click: () => {
+      if (harnessState === 'running' || harnessProc) stopHarness();
+      else startHarness();
+      refreshTrayMenu();
+    } },
+    { type: 'separator' },
+    { label: '退出（停止 Harness 并退出）', click: () => {
+      isQuitting = true;
+      try { if (harnessProc || harnessState === 'running') stopHarness(); } catch { /* ignore */ }
+      app.quit();
+    } },
+  ]));
+}
+
+function updateTrayState() {
+  if (!tray) return;
+  tray.setToolTip(`DSH Desktop — ${harnessState === 'running' ? '服务运行中' : harnessState === 'installing' ? '正在安装引擎' : harnessState === 'starting' ? '启动中' : '服务已停止'}`);
+}
+
+function showMainWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  } else {
+    createWindow();
+  }
+}
+
+// 单实例：再次双击 DSH.exe / 快捷方式时唤回既有窗口，而不是开第二个进程
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => showMainWindow());
+}
+
 function pushLog(stream, text) {
   const lines = text.split(/\r?\n/).filter((l) => l.length > 0);
   for (const line of lines) {
@@ -62,6 +155,8 @@ function setState(state) {
   harnessState = state;
   if (state === 'running') openChatStreams();
   if (state === 'stopped') closeChatStreams();
+  updateTrayState();
+  if (state === 'running' || state === 'stopped') refreshTrayMenu();
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('harness:state', state);
   }
@@ -89,8 +184,9 @@ function discoverHarness() {
   const push = (p) => { if (typeof p === 'string' && p && !candidates.includes(p)) candidates.push(p); };
   // 1) 显式环境变量（用户/管理员指定，优先级最高）
   push(process.env.DSH_HARNESS_DIR);
-  // 2) 安装器布局 %LOCALAPPDATA%\DSH\harness
-  if (DSH_ROOT) push(path.join(DSH_ROOT, 'harness'));
+  // 2) 安装器布局（安装根目录，默认 %LOCALAPPDATA%\DSH）：因素 1 在自定义安装目录时也正确适配
+  push(path.join(LAYOUT_ROOT, 'harness'));
+  if (DSH_ROOT && DSH_ROOT !== LAYOUT_ROOT) push(path.join(DSH_ROOT, 'harness'));
   // 3) 与 app 同级的 harness（打包/便携布局）
   push(path.join(__dirname, '..', 'harness'));
   // 4) npm 全局安装的官方发行包
@@ -191,7 +287,7 @@ function readEnvReport() {
   const script = envCheckScript();
   if (!fs.existsSync(script)) return null;
   try {
-    const res = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Report'], { windowsHide: true, encoding: 'utf8', timeout: 60000 });
+    const res = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Report', '-DestDir', LAYOUT_ROOT], { windowsHide: true, encoding: 'utf8', timeout: 60000 });
     const out = (res.stdout || '');
     const lines = out.split(/\r?\n/).map((l) => l.trim()).filter((l) => l);
     for (let i = lines.length - 1; i >= 0; i--) {
@@ -208,7 +304,7 @@ function fixNodeEnv(onDone) {
   const script = envCheckScript();
   if (!fs.existsSync(script)) { pushLog('stderr', `[缺少环境预检脚本 ${script}]`); onDone(false); return; }
   pushLog('stdout', '[Node.js 缺失或版本过低，正在自动安装最新 LTS（winget 优先）…]');
-  const p = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Fix', '-NodeMinMajor', '22'], { windowsHide: true, env: { ...process.env } });
+  const p = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Fix', '-NodeMinMajor', '22', '-DestDir', LAYOUT_ROOT], { windowsHide: true, env: { ...process.env } });
   p.stdout.on('data', (d) => pushLog('stdout', d.toString()));
   p.stderr.on('data', (d) => pushLog('stderr', d.toString()));
   p.on('error', (err) => { pushLog('stderr', `[Node 修复脚本启动失败] ${err.message}`); onDone(false); });
@@ -260,7 +356,7 @@ function autoInstallHarness() {
       return;
     }
     pushLog('stdout', `[运行引擎安装: ${script} -EngineOnly（下载官方源码+Node，多镜像自动重试，首次需数分钟）]`);
-    const p = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-EngineOnly'], { windowsHide: true, env: { ...process.env } });
+    const p = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-EngineOnly', '-DestDir', LAYOUT_ROOT], { windowsHide: true, env: { ...process.env } });
     p.stdout.on('data', (d) => pushLog('stdout', d.toString()));
     p.stderr.on('data', (d) => pushLog('stderr', d.toString()));
     p.on('error', (err) => { pushLog('stderr', `[脚本启动失败] ${err.message}`); setState('stopped'); });
@@ -513,12 +609,63 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+  trackWindow(mainWindow, '主窗口', 'main');
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    // 外部链接一律交给系统浏览器；所有弹窗都会被自动检测并显示在「窗口」指示器上，
+    // 用户始终知道发生了什么（不会出现“开了个窗口却看不到”的情况）。
     shell.openExternal(url);
     return { action: 'deny' };
   });
+  mainWindow.on('close', (e) => {
+    // 关闭窗口 ≠ 退出应用：隐藏到托盘让 harness 服务继续在后台运行。
+    // 用户从托盘/设置里主动「退出」时（isQuitting），才真正关闭并停止服务。
+    if (!isQuitting) {
+      e.preventDefault();
+      mainWindow.hide();
+    }
+  });
   mainWindow.on('closed', () => (mainWindow = null));
+}
+
+// ---------- 窗口自动检测（需求 #3） ----------
+// 记录本应用创建的所有 BrowserWindow（含子窗口/弹窗），并把它们的开闭与标题变化
+// 实时广播给渲染进程（「窗口」指示器），保证任何特殊窗口都不会“开了却看不见”。
+const trackedWindows = new Map(); // BrowserWindow -> {id, label, kind, title}
+let winSeq = 0;
+function trackWindow(win, label, kind) {
+  const id = ++winSeq;
+  trackedWindows.set(win, { id, label, kind, title: label });
+  broadcastWindows();
+  win.on('page-title-updated', (_e, title) => {
+    const rec = trackedWindows.get(win);
+    if (rec) rec.title = title || rec.label;
+    broadcastWindows();
+  });
+  win.on('closed', () => {
+    trackedWindows.delete(win);
+    broadcastWindows();
+  });
+  // 子窗口（popup / window.open）创建时也纳入监控
+  win.webContents.on('did-create-window', (child) => {
+    if (!trackedWindows.has(child)) {
+      trackWindow(child, '辅助窗口', 'child');
+      // 子窗口默认展示（除非宿主标记隐藏）
+      if (child.isVisible) { try { child.show(); } catch { /* ignore */ } }
+    }
+  });
+}
+
+function broadcastWindows() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const list = [...trackedWindows.entries()].map(([win, rec]) => ({
+    id: rec.id,
+    label: rec.label,
+    kind: rec.kind,
+    title: rec.title || '',
+    visible: !!(win && !win.isDestroyed() && win.isVisible()),
+  }));
+  mainWindow.webContents.send('windows:changed', list);
 }
 
 ipcMain.handle('harness:start', () => startHarness());
@@ -1777,21 +1924,27 @@ ipcMain.handle('app:relaunch', async () => {
   return { ok: true };
 });
 
-// ---------- 更新安装：下载完成后运行 Setup.exe 自解压安装，随后重启 ----------
-// Setup.exe 为 7-Zip SFX：自解压到 %LOCALAPPDATA%\DSH\stage 并执行 setup.bat，
-// setup.bat → setup.ps1 覆盖安装到同一 %LOCALAPPDATA%\DSH（配置/引擎/数据都在）。
-// 这里把下载好的 exe 交给 shell 启动（不加参数，SFX 自带 RunProgram=setup.bat），
-// 应用立即退出，让出文件锁；setup 完成后由 setup.ps1 启动新版 DSH。
+// ---------- 更新安装：下载完成后运行Setup.exe 安装到同一安装根目录，随后重启 ----------
+// 需求#6：一键更新要像正常软件更新一样——
+//   * 下载包存到「安装根目录\updates」（不落账户/临时路径）；
+//   * 安装目标 = 当前应用安装根目录（LAYOUT_ROOT），直接覆盖旧版，不另建新文件夹；
+//   * Inno 安装器会重建桌面快捷方式（指向新版 exe）；
+//   * 安装完成后由 setup.ps1 自动启动新版 DSH（自动重启进新版）。
 let updaterInstalling = false;
 ipcMain.handle('updater:install', async (_e, exePath) => {
   if (!exePath) return { ok: false, error: '缺少安装包路径' };
   if (!fs.existsSync(exePath)) return { ok: false, error: `安装包不存在: ${exePath}` };
   try {
     updaterInstalling = true;
-    // windowsHide:false 但 SFX 自带 GUI（GUIMode=1）；detached 让安装器独立于本进程存活
-    const child = spawn(exePath, [], { detached: true, stdio: 'ignore', windowsHide: false });
+    const isInno = /\.exe$/i.test(exePath);
+    // Inno Setup 安装器：以静默/极静默方式直接覆盖安装到 LAYOUT_ROOT，/DIR 指定安装根目录。
+    // windowsVerbatimArguments 保证 /DIR="..." 命令段原样传给安装器（不被 Node 二次转义），
+    // 路径含空格也可正确解析。
+    const args = [];
+    if (isInno) args.push('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', `/DIR="${LAYOUT_ROOT}"`);
+    const child = spawn(exePath, args, { detached: true, stdio: 'ignore', windowsHide: false, windowsVerbatimArguments: true });
     child.unref();
-    pushLog('stdout', `[更新] 已启动安装器: ${exePath}`);
+    pushLog('stdout', `[更新] 已启动安装器: ${exePath}${args.length ? ' （静默安装到 ' + LAYOUT_ROOT + '）' : ''}`);
     // 等 1.2s 让安装器接管后再退出本进程（避免过早关窗导致安装器未被接受）
     setTimeout(() => {
       if (harnessProc) { try { harnessProc.kill(); } catch { /* ignore */ } }
@@ -1922,9 +2075,14 @@ ipcMain.handle('updater:download', async (_e, url) => {
   if (!url) return { ok: false, error: '缺少下载地址' };
   let name = 'update';
   try { name = path.basename(new URL(url).pathname) || name; } catch { /* ignore */ }
-  const dir = path.join(os.tmpdir(), 'DSH-update');
-  fs.mkdirSync(dir, { recursive: true });
-  const target = path.join(dir, name);
+  // 下载到「应用安装根目录\updates」（需求#6）：不落在临时/账户路径，更新包随应用目录存放，
+  // 安装时直接覆盖安装到同一安装根目录，绝不“下到账户路径另装一个新文件夹”。
+  const dir = path.join(LAYOUT_ROOT, 'updates');
+  try { fs.mkdirSync(dir, { recursive: true }); } catch {
+    // 安装根不可写（如只读环境）时回退系统临时目录
+    try { fs.mkdirSync(path.join(os.tmpdir(), 'DSH-update'), { recursive: true }); } catch { /* ignore */ }
+  }
+  const target = name === 'update' ? path.join(dir, 'DSH-update-setup.exe') : path.join(dir, name);
   let startedAt = 0;
   let lastAt = 0;
   let lastRecv = 0;
@@ -1990,15 +2148,51 @@ ipcMain.handle('updater:download', async (_e, url) => {
 
 app.whenReady().then(() => {
   createWindow();
+  createTray();
   ensureShortcut();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    else showMainWindow();
   });
 });
 
+// 关闭全部窗口：不退出应用、不杀 harness（后台驻留，托盘可唤回）。
+// 只有用户主动退出（isQuitting，来自托盘/设置「停止并退出」或更新安装）才真正结束。
 app.on('window-all-closed', () => {
-  // 正在执行更新安装时：不杀 harness（harness 是安装器 setup.ps1 会用到的引擎，
-  // 且安装完成后 setup.ps1 会启动新版 DSH），直接退出应用进程
-  if (!updaterInstalling && harnessProc) stopHarness();
+  if (!isQuitting) {
+    // 保持进程存活，harness 服务继续运行
+    return;
+  }
+  if (harnessProc) { try { stopHarness(); } catch { /* ignore */ } }
   app.quit();
+});
+
+app.on('before-quit', () => {
+  isQuitting = true;
+});
+
+// IPC：窗口列表 / 用户主动退出（停止 Harness） / 隐藏到托盘 / 唤回主窗口
+ipcMain.handle('windows:list', () => ({
+  ok: true,
+  windows: [...trackedWindows.entries()].map(([win, rec]) => ({
+    id: rec.id, label: rec.label, kind: rec.kind, title: rec.title || '', visible: !!(win && !win.isDestroyed() && win.isVisible()),
+  })),
+}));
+ipcMain.handle('app:hideToTray', () => {
+  winWasVisible = true;
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
+  return { ok: true };
+});
+ipcMain.handle('app:showWindow', () => { showMainWindow(); return { ok: true }; });
+ipcMain.handle('app:quitWithService', () => {
+  isQuitting = true;
+  try { if (harnessProc || harnessState === 'running') stopHarness(); } catch { /* ignore */ }
+  app.quit();
+  return { ok: true };
+});
+ipcMain.handle('app:quitBackgroundOnly', () => {
+  // 退出应用但保留后台 harness 服务继续运行（下次启动自动接管 :3080）
+  isQuitting = true;
+  app.quit();
+  return { ok: true };
 });

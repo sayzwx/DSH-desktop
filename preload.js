@@ -56,6 +56,12 @@ contextBridge.exposeInMainWorld('api', {
   marketEnsure: () => ipcRenderer.invoke('market:ensure'),
   marketCheck: () => ipcRenderer.invoke('market:check'),
   relaunchApp: () => ipcRenderer.invoke('app:relaunch'),
+  listWindows: () => ipcRenderer.invoke('windows:list'),
+  hideToTray: () => ipcRenderer.invoke('app:hideToTray'),
+  showWindow: () => ipcRenderer.invoke('app:showWindow'),
+  quitWithService: () => ipcRenderer.invoke('app:quitWithService'),
+  quitBackgroundOnly: () => ipcRenderer.invoke('app:quitBackgroundOnly'),
+  onWindowsChanged: (cb) => ipcRenderer.on('windows:changed', (_e, list) => cb(list)),
   chatAttachment: (sessionId, attachmentId) =>
     ipcRenderer.invoke('chat:attachment', { sessionId, attachmentId }),
   chatCancel: (sessionId) => ipcRenderer.invoke('chat:cancel', sessionId),
