@@ -266,6 +266,31 @@ function checkHarnessIntegrity(dir, kind) {
       if (subs.length < 6) missing.push(`@deepseek-ai 仅 ${subs.length} 个非空子包，依赖明显不完整`);
     } catch { /* 忽略 */ }
   }
+  // ========== 关键修正（v0.5.6）：cordis 加载器从 profile 解析依赖 ==========
+  // 历史：dsh web 的 cordis-plugin-loader 从 ~/.dsh/profiles/web/ 解析 @deepseek-ai/*，
+  // 与「引擎自身 node_modules」无关。npx 缓存里的 dist 引擎自己 node_modules 再全
+  // （195 个子包），profile 里 0 依赖 → 启动必崩 ERR_MODULE_NOT_FOUND。
+  // 所以 dist 形态必须额外校验 profile 依赖位：~/.dsh/profiles/web/node_modules/@deepseek-ai/。
+  // （source 形态由 setup.ps1 源码构建 + profile 由 dsh 首次启动自动 pnpm install，天然就位）
+  if (kind === 'dist') {
+    const profileRoots = [
+      path.join(process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), 'profiles', 'web', 'node_modules', '@deepseek-ai'),
+      path.join(os.homedir(), '.dsh', 'profiles', 'web', 'node_modules', '@deepseek-ai'),
+    ];
+    let profileHit = false;
+    for (const pr of profileRoots) {
+      if (!fs.existsSync(pr)) continue;
+      profileHit = true;
+      const profMissing = [];
+      for (const pkg of keyPkgs) {
+        const p = path.join(pr, pkg);
+        if (!fs.existsSync(p) || fs.readdirSync(p).length === 0) profMissing.push(pkg);
+      }
+      if (profMissing.length) missing.push(`profile 依赖缺失（${profMissing.join('、')}）——启动必崩，请用 Setup 引擎或运行 setup.ps1 -EngineOnly`);
+      break;
+    }
+    if (!profileHit) missing.push('profile 依赖目录缺失（~/.dsh/profiles/web 未初始化）——dist 引擎不可用');
+  }
   return { ok: missing.length === 0, missing };
 }
 
