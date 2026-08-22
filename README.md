@@ -11,7 +11,7 @@ DeepSeek Harness 的 Windows 桌面端外壳——零环境安装，装完即用
 
 应用启动后自动检查更新（每 6 小时一次），更新包经国内加速镜像下载，完成后一键重启升级。
 
-> 国内下载加速：官方链接前加镜像前缀，如 `https://ghfast.top/https://github.com/sayzwx/DSH-desktop/releases/download/v0.6.0/DSH-Desktop-v0.6.0-Setup.exe`
+> 国内下载加速：官方链接前加镜像前缀，如 `https://ghfast.top/https://github.com/sayzwx/DSH-desktop/releases/download/v0.6.1/DSH-Desktop-v0.6.1-Setup.exe`
 
 ## Community
 
@@ -79,7 +79,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-encoding.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-dist.ps1 -Version 0.6.0
 ```
 
-产出 `dist\DSH-Desktop-v0.6.0.zip` 与 `DSH-Desktop-v0.6.0-Setup.exe`（Inno Setup 一键安装向导）。引擎不打包进安装包，由安装器自动从官方源拉取构建。
+产出 `dist\DSH-Desktop-v0.6.1.zip` 与 `DSH-Desktop-v0.6.1-Setup.exe`（Inno Setup 一键安装向导）。引擎不打包进安装包，由安装器自动从官方源拉取构建。
 
 ## Runtime architecture
 

@@ -9,10 +9,10 @@
 ; 前提：installer 同目录已用 build-dist.ps1 建好 stage（app/config/tools/setup*.ps1/check-env.ps1 等）。
 
 #ifndef MyAppVersion
-  #define MyAppVersion "0.6.0"
+  #define MyAppVersion "0.6.1"
 #endif
 #ifndef StagingDir
-  #define StagingDir "..\dist\stage\DSH-Desktop-v0.6.0"
+  #define StagingDir "..\dist\stage\DSH-Desktop-v0.6.1"
 #endif
 #ifndef OutputDir
   #define OutputDir "..\dist"
@@ -120,8 +120,12 @@ end;
 
 // 运行 check-env.ps1 -Report -ReportFile，把 JSON 写到 {tmp}\env-report.txt（UTF-8 no BOM），
 // 然后从该文件读出 JSON 提取关键字段组装 UI 文案。
-// 历史教训：用 cmd.exe /c "powershell ... > file" 重定向 stdout 在 PS 5.1 上是 UTF-16 LE，
-// LoadStringsFromFile 按 ANSI 读全乱码 → 显示「未产生输出（exit X）」。改成 -ReportFile 直写。
+// 历史教训：
+//   ① 用 cmd.exe /c "powershell ... > file" 重定向 stdout 在 PS 5.1 上是 UTF-16 LE，
+//      LoadStringsFromFile 按 ANSI 读全乱码 → 「未产生输出」。改 -ReportFile 直写。
+//   ② cmd /c 对「以引号开头的命令行」有剥引号规则（第一个引号 + 最后一个引号会被剥掉），
+//      "powershell" ... -File "..." 这种写法参数会被剥乱 → powershell 启动异常 exit 1。
+//      正确做法：Inno Exec 直接启动 powershell.exe（自身处理参数），不经过 cmd 包装层。
 function RunEnvReport(): String;
 var
   TmpScript, OutFile, Cmd: String;
@@ -138,10 +142,10 @@ begin
     Result := 'check-env.ps1 未就位（临时文件提取失败）';
     Exit;
   end;
-  // 不再依赖 stdout 重定向——-ReportFile 直接写到 ANSI 兼容路径，Inno 后续按行读
-  Cmd := '"powershell" -NoProfile -ExecutionPolicy Bypass -File "' + TmpScript + '" -Report -ReportFile "' + OutFile + '"';
-  if not Exec('cmd.exe', '/c ' + Cmd, '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then begin
-    Result := '环境预检脚本启动失败';
+  // 直接 Exec powershell.exe（Inno 自己处理参数引号），绝不经过 cmd.exe /c 包装层
+  Cmd := '-NoProfile -ExecutionPolicy Bypass -File "' + TmpScript + '" -Report -ReportFile "' + OutFile + '"';
+  if not Exec('powershell.exe', Cmd, '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then begin
+    Result := '环境预检脚本启动失败（Exec powershell.exe 失败）';
     Exit;
   end;
   if (ExitCode <> 0) then begin

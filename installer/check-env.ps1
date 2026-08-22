@@ -145,15 +145,30 @@ function Install-NodeFallback {
 
 # ---------- main ----------
 if ($Report) {
-  $r = Get-EnvReport
-  $json = $r | ConvertTo-Json -Compress -Depth 4
-  foreach ($i in $r.issues) { Write-Log "WARN: $i" }
-  # 关键：JSON 同步落盘 UTF-8 no BOM（Write-Host / Write-Output 在 PS 5.1 走 host/UTF-16LE，
-  # Inno 的 LoadStringsFromFile 按 ANSI 读会全乱码，导致「环境预检未产生输出」。直接写文件最稳。
-  Write-Output $json
-  if ($ReportFile) {
-    New-Item -ItemType Directory -Path (Split-Path -Parent $ReportFile) -Force | Out-Null
-    [System.IO.File]::WriteAllText($ReportFile, $json, (New-Object System.Text.UTF8Encoding($false)))
+  # 兜底：任何内部异常都不能让安装器看到"裸 exit 1"——输出 JSON 兜底并 exit 0，
+  # Inno 侧只关心 JSON 里的字段；真正致命的问题由 Install-Harness 阶段再报。
+  try {
+    $r = Get-EnvReport
+    $json = $r | ConvertTo-Json -Compress -Depth 4
+    foreach ($i in $r.issues) { Write-Log "WARN: $i" }
+    # 关键：JSON 同步落盘 UTF-8 no BOM（Write-Host / Write-Output 在 PS 5.1 走 host/UTF-16LE，
+    # Inno 的 LoadStringsFromFile 按 ANSI 读会全乱码，导致「环境预检未产生输出」。直接写文件最稳。
+    Write-Output $json
+    if ($ReportFile) {
+      New-Item -ItemType Directory -Path (Split-Path -Parent $ReportFile) -Force | Out-Null
+      [System.IO.File]::WriteAllText($ReportFile, $json, (New-Object System.Text.UTF8Encoding($false)))
+    }
+  } catch {
+    $err = "预检内部异常: $($_.Exception.Message)"
+    Write-Log $err
+    $fallback = '{"arch":"' + $env:PROCESSOR_ARCHITECTURE + '","nodeVersion":"异常","nodeOk":false,"netOk":false,"freeMB":0,"issues":["' + $err.Replace('"','''') + '"]}'
+    Write-Output $fallback
+    if ($ReportFile) {
+      try {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $ReportFile) -Force | Out-Null
+        [System.IO.File]::WriteAllText($ReportFile, $fallback, (New-Object System.Text.UTF8Encoding($false)))
+      } catch { }
+    }
   }
   exit 0
 }

@@ -173,23 +173,23 @@ function Install-Harness([string]$NodeExe) {
     $build = $true
   } else {
     # 1) 官方源码：zip 优先（GitHub 官方直链 + 国内加速镜像多跳），git clone 兜底
-    #    GitHub 源码下载在国内不稳定 → 依次尝试官方与 ghfast.top / ghproxy.net 等镜像，
-    #    任一成功即可；全部失败给出手动下载指引。
+    #    GitHub 源码下载在国内不稳定 → 镜像优先（ghfast.top 等国内加速，超时短、快失败），
+    #    官方直连放最后（国内直连常超时，放前面会拖 120s×2 才轮到镜像，用户以为卡死）。
     $tmpZip = Join-Path $env:TEMP 'dsh-harness-src.zip'
     $tmpDir = Join-Path $env:TEMP 'dsh-harness-src'
     $srcCandidates = @(
-      $HarnessSource,                                                      # 官方
-      "https://ghfast.top/$HarnessSource",                                  # 镜像1
+      "https://ghfast.top/$HarnessSource",                                  # 镜像1（国内加速，优先）
       "https://ghproxy.net/$HarnessSource",                                 # 镜像2
       "https://gh-proxy.com/$HarnessSource",                                # 镜像3
-      "https://gh.ddlc.top/$HarnessSource"                                  # 镜像4
+      "https://gh.ddlc.top/$HarnessSource",                                 # 镜像4
+      $HarnessSource                                                      # 官方（最后兜底）
     )
     foreach ($srcUrl in $srcCandidates) {
       Write-Host "  downloading harness source: $srcUrl"
       $i = 0; $ok = $false
       do {
-        try { Invoke-WebRequest -Uri $srcUrl -OutFile $tmpZip -UseBasicParsing -TimeoutSec 120; $ok = $true }
-        catch { $i++; if ($i -ge 2) { break }; Write-Host "    attempt $i failed, retrying ..."; Start-Sleep -Seconds 3 }
+        try { Invoke-WebRequest -Uri $srcUrl -OutFile $tmpZip -UseBasicParsing -TimeoutSec 45; $ok = $true }
+        catch { $i++; if ($i -ge 2) { break }; Write-Host "    attempt $i failed, retrying ..."; Start-Sleep -Seconds 2 }
       } while (-not $ok)
       if ($ok -and (Test-Path $tmpZip) -and (Get-Item $tmpZip).Length -gt 10000) { $got = $true; break }
       Remove-Item $tmpZip -Force -ErrorAction SilentlyContinue
