@@ -326,18 +326,14 @@ function discoverHarness() {
     const line = (g.stdout || '').split(/\r?\n/).find((l) => l.trim());
     if (line) push(path.join(line.trim(), '@deepseek-ai', 'dsh'));
   } catch { /* npm 不可用/未安装 */ }
-  // 5) npx 缓存目录（npm-cache\_npx\* 与 ~/.npm/_npx/*）
-  for (const base of [
-    path.join(process.env.LOCALAPPDATA || '', 'npm-cache', '_npx'),
-    path.join(os.homedir(), '.npm', '_npx'),
-  ]) {
-    try {
-      if (!fs.existsSync(base)) continue;
-      for (const sub of fs.readdirSync(base)) {
-        push(path.join(base, sub, 'node_modules', '@deepseek-ai', 'dsh'));
-      }
-    } catch { /* 忽略不可读缓存 */ }
-  }
+  // 注意（v0.6.3 修正）：不再扫 npx 缓存目录（npm-cache\_npx\* / ~/.npm/_npx/*）。
+  // npx 缓存是 npm 的临时下载残留，不是用户主动安装的引擎——它的 @deepseek-ai/dsh 自身
+  // node_modules 看起来「齐全」（keyPkgs 都在），但 cordis 加载器从 ~/.dsh/profiles/web/
+  // 解析依赖时，healProfilesModuleFallback 链接到 npx 缓存的 node_modules，而那里缺
+  // dsh-client-ui-* / cordis-plugin-timer 等 client 包 → 启动必崩 ERR_MODULE_NOT_FOUND。
+  // 更致命的是：discoverHarness 选中它就不会触发 autoInstall，exit 回调又重新选中它 →
+  // 死循环「请再次点击重试」。去掉 npx 候选后，源码引擎不存在时 discoverHarness 返回 null
+  // → autoInstall 触发 setup.ps1 -EngineOnly -DestDir LAYOUT_ROOT 装到用户所选目录。
   // 先收集所有候选形态，再做完整性过滤：不完整的引擎跳过（依赖缺包启动必崩），
   // 只返回第一个完整可用的引擎；全部不完整则返回 null → 触发自动获取/手动指引。
   const found = [];

@@ -9,10 +9,10 @@
 ; 前提：installer 同目录已用 build-dist.ps1 建好 stage（app/config/tools/setup*.ps1/check-env.ps1 等）。
 
 #ifndef MyAppVersion
-  #define MyAppVersion "0.6.2"
+  #define MyAppVersion "0.6.3"
 #endif
 #ifndef StagingDir
-  #define StagingDir "..\dist\stage\DSH-Desktop-v0.6.2"
+  #define StagingDir "..\dist\stage\DSH-Desktop-v0.6.3"
 #endif
 #ifndef OutputDir
   #define OutputDir "..\dist"
