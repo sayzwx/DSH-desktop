@@ -210,7 +210,19 @@ function commonEngineCandidatePaths() {
 // （典型报错 ERR_MODULE_NOT_FOUND）。这里检查 @deepseek-ai 核心包是否真实存在且非空目录。
 function checkHarnessIntegrity(dir, kind) {
   const missing = [];
-  const keyPkgs = ['dsh-app-boot', 'cordis-plugin-loader'];
+  // 关键包白名单：必须覆盖引擎运行时实际 require 的核心 cordis 插件 + 应用层服务。
+  // 历史教训：0.5.3 只列 dsh-app-boot / cordis-plugin-loader，结果 npx 缓存里的 dist 形态
+  // 只装了这两个，cordis-plugin-timer / dsh-llm / dsh-session / dsh-typert-* 等运行时插件
+  // 完全没装，完整性检查放行 → 启动崩 ERR_MODULE_NOT_FOUND。这里把已知必装的全部列入。
+  const keyPkgs = [
+    'dsh-app-boot',
+    'cordis-plugin-loader',
+    'cordis-plugin-timer',
+    'dsh-llm',
+    'dsh-session',
+    'dsh-typert-registry',
+    'dsh-typert-loader',
+  ];
   if (kind === 'source' && !fs.existsSync(path.join(dir, 'apps', 'web', 'dist', 'index.html'))) {
     missing.push('web 前端 dist 缺失');
   }
@@ -241,6 +253,19 @@ function checkHarnessIntegrity(dir, kind) {
     break; // 命中任一 scope 即视为该引擎的依赖位置
   }
   if (!hitScope) missing.push('未找到 @deepseek-ai 依赖目录');
+  // 兜底启发式：发行包形态（dist）必须至少有 N 个非空 @deepseek-ai 子包；过少视为残缺
+  // （如 npx 缓存里只装了 2~3 个核心包就放行，导致运行时缺链上插件）。
+  if (hitScope && kind === 'dist') {
+    try {
+      const subs = fs.readdirSync(scopes[0]).filter((s) => {
+        try { return fs.statSync(path.join(scopes[0], s)).isDirectory() && fs.readdirSync(path.join(scopes[0], s)).length > 0; }
+        catch { return false; }
+      });
+      // 必须至少有 6 个非空子包（dsh-app-boot / cordis-plugin-loader / cordis-plugin-timer /
+      // dsh-llm / dsh-session / dsh-typert-registry / dsh-typert-loader ...），少于则视为残缺
+      if (subs.length < 6) missing.push(`@deepseek-ai 仅 ${subs.length} 个非空子包，依赖明显不完整`);
+    } catch { /* 忽略 */ }
+  }
   return { ok: missing.length === 0, missing };
 }
 
@@ -2011,35 +2036,78 @@ ipcMain.handle('market:logExport', async () => {
 });
 
 // ---------- 插件市场自动补装：探测 /dsh-market/status，缺失则用捆绑 node 安装 dshmarket ----------
-// 幂等：已就绪直接返回；未就绪则跑 `node <harness>/apps/cli/lib/bin.js plugin --profile web add dshmarket`，
-// 完成后提示重启让引擎重新组合。
+// 优先路径：{LAYOUT_ROOT}\app\extras\dsh-market-bundle\manifest.json + dshmarket-*.tgz
+//   → 校验 manifest.json 的 SHA256 与 tarball 一致 → 调 `dsh plugin add <tarball>` 从本地装（不走 npm）
+// Fallback：本地 tarball 不存在 / 校验失败 → 远程 `dsh plugin add dshmarket`（需 npm 网络）
+// 幂等：已就绪直接返回；完成后提示重启让引擎重新组合。
 async function marketStatusOk() {
   try {
     const r = await marketFetchJSON('/dsh-market/status');
     return r.ok && r.status === 200;
   } catch { return false; }
 }
+// 探测内置 dshmarket tarball（manifest.json + tarball），返回 {source: 'local'|'remote', tgzPath, version} 或 null
+function findLocalMarketBundle() {
+  try {
+    const marketDir = path.join(LAYOUT_ROOT, 'app', 'extras', 'dsh-market-bundle');
+    const mfstPath = path.join(marketDir, 'manifest.json');
+    if (!fs.existsSync(mfstPath)) return null;
+    const m = JSON.parse(fs.readFileSync(mfstPath, 'utf8'));
+    if (!m || !m.tarball || !m.sha256) return null;
+    const tgz = path.join(marketDir, m.tarball);
+    if (!fs.existsSync(tgz)) return null;
+    return { marketDir, mfstPath, tgzPath: tgz, version: m.version || 'unknown', sha256: m.sha256 };
+  } catch { return null; }
+}
+function sha256File(p) {
+  try {
+    const buf = fs.readFileSync(p);
+    return require('node:crypto').createHash('sha256').update(buf).digest('hex').toLowerCase();
+  } catch { return ''; }
+}
 ipcMain.handle('market:ensure', async () => {
-  if (await marketStatusOk()) return { ok: true, status: 'ready' };
+  if (await marketStatusOk()) {
+    const local = findLocalMarketBundle();
+    return { ok: true, status: 'ready', source: local ? 'local' : 'remote', version: local?.version };
+  }
   const nodeExe = resolveNodeExe();
   const harness = discoverHarness();
   const cli = harness && harness.dir ? path.join(harness.dir, 'apps', 'cli', 'lib', 'bin.js') : null;
   if (!cli || !fs.existsSync(cli)) {
     return { ok: false, status: 'no-harness', error: '未定位到 harness 引擎，无法安装市场插件' };
   }
-  pushLog('stdout', '[市场] 未检测到 dshmarket 插件，自动安装…');
-  const p = spawn(nodeExe, [cli, 'plugin', '--profile', 'web', 'add', 'dshmarket'], { cwd: harness.dir, windowsHide: true, env: { ...process.env } });
+  // 优先路径：本地内置 tarball
+  const local = findLocalMarketBundle();
+  let source = 'remote';
+  let installArgs = [cli, 'plugin', '--profile', 'web', 'add', 'dshmarket'];
+  let tgzForLog = 'dshmarket (远程 npm)';
+  if (local) {
+    const actualSha = sha256File(local.tgzPath);
+    if (actualSha && actualSha === local.sha256.toLowerCase()) {
+      source = 'local';
+      installArgs = [cli, 'plugin', '--profile', 'web', 'add', local.tgzPath];
+      tgzForLog = `dshmarket v${local.version} (本地内置, SHA256 已校验)`;
+    } else {
+      pushLog('stderr', `[市场] 本地 tarball SHA256 校验失败（期望 ${local.sha256} vs 实际 ${actualSha}），走远程 npm`);
+    }
+  }
+  pushLog('stdout', `[市场] 未检测到 dshmarket 插件，自动安装：${tgzForLog}`);
+  const p = spawn(nodeExe, installArgs, { cwd: harness.dir, windowsHide: true, env: { ...process.env } });
   p.stdout.on('data', (d) => pushLog('stdout', d.toString()));
   p.stderr.on('data', (d) => pushLog('stderr', d.toString()));
   return new Promise((resolve) => {
-    p.on('error', (err) => resolve({ ok: false, status: 'install-error', error: err.message }));
+    p.on('error', (err) => resolve({ ok: false, status: 'install-error', error: err.message, source }));
     p.on('close', async (code) => {
       const ready = await marketStatusOk();
-      resolve({ ok: ready, status: ready ? 'ready' : `install-finished-${code}`, code, needsRestart: !ready });
+      resolve({ ok: ready, status: ready ? 'ready' : `install-finished-${code}`, code, source, version: local?.version, needsRestart: !ready });
     });
   });
 });
-ipcMain.handle('market:check', async () => ({ ok: true, ready: await marketStatusOk() }));
+ipcMain.handle('market:check', async () => {
+  const ready = await marketStatusOk();
+  const local = findLocalMarketBundle();
+  return { ok: true, ready, source: local ? 'local' : 'remote', version: local?.version };
+});
 
 ipcMain.handle('app:relaunch', async () => {
   app.relaunch();

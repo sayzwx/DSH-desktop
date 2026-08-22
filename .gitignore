@@ -32,3 +32,6 @@ dist/
 
 # DSH 桌面端安装产物（本机安装目录，勿入库）
 DSH/
+
+# 内置 dsh-market tarball（由 scripts/fetch-dshmarket.ps1 拉取，体积较大不入库；保留 manifest.json 入库）
+extras/dsh-market-bundle/*.tgz

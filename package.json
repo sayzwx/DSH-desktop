@@ -1,6 +1,6 @@
 {
   "name": "dsh",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "DSH 桌面端（DeepSeek Harness Desktop）",
   "main": "main.js",
   "private": true,

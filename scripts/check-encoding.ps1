@@ -8,6 +8,8 @@
       .txt        必须 UTF-8 带 BOM —— 中文 Windows 记事本把无 BOM 的 UTF-8 当
                   ANSI 显示，用户打开说明文件会看到乱码
       .bat/.cmd   必须无 BOM —— cmd 会把 BOM 字节当命令执行报错；内容保持 ASCII 最安全
+      .iss        必须无 BOM —— Inno Setup 6.3+ 官方支持无 BOM 的 UTF-8 .iss 脚本
+                  （ISCC.exe 会自动识别；v0.5.4 起正式纳入检查，历史遗留 BOM 已去除）
       其他文本    必须有效 UTF-8 且无 BOM（.js .mjs .json .html .css .md .yml .yaml），
                   严格解码校验能抓出 GBK/ANSI 内容
 
@@ -28,7 +30,7 @@ $root = Split-Path -Parent $PSScriptRoot
 
 $skipDirs = @('.git', 'node_modules', 'dist', 'wallpaper-engine', 'scripts\.scratch', 'DSH')
 $requireBom = @('.ps1', '.txt')      # 必须带 BOM
-$forbidBom = @('.bat', '.cmd', '.js', '.mjs', '.json', '.html', '.css', '.md', '.yml', '.yaml')
+$forbidBom = @('.bat', '.cmd', '.js', '.mjs', '.json', '.html', '.css', '.md', '.yml', '.yaml', '.iss')
 
 $issues = New-Object System.Collections.Generic.List[string]
 $count = 0

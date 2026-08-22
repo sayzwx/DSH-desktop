@@ -58,6 +58,8 @@
     registry: null,    // /dsh-market/registry
     installed: null,   // /dsh-market/installed
     updates: null,     // /dsh-market/updates
+    marketSource: 'remote', // 'local'（DSH Desktop 内置 dshmarket tarball）| 'remote'（远程 npm 拉取）
+    marketBundleVersion: null, // manifest.json 里的 version（如 '1.18.0'）
     search: '',
     category: 'all',
     tab: 'discover',
@@ -189,11 +191,12 @@
     if (S.busy) return;
     el.meta.textContent = '正在同步市场…';
     try {
-      const [st, reg, inst, up] = await Promise.all([
+      const [st, reg, inst, up, chk] = await Promise.all([
         get('/dsh-market/status'),
         get('/dsh-market/registry'),
         get('/dsh-market/installed'),
         get('/dsh-market/updates'),
+        api.marketCheck().catch(() => null),
       ]);
       if (!st.ok || !reg.ok || !inst.ok) {
         throw new Error((st.error || reg.error || inst.error) || '市场接口不可用');
@@ -202,7 +205,13 @@
       S.registry = reg.data.registry || null;
       S.installed = inst.data || null;
       S.updates = (up.ok && up.data && up.data.updates) ? up.data.updates : {};
-      el.meta.textContent = `市场 v${S.status.version} · profile「${S.status.profile || 'web'}」 · ${S.registry ? S.registry.count : 0} 个插件`;
+      // 市场源：本地内置（DSH Desktop 打包的 dshmarket tarball）vs 远程 npm 拉取——用户能一眼分辨是否真正内置
+      const srcTag = (chk && chk.source === 'local')
+        ? ` · 📦 本地内置${chk.version ? ' v' + chk.version : ''}`
+        : ` · ☁️ 远程 npm`;
+      S.marketSource = (chk && chk.source) || 'remote';
+      S.marketBundleVersion = chk && chk.version || null;
+      el.meta.textContent = `市场 v${S.status.version}${srcTag} · profile「${S.status.profile || 'web'}」 · ${S.registry ? S.registry.count : 0} 个插件`;
       el.subtitle.textContent = `浏览 / 搜索 / 一键安装社区插件 · 管理已装插件与主题 · 备份恢复配置（市场服务 v${S.status.version}, 更新通道 ${S.status.channel}）`;
       el.channel.value = S.status.channel || 'stable';
       computeRestart();

@@ -1,0 +1,11 @@
+{
+  "_comment": "manifest 模板：scripts/fetch-dshmarket.ps1 拉取 tarball 时自动生成 manifest.json，请勿手填。结构参考此文件即可。",
+  "name": "dshmarket",
+  "version": "1.18.0",
+  "registry": "https://registry.npmmirror.com",
+  "tarball": "dshmarket-1.18.0.tgz",
+  "sha256": "REPLACE_WITH_REAL_SHA256_HEX_64_CHARS",
+  "fetchedAt": "2026-08-22T15:00:00+08:00",
+  "sizeBytes": 0,
+  "notes": "用于 setup.ps1 安装前 SHA256 校验 + main.js marketEnsure 探测本地 tarball 是否存在"
+}

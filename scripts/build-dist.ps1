@@ -117,6 +117,26 @@ Copy-Item (Join-Path $root 'installer\check-env.ps1') (Join-Path $stage 'check-e
 # 说明文档（中文名）随构建复制；编码由 scripts\check-encoding.ps1 统一把关
 Get-ChildItem (Join-Path $root 'installer') -Filter '*.txt' | Copy-Item -Destination $stage -Force
 
+# 内置插件市场（dsh-market-bundle）：把 extras\dsh-market-bundle\manifest.json + dshmarket-*.tgz
+# 一起打到 stage\app\extras\dsh-market-bundle\，随 Setup.exe 安装到 {用户安装根}\app\extras\。
+# setup.ps1 / main.js marketEnsure 会优先探测这个目录，从本地 tarball 装 dshmarket，不走 npm。
+# 关键：这是真正"开箱即用"插件市场的关键文件，缺了 install 时只能走远程 npm 拉取。
+$marketBundleSrc = Join-Path $root 'extras\dsh-market-bundle'
+$marketBundleDst = Join-Path $stage 'app\extras\dsh-market-bundle'
+if (Test-Path $marketBundleSrc) {
+  $tgz = Get-ChildItem (Join-Path $marketBundleSrc '*.tgz') -ErrorAction SilentlyContinue | Select-Object -First 1
+  $mfst = Join-Path $marketBundleSrc 'manifest.json'
+  if ($tgz -and (Test-Path $mfst)) {
+    New-Item -ItemType Directory -Path $marketBundleDst -Force | Out-Null
+    Copy-Item $tgz.FullName (Join-Path $marketBundleDst $tgz.Name) -Force
+    Copy-Item $mfst (Join-Path $marketBundleDst 'manifest.json') -Force
+    Write-Host ("  bundled dsh-market: {0} + manifest.json ({1:N0} KB)" -f $tgz.Name, [math]::Round($tgz.Length/1KB, 1))
+  } else {
+    Write-Host '  WARN: extras\dsh-market-bundle\ 缺少 tarball 或 manifest.json —— 跳过内置市场（用户安装后会走远程 npm 拉取 dshmarket）' -ForegroundColor Yellow
+    Write-Host '       修复：跑 scripts\fetch-dshmarket.ps1 -Version <x.y.z> 后重新打包'
+  }
+}
+
 # 自带便携 Node：装进安装包 tools\node —— 安装器会搬到 %LOCALAPPDATA%\DSH\tools\node，
 # 桌面端启动与引擎安装都优先使用它，本机不需要任何 Node 环境
 Write-Host '=== Bundling portable Node.js (tools\\node) ==='
@@ -143,10 +163,12 @@ if (-not $inno) { $inno = (Get-Command iscc -ErrorAction SilentlyContinue).Sourc
 if (-not $inno) {
   $pf = @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA)
   foreach ($base in ($pf | Where-Object { $_ } | Select-Object -Unique)) {
-    $cand = Join-Path $base 'Inno Setup 6\ISCC.exe'
-    if (Test-Path $cand) { $inno = $cand; break }
-    $cand = Join-Path $base 'Inno Setup 5\ISCC.exe'
-    if (Test-Path $cand) { $inno = $cand; break }
+    # 覆盖常见安装位置：%ProgramFiles%\Inno Setup 6 / %LOCALAPPDATA%\Programs\Inno Setup 6（用户安装）等
+    foreach ($sub in @('Inno Setup 6', 'Programs\Inno Setup 6', 'Inno Setup 5', 'Programs\Inno Setup 5')) {
+      $cand = Join-Path $base (Join-Path $sub 'ISCC.exe')
+      if (Test-Path $cand) { $inno = $cand; break }
+    }
+    if ($inno) { break }
   }
 }
 $exeOut = Join-Path $dist "$name-Setup.exe"

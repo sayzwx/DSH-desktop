@@ -1,4 +1,4 @@
-﻿; DSH Desktop — Inno Setup 一键安装向导（真正安装器，非自解压 7z）
+; DSH Desktop — Inno Setup 一键安装向导（真正安装器，非自解压 7z）
 ; 功能：
 ;   1. 用户可选择安装目录（默认 %LOCALAPPDATA%\DSH），app/harness/tools 全部随所选目录布局；
 ;   2. 进入向导即自动做【环境预检】（check-env.ps1 -Report）：架构 / 网络 / 磁盘 / Node.js，
@@ -9,10 +9,10 @@
 ; 前提：installer 同目录已用 build-dist.ps1 建好 stage（app/config/tools/setup*.ps1/check-env.ps1 等）。
 
 #ifndef MyAppVersion
-  #define MyAppVersion "0.5.3"
+  #define MyAppVersion "0.5.4"
 #endif
 #ifndef StagingDir
-  #define StagingDir "..\dist\stage\DSH-Desktop-v0.5.3"
+  #define StagingDir "..\dist\stage\DSH-Desktop-v0.5.4"
 #endif
 #ifndef OutputDir
   #define OutputDir "..\dist"
@@ -152,6 +152,9 @@ procedure EnvRunBtnClick(Sender: TObject);
 var
   Rpt, NodeVer, NetOk: String;
 begin
+  // 必须先提取 check-env.ps1 到 {tmp}：预检页在安装开始前（wpSelectDir 之后）就运行，
+  // 而 [Files] dontcopy 文件只有 ExtractTemporaryFile 才会释放——不能在 ssInstall 阶段才提取。
+  ExtractCheckEnv;
   EnvRunBtn.Enabled := False;
   EnvRunBtn.Caption := '检测中…';
   EnvMemo.Text := '正在检查运行环境（架构 / 网络 / 磁盘 / Node.js）…' + #13#10;
@@ -179,8 +182,9 @@ begin
   EnvMemo.Lines.Add('');
   EnvMemo.Lines.Add('（可点击下方"重新检测"随时复查；继续安装将自动补齐所缺依赖）');
   WizardForm.NextButton.Enabled := True;
-  EnvRunBtn.Enabled := False;
-  EnvRunBtn.Caption := '已检测';
+  // 关键：保留按钮可点击，让用户在向导内随时复查环境（之前禁用导致用户卡死）
+  EnvRunBtn.Enabled := True;
+  EnvRunBtn.Caption := '重新检测';
   EnvOk := True;
 end;
 
@@ -204,6 +208,10 @@ begin
   EnvRunBtn.Caption := '重新检测';
   EnvRunBtn.OnClick := @EnvRunBtnClick;
   EnvOk := False;
+  // 关键：进入向导前先把 dontcopy 的 check-env.ps1 释放到 {tmp}，否则 EnvPage 第一次
+  // 触发 EnvRunBtnClick 时 FileExists('{tmp}\check-env.ps1') 为假 → 报"未就位"。
+  // 历史教训：0.5.x 安装器第一次跑用户看到的就是这个错；放 InitializeWizard 末尾提前提。
+  ExtractCheckEnv;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);

@@ -1,0 +1,10 @@
+{
+    "name":  "dshmarket",
+    "version":  "1.18.0",
+    "registry":  "https://registry.npmjs.org",
+    "tarball":  "dshmarket-1.18.0.tgz",
+    "sha256":  "8c9dd3c922f39b932078eff02cfaa58d2e96489729c4fdf53efcb3ff855815b4",
+    "fetchedAt":  "2026-08-22T15:48:21.2495089+08:00",
+    "sizeBytes":  609892,
+    "notes":  "生成自 scripts/fetch-dshmarket.ps1；setup.ps1 安装前会校验 SHA256"
+}

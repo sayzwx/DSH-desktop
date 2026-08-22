@@ -391,20 +391,54 @@ if ($harnessReady) {
   Write-Host '  harness engine installed (from official DeepSeek-Harness).'
 }
 
-# 插件市场（dshmarket）随引擎固定安装：引擎就绪后自动 `dsh plugin --profile web add dshmarket`。
+# 插件市场（dshmarket）随引擎固定安装：引擎就绪后自动装 dshmarket 到 web profile。
+# 优先路径：{Dest}\app\extras\dsh-market-bundle\manifest.json + dshmarket-*.tgz（由 build-dist.ps1 打包）
+#   → 校验 manifest.json 的 SHA256 与 tarball 一致 → 调 `dsh plugin add <tarball>` 从本地装（不走 npm）
+# Fallback 路径：本地 tarball 不存在或校验失败 → 远程 `dsh plugin add dshmarket`（需 npm 网络）
 # 幂等：已安装则跳过；失败不阻塞安装（可下次启动时由应用内补装）。
 $dshCli = Join-Path $harnessDir 'apps\cli\lib\bin.js'
 $nodeExe = Join-Path $Dest 'tools\node\node.exe'
 if ((Test-Path $dshCli) -and (Test-Path $nodeExe)) {
-  Write-Host '  installing plugin market (dshmarket) ...'
-  Push-Location $harnessDir
-  try {
-    & $nodeExe $dshCli plugin --profile web add dshmarket 2>&1 | ForEach-Object { Write-Host "    $_" }
-    if ($LASTEXITCODE -eq 0) { Write-Host '  plugin market installed.' }
-    else { Write-Host '  WARN: dshmarket 安装未成功（可下次启动自动补装，不影响其余安装）' }
-  } catch {
-    Write-Host "  WARN: dshmarket 安装异常: $($_.Exception.Message)"
-  } finally { Pop-Location }
+  $marketDir = Join-Path $Dest 'app\extras\dsh-market-bundle'
+  $mfstPath = Join-Path $marketDir 'manifest.json'
+  $installedFromBundle = $false
+  if ((Test-Path $marketDir) -and (Test-Path $mfstPath)) {
+    try {
+      $mfst = Get-Content -Raw -Path $mfstPath -Encoding UTF8 | ConvertFrom-Json
+      $tgzPath = Join-Path $marketDir $mfst.tarball
+      if ((Test-Path $tgzPath) -and $mfst.sha256) {
+        $actualSha = (Get-FileHash -Path $tgzPath -Algorithm SHA256).Hash.ToLower()
+        if ($actualSha -eq $mfst.sha256.ToLower()) {
+          Write-Host ("  installing plugin market (dshmarket v{0}, 本地内置, SHA256 已校验) ..." -f $mfst.version)
+          Push-Location $harnessDir
+          try {
+            & $nodeExe $dshCli plugin --profile web add $tgzPath 2>&1 | ForEach-Object { Write-Host "    $_" }
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host '  plugin market installed (本地内置).' -ForegroundColor Green
+              $installedFromBundle = $true
+            } else {
+              Write-Host '  WARN: 本地 tarball 安装未成功（exit ' $LASTEXITCODE '），将尝试远程 npm' -ForegroundColor Yellow
+            }
+          } finally { Pop-Location }
+        } else {
+          Write-Host ("  WARN: 本地 tarball SHA256 校验失败（期望 {0} vs 实际 {1}），跳过本地安装，将尝试远程 npm" -f $mfst.sha256.ToLower(), $actualSha) -ForegroundColor Yellow
+        }
+      }
+    } catch {
+      Write-Host "  WARN: 解析 manifest.json 异常: $($_.Exception.Message)，将尝试远程 npm" -ForegroundColor Yellow
+    }
+  }
+  if (-not $installedFromBundle) {
+    Write-Host '  installing plugin market (dshmarket, 远程 npm registry) ...'
+    Push-Location $harnessDir
+    try {
+      & $nodeExe $dshCli plugin --profile web add dshmarket 2>&1 | ForEach-Object { Write-Host "    $_" }
+      if ($LASTEXITCODE -eq 0) { Write-Host '  plugin market installed.' }
+      else { Write-Host '  WARN: dshmarket 安装未成功（可下次启动自动补装，不影响其余安装）' }
+    } catch {
+      Write-Host "  WARN: dshmarket 安装异常: $($_.Exception.Message)"
+    } finally { Pop-Location }
+  }
 } else {
   Write-Host '  WARN: 引擎 CLI 未就绪，跳过插件市场安装（启动后应用内自动补装）'
 }
