@@ -1160,9 +1160,47 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
   border-radius: 12px;
   letter-spacing: 0.5px;
   border: 1px solid var(--border);
+  white-space: nowrap;          /* 防止「文件」被竖排成「文」「件」 */
+  display: inline-block;
+  min-width: 48px;              /* 给类型列固定最小宽度 */
+  text-align: center;
 }
 .badge.dir { background: rgba(123, 97, 255, 0.12); color: var(--violet); border-color: rgba(123, 97, 255, 0.3); }
 .badge.file { background: rgba(0, 212, 170, 0.08); color: var(--cyan); }
+
+/* ---------- 星图档案 results ---------- */
+.results-scroll { overflow-x: auto; border-radius: 10px; }
+.results-tbl { table-layout: fixed; min-width: 760px; }
+.results-tbl .col-name  { width: 24%; }
+.results-tbl .col-type  { width: 92px; }
+.results-tbl .col-desc  { width: 24%; }
+.results-tbl .col-mtime { width: 160px; }
+.results-tbl .col-path  { width: auto; }
+.results-tbl td, .results-tbl th {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+.results-tbl td.cell-path { font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); }
+.results-tbl td.cell-desc { color: var(--text-secondary, var(--text)); font-size: 12px; }
+.results-tbl td.cell-name { display: flex; align-items: center; gap: 8px; }
+.results-tbl td.cell-name .name-text { overflow: hidden; text-overflow: ellipsis; }
+.results-tbl tr { cursor: copy; transition: background 0.15s; }
+.results-tbl tr:hover { background: rgba(0, 212, 170, 0.05); }
+.copy-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--text-dim);
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+.copy-btn:hover { opacity: 1; color: var(--cyan); border-color: var(--border-strong, var(--border)); }
+.copy-btn.copied { color: var(--cyan); border-color: var(--cyan); opacity: 1; }
 
 /* ---------- 设置 ---------- */
 .theme-row { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }

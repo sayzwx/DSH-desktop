@@ -28,7 +28,7 @@ param([switch]$Fix)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
-$skipDirs = @('.git', 'node_modules', 'dist', 'wallpaper-engine', 'scripts\.scratch', 'DSH')
+$skipDirs = @('.git', 'node_modules', 'dist', 'wallpaper-engine', 'scripts\.scratch', 'DSH', '.workbuddy')
 $requireBom = @('.ps1', '.txt')      # 必须带 BOM
 $forbidBom = @('.bat', '.cmd', '.js', '.mjs', '.json', '.html', '.css', '.md', '.yml', '.yaml', '.iss')
 

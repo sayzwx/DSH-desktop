@@ -166,25 +166,48 @@
     const harnessRunning = !!(hs && (hs.state === 'running' || hs.webUp));
     const r = await get('/dsh-market/status');
     if (!harnessRunning) return { ok: false, reason: '请先启动 Harness 引擎。' };
-    if (!r.ok) {
-      if (r.status === 404) {
-        // 市场插件未随引擎加载（dshmarket 缺失）→ 自动补装，装完需重启桌面端让引擎重新组合
-        try {
-          const ensure = await api.marketEnsure();
-          if (ensure && ensure.ok) {
-            return { ok: false, reason: '已自动安装市场插件（dshmarket）——请重启桌面端让引擎重新加载后使用。' };
-          }
-          if (ensure && ensure.needsRestart) {
-            return { ok: false, reason: '市场插件已安装，需要重启桌面端后生效（设置 → 插件市场）。' };
-          }
-          return { ok: false, reason: '市场插件自动安装未完成：' + ((ensure && ensure.error) || '未知原因') + '，请检查网络后重试。' };
-        } catch (e) {
-          return { ok: false, reason: '市场插件自动安装出错：' + (e && e.message) };
-        }
-      }
-      return { ok: false, reason: '市场服务应答异常：' + (r.error || ('HTTP ' + r.status)) };
+    // dshmarket 未加载：harness 把 /dsh-market/* fallback 到 HTML（HTTP 200 但 data 是 <html> 字符串），
+    // r.ok=true 但语义上是「没装好」。检测 data 是不是对象且有 version 字段。
+    const dataLooksLikeStatus = r.ok && r.data && typeof r.data === 'object' && (r.data.version || r.data.name);
+    if (dataLooksLikeStatus) {
+      return { ok: true, status: r.data };
     }
-    return { ok: true, status: r.data };
+    if (r.ok && r.data && typeof r.data === 'string' && /<\/?html/i.test(r.data)) {
+      // harness 把请求 fallback 到 SPA index.html → dshmarket 没加载
+      const chk = await api.marketCheck().catch(() => null);
+      if (chk && chk.installed) {
+        return { ok: false, reason: chk.hint || `dshmarket v${chk.installedVersion || '?'} 已装但 harness 未加载。请退出 DSH Desktop 后重新打开（harness 重启会自动组合插件）。`, installedNotLoaded: true };
+      }
+      // 没装过，触发补装流程（让 main.js 走本地 tarball / 远程 npm）
+      try {
+        const ensure = await api.marketEnsure();
+        if (ensure && ensure.ok && ensure.loaded) {
+          return { ok: false, reason: '已自动安装市场插件（dshmarket）——请重启 DSH Desktop 让 harness 重新加载。', needsRestart: true };
+        }
+        if (ensure && (ensure.needsRestart || ensure.status === 'installed-not-loaded')) {
+          return { ok: false, reason: ensure.hint || ensure.reason || '市场插件已安装，需要重启 DSH Desktop 后生效。', needsRestart: true };
+        }
+        return { ok: false, reason: '市场插件自动安装未完成：' + ((ensure && ensure.error) || '未知原因') + '，请检查网络后重试。' };
+      } catch (e) {
+        return { ok: false, reason: '市场插件自动安装出错：' + (e && e.message) };
+      }
+    }
+    if (!r.ok && r.status === 404) {
+      // 兜底：404 走老路径（某些 harness 版本真的返回 404）
+      try {
+        const ensure = await api.marketEnsure();
+        if (ensure && ensure.ok) {
+          return { ok: false, reason: '已自动安装市场插件（dshmarket）——请重启桌面端让引擎重新加载后使用。' };
+        }
+        if (ensure && ensure.needsRestart) {
+          return { ok: false, reason: '市场插件已安装，需要重启桌面端后生效（设置 → 插件市场）。' };
+        }
+        return { ok: false, reason: '市场插件自动安装未完成：' + ((ensure && ensure.error) || '未知原因') + '，请检查网络后重试。' };
+      } catch (e) {
+        return { ok: false, reason: '市场插件自动安装出错：' + (e && e.message) };
+      }
+    }
+    return { ok: false, reason: '市场服务应答异常：' + (r.error || ('HTTP ' + r.status)) };
   }
 
   async function loadAll(initial) {
@@ -198,10 +221,51 @@
         get('/dsh-market/updates'),
         api.marketCheck().catch(() => null),
       ]);
+      // 区分「Harness 已加载 dshmarket」vs「dshmarket 已装但 harness 未加载」vs「完全没装」
+      // 关键是 st.data 是不是有 version 字段——没 version 说明返回的是 HTML（harness SPA fallback）
+      const statusLoaded = !!(st.ok && st.data && (st.data.version || st.data.name));
+      const statusRaw = st.data;
+      if (!statusLoaded && statusRaw && typeof statusRaw === 'object') {
+        // 看看是不是 harness HTML 当作 status 返回（dshmarket 未加载）
+        const isHtml = typeof statusRaw === 'string' ? /<\/?html/i.test(statusRaw) : false;
+        if (isHtml || (!statusRaw.version && !statusRaw.name)) {
+          S.status = null;
+        } else {
+          S.status = statusRaw;
+        }
+      } else {
+        S.status = statusRaw || null;
+      }
+      // st 是后端 raw 接口（marketFetchJSON），statusLoaded 是判断 harness 是否真加载 dshmarket
+      if (!statusLoaded && (chk && chk.installed)) {
+        // 已装未加载：覆盖 meta 提示用户重启
+        const srcTag = (chk && chk.source === 'local')
+          ? ` · 📦 本地内置${chk.version ? ' v' + chk.version : ''}（需重启加载）`
+          : ` · ⚠️ 已装 v${chk.installedVersion || '?'}（harness 未加载，请重启应用）`;
+        S.marketSource = (chk && chk.source) || 'remote';
+        S.marketBundleVersion = chk && chk.version || null;
+        el.meta.textContent = `市场未加载 · ${srcTag} · 重启 DSH Desktop 让 harness 重新组合插件`;
+        el.subtitle.textContent = chk.hint || `dshmarket v${chk.installedVersion || '?'} 已装到 web profile，需要重启 harness 才会被 cordis 加载器组合`;
+        el.meta.style.color = 'var(--warn, #ff8c42)';
+        el.channel.value = '';
+        S.registry = null;
+        S.installed = null;
+        S.updates = {};
+        return; // 跳过正常加载，停在「需重启」状态
+      }
+      el.meta.style.color = '';
       if (!st.ok || !reg.ok || !inst.ok) {
+        // 接口完全不可用但 chk 说已装 → 仍走「需重启」
+        if (chk && chk.installed) {
+          const srcTag = (chk && chk.source === 'local')
+            ? ` · 📦 本地内置${chk.version ? ' v' + chk.version : ''}（需重启加载）`
+            : ` · ⚠️ 已装 v${chk.installedVersion || '?'}`;
+          el.meta.textContent = `市场未加载 · ${srcTag} · 重启 DSH Desktop 让 harness 重新组合插件`;
+          el.subtitle.textContent = chk.hint || 'dshmarket 已装，需要重启 harness';
+          return;
+        }
         throw new Error((st.error || reg.error || inst.error) || '市场接口不可用');
       }
-      S.status = st.data;
       S.registry = reg.data.registry || null;
       S.installed = inst.data || null;
       S.updates = (up.ok && up.data && up.data.updates) ? up.data.updates : {};
@@ -211,8 +275,11 @@
         : ` · ☁️ 远程 npm`;
       S.marketSource = (chk && chk.source) || 'remote';
       S.marketBundleVersion = chk && chk.version || null;
-      el.meta.textContent = `市场 v${S.status.version}${srcTag} · profile「${S.status.profile || 'web'}」 · ${S.registry ? S.registry.count : 0} 个插件`;
-      el.subtitle.textContent = `浏览 / 搜索 / 一键安装社区插件 · 管理已装插件与主题 · 备份恢复配置（市场服务 v${S.status.version}, 更新通道 ${S.status.channel}）`;
+      // 显示真实状态（避免 undefined）
+      const v = (S.status && S.status.version) ? 'v' + S.status.version : '加载中';
+      const ch = (S.status && S.status.channel) ? S.status.channel : '默认';
+      el.meta.textContent = `市场 ${v}${srcTag} · profile「${(S.status && S.status.profile) || 'web'}」 · ${S.registry ? S.registry.count : 0} 个插件`;
+      el.subtitle.textContent = `浏览 / 搜索 / 一键安装社区插件 · 管理已装插件与主题 · 备份恢复配置（市场服务 ${v}, 更新通道 ${ch}）`;
       el.channel.value = S.status.channel || 'stable';
       computeRestart();
       renderTabs();

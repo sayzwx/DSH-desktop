@@ -2040,11 +2040,46 @@ ipcMain.handle('market:logExport', async () => {
 //   → 校验 manifest.json 的 SHA256 与 tarball 一致 → 调 `dsh plugin add <tarball>` 从本地装（不走 npm）
 // Fallback：本地 tarball 不存在 / 校验失败 → 远程 `dsh plugin add dshmarket`（需 npm 网络）
 // 幂等：已就绪直接返回；完成后提示重启让引擎重新组合。
+//
+// 重要：harness 的 /dsh-market/* 路由由 dshmarket 插件提供；插件装在 ~/.dsh/profiles/web/ 后必须
+// **重启 harness** 才会被 cordis 加载器组合上（plugin add 只写文件不触发 reload）。
+// marketStatusOk 返回 false 时先探测 dshmarket 实际安装位置，已装但未加载 → 提示用户重启。
 async function marketStatusOk() {
   try {
     const r = await marketFetchJSON('/dsh-market/status');
-    return r.ok && r.status === 200;
-  } catch { return false; }
+    // dshmarket 未加载时，harness 把这个路径 fallback 到 SPA index.html（HTML 字符串），
+    // r.ok=true 但 r.data 是 HTML 文本，没 version 字段 → 视为未加载
+    if (!r.ok || r.status !== 200) return { ok: false, reason: 'http' };
+    const d = r.data;
+    if (typeof d !== 'object' || !d || (!d.version && !d.name)) {
+      return { ok: false, reason: 'not-loaded', hint: 'dshmarket 插件未加载到 harness（路由返回 HTML），需要重启应用让 harness 重新组合插件' };
+    }
+    return { ok: true, data: d };
+  } catch (e) {
+    return { ok: false, reason: 'error', hint: e.message };
+  }
+}
+// 探测 dshmarket 在 harness web profile 里实际安装状态（manifest/package.json 存在但未加载 = 已装但需重启）
+function marketInstalledOnDisk() {
+  try {
+    // harness web profile 把 cordis 插件装到 ~/.dsh/profiles/web/node_modules/<pkg>/
+    const homes = [
+      process.env.DSH_HOME,
+      path.join(os.homedir(), '.dsh'),
+    ].filter(Boolean);
+    for (const home of homes) {
+      const candidates = [
+        path.join(home, 'profiles', 'web', 'node_modules', 'dshmarket', 'package.json'),
+        path.join(home, 'profiles', 'web', 'cordis', 'dshmarket', 'package.json'),
+      ];
+      for (const p of candidates) {
+        if (fs.existsSync(p)) {
+          try { return { path: p, pkg: JSON.parse(fs.readFileSync(p, 'utf8')) }; } catch { /* ignore */ }
+        }
+      }
+    }
+  } catch { /* ignore */ }
+  return null;
 }
 // 探测内置 dshmarket tarball（manifest.json + tarball），返回 {source: 'local'|'remote', tgzPath, version} 或 null
 function findLocalMarketBundle() {
@@ -2066,9 +2101,23 @@ function sha256File(p) {
   } catch { return ''; }
 }
 ipcMain.handle('market:ensure', async () => {
-  if (await marketStatusOk()) {
+  const st = await marketStatusOk();
+  if (st.ok) {
     const local = findLocalMarketBundle();
-    return { ok: true, status: 'ready', source: local ? 'local' : 'remote', version: local?.version };
+    return { ok: true, status: 'ready', source: local ? 'local' : 'remote', version: local?.version, loaded: true };
+  }
+  // dshmarket 已装但未加载（典型：安装时/刚装完/应用启动后）→ 提示重启而非重新装
+  const installed = marketInstalledOnDisk();
+  if (installed) {
+    return {
+      ok: false,
+      status: 'installed-not-loaded',
+      loaded: false,
+      installedVersion: installed.pkg?.version,
+      installedPath: installed.path,
+      hint: `dshmarket v${installed.pkg?.version || '?'} 已装到 ${installed.path}，但 harness 还未加载。请退出应用后重新打开（harness 重启会自动组合插件）。`,
+      needsRestart: true,
+    };
   }
   const nodeExe = resolveNodeExe();
   const harness = discoverHarness();
@@ -2099,14 +2148,35 @@ ipcMain.handle('market:ensure', async () => {
     p.on('error', (err) => resolve({ ok: false, status: 'install-error', error: err.message, source }));
     p.on('close', async (code) => {
       const ready = await marketStatusOk();
-      resolve({ ok: ready, status: ready ? 'ready' : `install-finished-${code}`, code, source, version: local?.version, needsRestart: !ready });
+      // 装完返回 ready 状态 + needsRestart 让用户知道要重启应用
+      resolve({
+        ok: ready.ok,
+        status: ready.ok ? 'ready' : `install-finished-${code}`,
+        code,
+        source,
+        version: local?.version,
+        loaded: ready.ok,
+        needsRestart: !ready.ok,
+        hint: ready.ok ? null : `dshmarket 已装到 ${code === 0 ? 'web profile' : '但子进程退出 ' + code}，请重启应用让 harness 加载。`,
+      });
     });
   });
 });
 ipcMain.handle('market:check', async () => {
-  const ready = await marketStatusOk();
+  const st = await marketStatusOk();
   const local = findLocalMarketBundle();
-  return { ok: true, ready, source: local ? 'local' : 'remote', version: local?.version };
+  const installed = marketInstalledOnDisk();
+  return {
+    ok: true,
+    ready: st.ok,
+    loaded: st.ok,
+    source: local ? 'local' : 'remote',
+    version: local?.version || installed?.pkg?.version || null,
+    installed: !!installed,
+    installedVersion: installed?.pkg?.version,
+    reason: st.reason,
+    hint: st.hint || (installed && !st.ok ? `已装 v${installed.pkg?.version}，请重启应用加载` : null),
+  };
 });
 
 ipcMain.handle('app:relaunch', async () => {

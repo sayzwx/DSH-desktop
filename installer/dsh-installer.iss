@@ -9,10 +9,10 @@
 ; 前提：installer 同目录已用 build-dist.ps1 建好 stage（app/config/tools/setup*.ps1/check-env.ps1 等）。
 
 #ifndef MyAppVersion
-  #define MyAppVersion "0.5.4"
+  #define MyAppVersion "0.5.5"
 #endif
 #ifndef StagingDir
-  #define StagingDir "..\dist\stage\DSH-Desktop-v0.5.4"
+  #define StagingDir "..\dist\stage\DSH-Desktop-v0.5.5"
 #endif
 #ifndef OutputDir
   #define OutputDir "..\dist"
@@ -98,38 +98,8 @@ begin
   end;
 end;
 
-// 运行 check-env.ps1 -Report，返回输出文本（通过重定向文件读取）
-function RunEnvReport(): String;
-var
-  TmpScript, OutFile, Cmd: String;
-  ExitCode: Integer;
-  Lines: TArrayOfString;
-  i: Integer;
-begin
-  Result := '';
-  TmpScript := ExpandConstant('{tmp}\check-env.ps1');
-  OutFile := ExpandConstant('{tmp}\env-report.txt');
-  DeleteFile(OutFile);
-  if not FileExists(TmpScript) then begin
-    Result := 'check-env.ps1 未就位（临时文件提取失败）';
-    Exit;
-  end;
-  Cmd := '"powershell" -NoProfile -ExecutionPolicy Bypass -File "' + TmpScript + '" -Report > "' + OutFile + '"';
-  if not Exec('cmd.exe', '/c ' + Cmd, '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then begin
-    Result := '环境预检脚本执行失败（exit ' + IntToStr(ExitCode) + '）';
-    Exit;
-  end;
-  if LoadStringsFromFile(OutFile, Lines) and (GetArrayLength(Lines) > 0) then begin
-    Result := '';
-    for i := 0 to GetArrayLength(Lines) - 1 do begin
-      if Pos('{', Lines[i]) > 0 then Result := Result + Lines[i] + #13#10;
-    end;
-    if Result = '' then Result := Lines[GetArrayLength(Lines) - 1];
-  end else begin
-    Result := '环境预检未产生输出（exit ' + IntToStr(ExitCode) + '）';
-  end;
-end;
-
+// 简单 JSON 字符串字段提取（仅用于从 env-report.json 取 nodeVersion/netOk/nodeOk 等短 ASCII 字段；
+// 注意：函数不能 forward reference，所以 ExtractJsonStr 必须定义在 RunEnvReport 之前）
 function ExtractJsonStr(const Json, Key: String): String;
 var
   P, P2: Integer;
@@ -146,6 +116,62 @@ begin
     while (P2 <= Length(Json)) and (Json[P2] <> '"') do P2 := P2 + 1;
     Result := Copy(Json, P, P2 - P);
   end;
+end;
+
+// 运行 check-env.ps1 -Report -ReportFile，把 JSON 写到 {tmp}\env-report.txt（UTF-8 no BOM），
+// 然后从该文件读出 JSON 提取关键字段组装 UI 文案。
+// 历史教训：用 cmd.exe /c "powershell ... > file" 重定向 stdout 在 PS 5.1 上是 UTF-16 LE，
+// LoadStringsFromFile 按 ANSI 读全乱码 → 显示「未产生输出（exit X）」。改成 -ReportFile 直写。
+function RunEnvReport(): String;
+var
+  TmpScript, OutFile, Cmd: String;
+  ExitCode: Integer;
+  Lines: TArrayOfString;
+  JsonText: String;
+  NodeVer, NetOk, NodeOkStr: String;
+begin
+  Result := '';
+  TmpScript := ExpandConstant('{tmp}\check-env.ps1');
+  OutFile := ExpandConstant('{tmp}\env-report.txt');
+  DeleteFile(OutFile);
+  if not FileExists(TmpScript) then begin
+    Result := 'check-env.ps1 未就位（临时文件提取失败）';
+    Exit;
+  end;
+  // 不再依赖 stdout 重定向——-ReportFile 直接写到 ANSI 兼容路径，Inno 后续按行读
+  Cmd := '"powershell" -NoProfile -ExecutionPolicy Bypass -File "' + TmpScript + '" -Report -ReportFile "' + OutFile + '"';
+  if not Exec('cmd.exe', '/c ' + Cmd, '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then begin
+    Result := '环境预检脚本启动失败';
+    Exit;
+  end;
+  if (ExitCode <> 0) then begin
+    Result := '环境预检脚本退出码 ' + IntToStr(ExitCode) + '（请手动运行 powershell -File "' + TmpScript + '" -Report 排查）';
+    Exit;
+  end;
+  if not LoadStringsFromFile(OutFile, Lines) or (GetArrayLength(Lines) = 0) then begin
+    Result := '环境预检未产生输出（文件为空）';
+    Exit;
+  end;
+  // 单行 JSON，提取关键字段组装 UI
+  JsonText := Lines[GetArrayLength(Lines) - 1];
+  if Pos('{', JsonText) = 0 then begin
+    Result := '环境预检输出不是 JSON：' + JsonText;
+    Exit;
+  end;
+  NodeVer := ExtractJsonStr(JsonText, 'nodeVersion');
+  NetOk := ExtractJsonStr(JsonText, 'netOk');
+  NodeOkStr := ExtractJsonStr(JsonText, 'nodeOk');
+  Result := '环境预检结果：' + #13#10;
+  Result := Result + '----------------------------------------' + #13#10;
+  if NodeVer <> '' then Result := Result + '  Node.js   : ' + NodeVer + #13#10;
+  if NetOk <> '' then Result := Result + '  网络可达  : ' + NetOk + #13#10;
+  if NodeOkStr = 'false' then
+    Result := Result + '  · Node.js 缺失或版本过低 —— 安装脚本会自动安装到所选目录 tools\\node' + #13#10;
+  if NetOk = 'false' then
+    Result := Result + '  · 网络可能不可达（registry.npmjs.org 探测失败）—— 安装将尝试国内 npm 镜像' + #13#10;
+  Result := Result + #13#10 +
+    '说明：安装脚本会在你选择的目录内自动补齐 Node.js 并拉取深空引擎（harness）。' + #13#10 +
+    '网络受限时自动走国内镜像（npmmirror / 腾讯云 / 华为云）加速。' + #13#10;
 end;
 
 procedure EnvRunBtnClick(Sender: TObject);

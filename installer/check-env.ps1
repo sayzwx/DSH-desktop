@@ -5,14 +5,15 @@
 #   -Report            只读环境体检：输出日志 + 末尾一行 JSON（main.js 解析用）
 #   -Fix               修复模式：Node 缺失或版本过低时，优先用 winget 安装/升级最新 Node LTS，
 #                      失败则回退官方 zip 下载到 %LOCALAPPDATA%\DSH\tools\node（无需管理员权限）
-# Run:  powershell -NoProfile -ExecutionPolicy Bypass -File check-env.ps1 [-Report|-Fix] [-DestDir "D:\path"]
+# Run:  powershell -NoProfile -ExecutionPolicy Bypass -File check-env.ps1 [-Report|-Fix] [-DestDir "D:\path"] [-ReportFile <path>]
 param(
   [switch]$Report,
   [switch]$Fix,
   [string]$NodeMinMajor = '22',
   [string]$NodeVersion  = 'v22.23.2',   # 回退下载的官方发行版（仅当 winget 不可用时）
   [string]$NpmRegistry  = '',           # 例：https://registry.npmmirror.com（npm 网络受限时）
-  [string]$DestDir      = ''            # 安装根目录（问题#5）；留空默认 %LOCALAPPDATA%\DSH
+  [string]$DestDir      = '',           # 安装根目录（问题#5）；留空默认 %LOCALAPPDATA%\DSH
+  [string]$ReportFile   = ''            # -Report 时把 JSON 同步写到这个文件（UTF-8 no BOM）——给 Inno Setup 用
 )
 $ErrorActionPreference = 'Stop'
 if ($DestDir) { $Dest = [System.IO.Path]::GetFullPath($DestDir) }
@@ -145,9 +146,15 @@ function Install-NodeFallback {
 # ---------- main ----------
 if ($Report) {
   $r = Get-EnvReport
+  $json = $r | ConvertTo-Json -Compress -Depth 4
   foreach ($i in $r.issues) { Write-Log "WARN: $i" }
-  # 结构化 JSON 供 main.js 解析（最后一行）
-  Write-Host ($r | ConvertTo-Json -Compress -Depth 4)
+  # 关键：JSON 同步落盘 UTF-8 no BOM（Write-Host / Write-Output 在 PS 5.1 走 host/UTF-16LE，
+  # Inno 的 LoadStringsFromFile 按 ANSI 读会全乱码，导致「环境预检未产生输出」。直接写文件最稳。
+  Write-Output $json
+  if ($ReportFile) {
+    New-Item -ItemType Directory -Path (Split-Path -Parent $ReportFile) -Force | Out-Null
+    [System.IO.File]::WriteAllText($ReportFile, $json, (New-Object System.Text.UTF8Encoding($false)))
+  }
   exit 0
 }
 

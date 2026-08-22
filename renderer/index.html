@@ -123,17 +123,26 @@
     <section class="page" id="page-results">
       <div class="cosmic-title">
         <h1>星图档案</h1>
-        <p class="subtitle">DSH_HOME: <code id="resultsHome"></code> · 会话与结果数据目录</p>
+        <p class="subtitle">DSH_HOME: <code id="resultsHome"></code> · 会话与结果数据目录（点击路径可复制）</p>
       </div>
       <div class="card">
-        <table class="tbl">
-          <thead>
-            <tr><th>名称</th><th>类型</th><th>修改时间</th><th>路径</th></tr>
-          </thead>
-          <tbody id="resultsBody">
-            <tr><td colspan="4" class="empty">正在扫描星域…</td></tr>
-          </tbody>
-        </table>
+        <div class="results-scroll">
+          <table class="tbl results-tbl">
+            <colgroup>
+              <col class="col-name">
+              <col class="col-type">
+              <col class="col-desc">
+              <col class="col-mtime">
+              <col class="col-path">
+            </colgroup>
+            <thead>
+              <tr><th>名称</th><th>类型</th><th>说明</th><th>修改时间</th><th>路径</th></tr>
+            </thead>
+            <tbody id="resultsBody">
+              <tr><td colspan="5" class="empty">正在扫描星域…</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </section>
 

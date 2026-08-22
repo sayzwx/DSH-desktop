@@ -140,19 +140,71 @@ async function loadResults() {
   const res = await api.listResults();
   resultsHome.textContent = res.home;
   if (res.dirs.length === 0) {
-    resultsBody.innerHTML = '<tr><td colspan="4" class="empty">星域尚未产生数据，启动 Harness 后观测记录将出现在这里</td></tr>';
+    resultsBody.innerHTML = '<tr><td colspan="5" class="empty">星域尚未产生数据，启动 Harness 后观测记录将出现在这里</td></tr>';
     return;
   }
   resultsBody.innerHTML = res.dirs
     .map(
-      (d) => `<tr>
-        <td>${d.name}</td>
+      (d) => `<tr title="${escAttr(d.path)}">
+        <td class="cell-name"><span class="name-text">${escHtml(d.name)}</span>${copyBtn(d.path)}</td>
         <td><span class="badge ${d.isDir ? 'dir' : 'file'}">${d.isDir ? '目录' : '文件'}</span></td>
+        <td class="cell-desc">${describeEntry(d)}</td>
         <td>${fmtDate(d.mtime)}</td>
-        <td>${d.path}</td>
+        <td class="cell-path" title="${escAttr(d.path)}">${escHtml(d.path)}</td>
       </tr>`
     )
     .join('');
+  // 行点击复制路径（除按钮外）——给星图档案一个额外便利：双击行也能复制
+  resultsBody.querySelectorAll('tr').forEach((tr) => {
+    tr.addEventListener('click', (e) => {
+      if (e.target.closest('.copy-btn')) return;
+      const path = tr.getAttribute('title');
+      if (path) navigator.clipboard?.writeText(path).catch(() => {});
+    });
+  });
+  // 复制按钮：单独处理 + 给视觉反馈
+  resultsBody.querySelectorAll('.copy-btn').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const text = btn.getAttribute('data-copy');
+      if (!text) return;
+      try { await navigator.clipboard.writeText(text); btn.classList.add('copied'); btn.textContent = '✓'; }
+      catch { btn.textContent = '✗'; }
+      setTimeout(() => { btn.classList.remove('copied'); btn.textContent = '📋'; }, 1200);
+    });
+  });
+}
+
+// 文件/目录用途推断——给星图档案加可读性
+function describeEntry(d) {
+  if (d.isDir) {
+    const map = {
+      'storages': '持久化键值存储（会话索引 / 工作区元数据）',
+      'sessions': '会话数据：按会话 ID 分目录存放',
+      'plugins': '已装插件扩展目录',
+      'logs': '运行日志（按日轮转）',
+    };
+    return map[d.name] || '数据子目录';
+  }
+  const n = d.name.toLowerCase();
+  if (n === 'settings.yaml') return 'Harness 配置（提供商/凭据引用/默认 agent 等）';
+  if (n === '.credentials.yaml') return '凭据存储（API Key 明文，本机安全）';
+  if (n === '.github-ssh.json') return 'GitHub SSH 密钥配置（自管）';
+  if (n === 'session_projcache.json') return '会话项目缓存（最近打开的工作区）';
+  if (n === 'workspace.json') return '当前激活工作区记录';
+  if (n === 'zen-ua-proxy.mjs') return 'OpenCode Zen UA 改写代理（解决免费模型 429）';
+  if (n === 'zen-ua-proxy.log') return 'zen-ua 代理运行日志';
+  if (n.endsWith('.log')) return '运行日志';
+  if (n.endsWith('.json')) return 'JSON 数据';
+  if (n.endsWith('.yaml') || n.endsWith('.yml')) return 'YAML 配置';
+  return '文件';
+}
+function escHtml(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+function escAttr(s) { return escHtml(s); }
+function copyBtn(text) {
+  return `<button class="copy-btn" title="复制路径" data-copy="${escAttr(text)}">📋</button>`;
 }
 
 const THEME_KEY = 'dsh-theme';
