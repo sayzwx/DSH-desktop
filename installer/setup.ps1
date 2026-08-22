@@ -252,11 +252,52 @@ function Install-Harness([string]$NodeExe) {
     'https://mirrors.cloud.tencent.com/npm/',  # 镜像2
     'https://registry.npmmirror.com'     # 重复兜底
   )
+  # 1.5) 原生模块修复：esbuild / koffi 跳过源码构建（用户机器常缺 CMake / 平台包已分发）
+  #      pnpm-workspace.yaml 的 allowBuilds 里 esbuild/koffi: true 允许跑它们的 install/postinstall
+  #      脚本，但：
+  #       - koffi：cnoke.cjs --prebuild 在 pnpm 隔离布局下 checkPrebuild 失败 → 回退源码编译
+  #         → 机器没有 CMake → pnpm install 整个崩。
+  #       - esbuild：install.js 在 pnpm 隔离布局下找不到 @esbuild/win32-x64 平台包
+  #         → 走 npm fallback 下载 → 网络慢时卡死数十分钟。
+  #      prebuilt 二进制其实已随 optionalDependencies（@koromix/koffi-win32-x64、
+  #      @esbuild/win32-x64）分发，运行时 require 直接可用（已验证）。把二者改为 false
+  #      （拒绝构建脚本）即可直接用 prebuilt，跳过 CMake 与 npm fallback。
+  #      其余（node-pty / lefthook 等）保留 true 不动。
+  $wsFile = Join-Path $harnessDir 'pnpm-workspace.yaml'
+  if (Test-Path $wsFile) {
+    $ws = Get-Content -Raw -Path $wsFile -Encoding UTF8
+    foreach ($pkg in @('esbuild', 'koffi')) {
+      $pat = '(?m)^(\s*)' + [regex]::Escape($pkg) + ':\s*true\s*$'
+      if ($ws -match $pat) {
+        $ws = $ws -replace $pat, ('$1' + $pkg + ': false  # DSH Desktop: prebuilt 已分发，跳过源码编译（无需 CMake）')
+        Write-Host "  patched pnpm-workspace.yaml: $pkg allowBuild -> false (use prebuilt)"
+      } elseif ($ws -match ('(?m)^(\s*)' + [regex]::Escape($pkg) + ':\s*false')) {
+        Write-Host "  pnpm-workspace.yaml: $pkg already allowBuild=false (prebuilt)"
+      }
+    }
+    [System.IO.File]::WriteAllText($wsFile, $ws, (New-Object System.Text.UTF8Encoding($false)))
+  }
+
   Push-Location $harnessDir
   try {
     if (-not (Test-Path $corepack)) { throw '未找到 corepack（Node 目录缺 corepack.cmd）' }
     $oldPath = $env:PATH
     $env:PATH = "$nodeDir;$oldPath"
+    # 0) 关键：清除 NODE_OPTIONS 注入（WorkBuddy 等 IDE 会通过 NODE_OPTIONS 挂
+    #    safe-delete shim 劫持 node 子进程的文件删除 → pnpm 清理临时目录时
+    #    SAFE_DELETE_BULK_CONFIRM_REQUIRED 直接崩溃，且不可恢复）。pnpm 构建全程
+    #    必须不带任何第三方 shim。
+    if ($env:NODE_OPTIONS) {
+      Write-Host "  clearing NODE_OPTIONS (was: $env:NODE_OPTIONS) to avoid shim hijack"
+      $env:NODE_OPTIONS = ''
+    }
+    # 0.5) zip 解压的源码没有 .git，引擎 build.ts 用 `git rev-parse HEAD` 取提交号会崩。
+    #      引擎官方支持 DSH_CLIENT_COMMIT_HASH 环境变量绕过（须 7-40 位 hex）。
+    #      这里用发行 tag 的真实 commit hash（github.com/deepseek-ai/DeepSeek-Harness
+    #      refs/tags/dsh-v0.1.0-rc.8 = 141eb6fef83422698aef7a981029e843e8161534）。
+    if (-not $env:DSH_CLIENT_COMMIT_HASH) {
+      $env:DSH_CLIENT_COMMIT_HASH = '141eb6fef83422698aef7a981029e843e8161534'
+    }
     try {
       if ($build) {
         $installOk = $false

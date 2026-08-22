@@ -212,16 +212,21 @@ function checkHarnessIntegrity(dir, kind) {
   const missing = [];
   // 关键包白名单：必须覆盖引擎运行时实际 require 的核心 cordis 插件 + 应用层服务。
   // 历史教训：0.5.3 只列 dsh-app-boot / cordis-plugin-loader，结果 npx 缓存里的 dist 形态
-  // 只装了这两个，cordis-plugin-timer / dsh-llm / dsh-session / dsh-typert-* 等运行时插件
-  // 完全没装，完整性检查放行 → 启动崩 ERR_MODULE_NOT_FOUND。这里把已知必装的全部列入。
+  // 只装了这两个，cordis-plugin-timer / dsh-llm / dsh-session 等运行时插件完全没装，
+  // 完整性检查放行 → 启动崩 ERR_MODULE_NOT_FOUND。这里把已知必装的全部列入。
+  // 注意（v0.6.2 实测修正）：dsh-typert-loader / dsh-typert-registry 是 rc.7 及更早的包名，
+  // rc.8 里无人依赖、无链接（typert 整合进 packages/typert 子目录，仅构建期用），列入只会
+  // 误报「依赖不完整」把完整源码引擎拒掉。rc.8 启动链路的真实必需包以 apps/cli 实际链接为准：
+  // dsh-app-boot / cordis-plugin-loader / cordis-plugin-timer / dsh-llm / dsh-session /
+  // dsh-base / dsh-web-app（后两者是 web profile 的 bundle 层，缺失时 web 起不来）。
   const keyPkgs = [
     'dsh-app-boot',
     'cordis-plugin-loader',
     'cordis-plugin-timer',
     'dsh-llm',
     'dsh-session',
-    'dsh-typert-registry',
-    'dsh-typert-loader',
+    'dsh-base',
+    'dsh-web-app',
   ];
   if (kind === 'source' && !fs.existsSync(path.join(dir, 'apps', 'web', 'dist', 'index.html'))) {
     missing.push('web 前端 dist 缺失');
@@ -240,56 +245,65 @@ function checkHarnessIntegrity(dir, kind) {
         path.join(dir, 'apps', 'web', 'node_modules', '@deepseek-ai'),
       ];
   let hitScope = false;
+  // 任一 scope 独立判定：该 scope 下 keyPkgs 全部存在且非空即为该引擎的依赖位置。
+  // 修正（v0.6.2）：pnpm workspace（源码形态）的 keyPkgs 分散在根/apps/cli/apps/web 各自的
+  // node_modules，旧逻辑「只看第一个命中的 scope」会把完整源码引擎误判为残缺（根 node_modules
+  // 的 @deepseek-ai 只含少量直接依赖）。改为「任一 scope 全齐即通过」。
+  let scopeOk = false;
   for (const scope of scopes) {
     if (!fs.existsSync(scope)) continue;
     hitScope = true;
+    let scopeMissing = 0;
     for (const pkg of keyPkgs) {
       const p = path.join(scope, pkg);
-      if (!fs.existsSync(p)) { missing.push(`${pkg} 未安装`); continue; }
+      if (!fs.existsSync(p)) { scopeMissing++; continue; }
       let n = 0;
       try { n = fs.readdirSync(p).length; } catch { n = 0; }
-      if (n === 0) missing.push(`${pkg} 为空目录（依赖未装全）`);
+      if (n === 0) scopeMissing++;
     }
-    break; // 命中任一 scope 即视为该引擎的依赖位置
+    if (scopeMissing === 0) { scopeOk = true; break; }
   }
   if (!hitScope) missing.push('未找到 @deepseek-ai 依赖目录');
+  else if (!scopeOk) missing.push('@deepseek-ai 核心包不全（任一依赖 scope 均缺 keyPkgs）');
   // 兜底启发式：发行包形态（dist）必须至少有 N 个非空 @deepseek-ai 子包；过少视为残缺
   // （如 npx 缓存里只装了 2~3 个核心包就放行，导致运行时缺链上插件）。
-  if (hitScope && kind === 'dist') {
+  if (scopeOk && kind === 'dist') {
     try {
-      const subs = fs.readdirSync(scopes[0]).filter((s) => {
-        try { return fs.statSync(path.join(scopes[0], s)).isDirectory() && fs.readdirSync(path.join(scopes[0], s)).length > 0; }
+      const base = scopes[0];
+      const subs = fs.readdirSync(base).filter((s) => {
+        try { return fs.statSync(path.join(base, s)).isDirectory() && fs.readdirSync(path.join(base, s)).length > 0; }
         catch { return false; }
       });
       // 必须至少有 6 个非空子包（dsh-app-boot / cordis-plugin-loader / cordis-plugin-timer /
-      // dsh-llm / dsh-session / dsh-typert-registry / dsh-typert-loader ...），少于则视为残缺
+      // dsh-llm / dsh-session / dsh-base / dsh-web-app ...），少于则视为残缺
       if (subs.length < 6) missing.push(`@deepseek-ai 仅 ${subs.length} 个非空子包，依赖明显不完整`);
     } catch { /* 忽略 */ }
   }
-  // ========== 关键修正（v0.5.6）：cordis 加载器从 profile 解析依赖 ==========
-  // 历史：dsh web 的 cordis-plugin-loader 从 ~/.dsh/profiles/web/ 解析 @deepseek-ai/*，
-  // 与「引擎自身 node_modules」无关。npx 缓存里的 dist 引擎自己 node_modules 再全
-  // （195 个子包），profile 里 0 依赖 → 启动必崩 ERR_MODULE_NOT_FOUND。
-  // 所以 dist 形态必须额外校验 profile 依赖位：~/.dsh/profiles/web/node_modules/@deepseek-ai/。
-  // （source 形态由 setup.ps1 源码构建 + profile 由 dsh 首次启动自动 pnpm install，天然就位）
+  // ========== 关键修正（v0.6.2）：dist 引擎的 profile 判据 ==========
+  // 历史：曾要求 ~/.dsh/profiles/web/node_modules/@deepseek-ai/ 含核心包，但实测（v0.6.2）证明
+  // 这是误判——rc.8 引擎通过 healProfilesModuleFallback 把 profile 缺失的 peer 依赖
+  // fallback 到引擎自身 node_modules（profiles/node_modules 链接），profile 里只需装插件
+  // （如 dshmarket），@deepseek-ai/* 完全不需要出现在 profile 中。Web 启动 + dshmarket 加载
+  // 均验证通过。真正要防的是「profile 未初始化」（cordis 没有组合目标），改为检查：
+  //   1) profile 目录存在且 package.json 含 dsh.profile.bundles（已初始化）
+  //   2) bundles 里声明的 @deepseek-ai/* 层在引擎依赖 scope 中可解析（keyPkgs 已覆盖 dsh-base/dsh-web-app）
   if (kind === 'dist') {
-    const profileRoots = [
-      path.join(process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), 'profiles', 'web', 'node_modules', '@deepseek-ai'),
-      path.join(os.homedir(), '.dsh', 'profiles', 'web', 'node_modules', '@deepseek-ai'),
+    const profDirs = [
+      path.join(process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), 'profiles', 'web'),
+      path.join(os.homedir(), '.dsh', 'profiles', 'web'),
     ];
-    let profileHit = false;
-    for (const pr of profileRoots) {
-      if (!fs.existsSync(pr)) continue;
-      profileHit = true;
-      const profMissing = [];
-      for (const pkg of keyPkgs) {
-        const p = path.join(pr, pkg);
-        if (!fs.existsSync(p) || fs.readdirSync(p).length === 0) profMissing.push(pkg);
-      }
-      if (profMissing.length) missing.push(`profile 依赖缺失（${profMissing.join('、')}）——启动必崩，请用 Setup 引擎或运行 setup.ps1 -EngineOnly`);
-      break;
+    let profileInit = false;
+    for (const pd of profDirs) {
+      const pj = path.join(pd, 'package.json');
+      if (!fs.existsSync(pj)) continue;
+      try {
+        const m = JSON.parse(fs.readFileSync(pj, 'utf8'));
+        const bundles = m?.dsh?.profile?.bundles;
+        if (Array.isArray(bundles) && bundles.length > 0) profileInit = true;
+        break;
+      } catch { /* 损坏的 manifest 视为未初始化 */ }
     }
-    if (!profileHit) missing.push('profile 依赖目录缺失（~/.dsh/profiles/web 未初始化）——dist 引擎不可用');
+    if (!profileInit) missing.push('profile 未初始化（~/.dsh/profiles/web 缺 bundle 层）——dist 引擎不可用，请用 Setup 引擎或运行 setup.ps1 -EngineOnly');
   }
   return { ok: missing.length === 0, missing };
 }
