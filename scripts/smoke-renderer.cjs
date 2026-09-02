@@ -503,6 +503,106 @@ async function main() {
       }
     }
 
+    // --- 轨道 C：上下文面板 ---
+    // 面板状态由 chat.js 从事件与帧里累积，这里直接用合成状态驱动渲染。
+    const panels = await evalJs(`(() => {
+      const dock = document.getElementById('chatContextDock');
+      const out = {};
+      const render = (state) => { window.__panels.render(state); return dock; };
+      const qa = (sel) => [...dock.querySelectorAll(sel)];
+
+      // 全空：dock 必须自己隐藏，不给用户一个空框
+      render({});
+      out.emptyHidden = dock.hidden === true && dock.children.length === 0;
+
+      // Todo：三态 + 进度
+      render({ todos: [
+        { content: '甲', status: 'completed' },
+        { content: '乙', status: 'in_progress' },
+        { content: '丙', status: 'pending' },
+      ] });
+      out.todoRows = qa('.cd-todo').length;
+      out.todoProgress = (dock.querySelector('.cd-todo-progress') || {}).textContent || null;
+      out.todoStates = ['completed', 'in_progress', 'pending']
+        .every((s) => !!dock.querySelector('.cd-todo.st-' + s));
+
+      // Goal：目标 / 阶段 / 轮次 + 四个变更按钮
+      render({ goal: { id: 'g1', revision: 3, objective: '把测试跑通', phase: 'active', maxGoalRounds: 10, roundsStarted: 2 } });
+      out.goalObjective = (dock.querySelector('.cd-goal-objective') || {}).textContent || null;
+      out.goalMeta = (dock.querySelector('.cd-goal-meta') || {}).textContent || null;
+      out.goalButtons = qa('.cd-actions .mini-btn').length;
+
+      // 队列：placement 标签；steering 项的"提前"按钮必须禁用（它已经是插话了）
+      render({ queue: [
+        { id: 'm1', placement: 'queued', message: { content: [{ type: 'text', text: '排队的消息' }] } },
+        { id: 'm2', placement: 'steering', message: { content: [{ type: 'text', text: '插话的消息' }] } },
+        { id: 'm3', placement: 'context', message: { content: [{ type: 'text', text: '未认领，不可见' }] } },
+      ] });
+      out.queueRows = qa('.cd-queue-item').length; // context 项不进面板
+      out.queueSteering = qa('.cd-queue-item.pl-steering').length;
+      const steerBtns = qa('.cd-queue-item').map((r) => r.querySelectorAll('.mini-btn')[0]);
+      out.queueSteerDisabledOnSteering = steerBtns.length === 2 && steerBtns[0].disabled === false && steerBtns[1].disabled === true;
+      out.queueText = (dock.querySelector('.cd-queue-text') || {}).textContent || null;
+
+      // 后台任务：运行中在前，已结束降调
+      render({ jobs: [
+        { id: 'j1', kind: 'bash', label: 'sleep 5', status: 'completed', startedAt: Date.now() - 9000, finishedAt: Date.now() - 4000 },
+        { id: 'j2', kind: 'subagent', label: '跑测试', status: 'running', startedAt: Date.now() - 2000 },
+      ] });
+      const jobRows = qa('.cd-job');
+      out.jobRows = jobRows.length;
+      out.jobLiveFirst = jobRows.length === 2 && jobRows[0].classList.contains('live') && jobRows[1].classList.contains('settled');
+      out.jobTitleActive = /2 个运行中|1 个运行中/.test((dock.querySelector('.cd-head') || {}).textContent || '');
+
+      // 产出文件：chip + 超出 6 个折叠成 +N
+      render({ turnFiles: ['a.txt', 'b.txt', 'c.txt', 'd.txt', 'e.txt', 'f.txt', 'g.txt', 'h.txt'] });
+      out.fileChips = qa('.cd-file').length;
+      out.fileMore = (dock.querySelector('.cd-file-more') || {}).textContent || null;
+
+      render({}); // 复原，别把合成状态留在界面上
+      return out;
+    })()`);
+    if (panels?.__error) failures.push(`面板探针抛错: ${panels.__error}`);
+    else {
+      check('全空时 dock 自身隐藏', panels.emptyHidden, true);
+      check('Todo 行数', panels.todoRows, 3);
+      check('Todo 进度文案', panels.todoProgress, '已完成 1 / 3');
+      check('Todo 三态样式齐备', panels.todoStates, true);
+      check('Goal 目标文本', panels.goalObjective, '把测试跑通');
+      check('Goal 阶段与轮次', panels.goalMeta, '阶段 进行中 · 第 2 / 10 轮');
+      check('Goal 四个变更按钮', panels.goalButtons, 4);
+      check('队列不显示 context 项', panels.queueRows, 2);
+      check('队列 steering 项带标记', panels.queueSteering, 1);
+      check('steering 项的"提前"按钮禁用', panels.queueSteerDisabledOnSteering, true);
+      check('队列消息摘要', panels.queueText, '排队的消息');
+      check('后台任务行数', panels.jobRows, 2);
+      check('运行中任务排在已结束之前', panels.jobLiveFirst, true);
+      check('任务标题带运行中计数', panels.jobTitleActive, true);
+      check('产出文件最多 6 个 chip', panels.fileChips, 6);
+      check('超出部分折叠为 +N', panels.fileMore, '+2 个文件');
+    }
+
+    // --- 轨道 D：原始事件抽屉 ---
+    const drawer = await evalJs(`(() => {
+      const btn = document.getElementById('ctRawToggle');
+      const el = document.getElementById('rawEventDrawer');
+      const before = { btnExists: !!btn, btnVisible: btn ? !btn.hidden : false, hiddenByDefault: el ? el.hidden : null };
+      if (btn) btn.click();
+      const afterOpen = el ? !el.hidden : null;
+      if (btn) btn.click();
+      const afterClose = el ? el.hidden : null;
+      return { ...before, afterOpen, afterClose, btnLabel: btn ? btn.textContent : null };
+    })()`);
+    if (drawer?.__error) failures.push(`抽屉探针抛错: ${drawer.__error}`);
+    else {
+      check('抽屉开关存在', drawer.btnExists, true);
+      check('抽屉开关可见', drawer.btnVisible, true);
+      check('抽屉开关文案取自 i18n', drawer.btnLabel, '原始事件');
+      check('抽屉默认关闭', drawer.hiddenByDefault, true);
+      check('点击展开抽屉', drawer.afterOpen, true);
+      check('再次点击收起抽屉', drawer.afterClose, true);
+    }
+
     // 右键菜单组件：不依赖引擎，任何时候都能测
     const menuProbe = await evalJs(`(() => {
       let clicked = null;
@@ -607,7 +707,7 @@ async function main() {
     for (const f of failures) console.error(`  - ${f}`);
     process.exit(1);
   }
-  console.log('PASS: 渲染层冒烟（模块 / markdown / 工具卡片 / i18n / vendored / 轨道A 搜索与右键菜单 / RPC 桥 / 启动无错误）');
+  console.log('PASS: 渲染层冒烟（模块 / markdown / 工具卡片 / i18n / vendored / 轨道A 搜索与右键菜单 / 轨道C 面板 / 轨道D 抽屉 / RPC 桥 / 启动无错误）');
 }
 
 main();

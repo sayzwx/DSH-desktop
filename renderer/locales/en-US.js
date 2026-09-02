@@ -99,4 +99,89 @@ window.__dshLocales['en-US'] = {
   'tool.card.webSources': '{n} sources',
   'tool.card.webSourcesTruncated': '{n} sources (capped)',
   'tool.card.fetchTruncated': 'content truncated',
+
+  // ---- Common ----
+  'common.save': 'Save',
+  'common.cancel': 'Cancel',
+
+  // ---- Context dock: todo ----
+  'panel.todo.title': 'Task list',
+  'panel.todo.progress': '{done} of {total} done',
+
+  // ---- Context dock: goal ----
+  'panel.goal.title': 'Current goal',
+  'panel.goal.meta': '{phase} · round {round} of {max}',
+  'panel.goal.blocked': 'Blocked: {reason}',
+  'panel.goal.edit': 'Edit',
+  'panel.goal.pause': 'Pause',
+  'panel.goal.resume': 'Resume',
+  'panel.goal.complete': 'Mark complete',
+  'panel.goal.clear': 'Clear',
+  'goal.phase.active': 'active',
+  'goal.phase.paused': 'paused',
+  'goal.phase.blocked': 'blocked',
+  'goal.phase.complete': 'complete',
+  'goal.actionFailed': 'Failed to {op} the goal: {error}',
+  'goal.edit.title': 'Edit goal',
+  'goal.edit.label': 'Objective (Ctrl+Enter to save, Esc to cancel)',
+  'goal.edit.empty': 'Objective cannot be empty',
+
+  // ---- Context dock: queue ----
+  'panel.queue.title': 'Pending messages ({n})',
+  'queue.placement.queued': 'queued',
+  'queue.placement.steering': 'steering',
+  'queue.action.steer': 'Steer',
+  'queue.action.steerHint': 'Turn this queued message into a steering one, redirecting the current turn',
+  'queue.action.remove': 'Remove',
+  'queue.actionFailed': 'Queue action failed: {error}',
+  'queue.item.nonText': '({n} non-text content blocks)',
+
+  // ---- Context dock: background jobs ----
+  'panel.jobs.title': 'Background jobs',
+  'panel.jobs.titleActive': 'Background jobs ({n} running)',
+  'job.status.running': 'running',
+  'job.status.stopping': 'stopping',
+  'job.status.completed': 'completed',
+  'job.status.killed': 'killed',
+  'job.status.failed': 'failed',
+
+  // ---- Context dock: produced files ----
+  'panel.files.title': 'Files produced this turn ({n})',
+  'panel.files.more': '+{n} files',
+  'panel.files.showInFolder': 'Show in folder',
+
+  // ---- Plan mode ----
+  'plan.chip': 'Plan ✕',
+  'plan.chipHint': 'Plan mode is on — click to turn it off',
+  'plan.placeholder': 'Describe your task to generate a plan…',
+  'plan.exitFailed': 'Failed to exit plan mode: {error}',
+
+  // ---- Status event visibility ----
+  // The retry notice has to make clear the UI is not stuck, it is waiting on the provider;
+  // before this the interface just went silent.
+  'event.retry': '{provider} request failed, {attempt}, retrying in {seconds}s…',
+  'event.retry.attempt': 'retry {n} of {max}',
+  'event.retry.attemptNoMax': 'retry {n}',
+  'event.compaction.start': 'Context compaction started…',
+  'event.compaction.summary': 'Context compaction summary generated',
+  'event.compaction.end': 'Context compaction finished',
+  'event.compaction.prune': 'Pruned older tool results to free up context',
+  'event.hook.invoked': 'Hook invoked: {name}',
+  'event.hook.result': 'Hook returned: {name}',
+  // Permission / sandbox / approval changes must be echoed: silently changing permissions is a safety issue
+  'event.permission.changed': 'Permission preset changed to “{value}”',
+  'event.sandbox.changed': 'Sandbox mode changed to “{value}”',
+  'event.approval.changed': 'Approval policy changed to “{value}”',
+  'event.agentPreset.changed': 'Agent preset switched to “{value}”',
+  'event.subagent.descriptor': 'Subagent: {name}',
+  'event.workflow.runStart': 'Workflow started: {name}',
+  'event.workflow.runEnd': 'Workflow finished: {name}',
+  'event.workflow.agent': 'Workflow member {phase} {name}',
+  'event.codeDispatch': 'Code Mode dispatch',
+  'event.streamError': 'Event stream error: {error}',
+
+  // ---- Raw event debug drawer ----
+  'raw.toggle': 'Raw events',
+  'raw.drawerTitle': 'Raw events (event types without dedicated rendering, for debugging)',
+  'raw.empty': 'No unclassified events in this session yet',
 };

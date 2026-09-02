@@ -169,6 +169,7 @@
         <div class="chat-main">
           <div class="chat-messages" id="chatMessages"></div>
           <div class="chat-drafts" id="chatDrafts" hidden></div>
+          <div class="chat-dock" id="chatContextDock" hidden></div>
           <div class="chat-toolbar" id="chatToolbar">
             <div class="ct-model" id="ctModel">
               <button class="ct-model-btn" id="ctModelBtn" type="button" title="选择模型">
@@ -190,6 +191,9 @@
               <label class="ct-inline-label" for="ctPermSeg" title="当前会话的权限预设（沙箱模式 + 审批策略），与 Web UI 一致">权限</label>
               <select class="ct-inline-select" id="ctPermSeg"></select>
             </div>
+            <div class="ct-plan" id="ctPlanRow" hidden>
+              <button class="ct-plan-btn" id="ctPlanBtn" type="button"></button>
+            </div>
             <div class="ct-mode" id="ctModeRow" title="发送模式：插话 = 直接插入/转向当前回合；排队 = agent 忙时排队跟进（与 Web UI 的 busy Enter 偏好一致）">
               <label class="ct-inline-label" for="ctModeSeg">发送</label>
               <select class="ct-inline-select" id="ctModeSeg">
@@ -202,6 +206,7 @@
               <span id="ctStatusText">空闲</span>
             </div>
             <button class="ct-other" id="ctOtherRunning" hidden></button>
+            <button class="mini-btn ct-raw-toggle" id="ctRawToggle" type="button" hidden></button>
           </div>
           <div class="chat-input-row">
             <button class="mini-btn" id="chatAttach" type="button" title="上传文件（Word / PPT / PDF / 图片 / 视频等）">📎</button>
@@ -213,6 +218,10 @@
             <div class="cu-context" id="cuContext" title="本会话已用上下文 tokens / 模型最大上下文">上下文 —</div>
             <div class="cu-track"><div class="cu-fill" id="cuFill"></div></div>
             <div class="cu-cost" id="cuCost" title="按当前模型单价估算的本会话花费（仅参考）">花费 —</div>
+          </div>
+          <div class="raw-drawer" id="rawEventDrawer" hidden>
+            <div class="raw-drawer-head" id="rawEventDrawerTitle"></div>
+            <div class="raw-drawer-body" id="rawEventDrawerBody"></div>
           </div>
         </div>
       </div>
@@ -555,6 +564,7 @@
   <script src="markdown.js"></script>
   <script src="toolcards.js"></script>
   <script src="contextmenu.js"></script>
+  <script src="panels.js"></script>
   <script src="starfield.js"></script>
   <script src="settings.js"></script>
   <script src="dashboard.js"></script>

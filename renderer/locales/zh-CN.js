@@ -94,4 +94,88 @@ window.__dshLocales['zh-CN'] = {
   'tool.card.webSources': '{n} 个来源',
   'tool.card.webSourcesTruncated': '{n} 个来源（已按上限截断）',
   'tool.card.fetchTruncated': '内容已截断',
+
+  // ---- 通用 ----
+  'common.save': '保存',
+  'common.cancel': '取消',
+
+  // ---- 上下文面板：Todo ----
+  'panel.todo.title': '任务清单',
+  'panel.todo.progress': '已完成 {done} / {total}',
+
+  // ---- 上下文面板：Goal ----
+  'panel.goal.title': '当前目标',
+  'panel.goal.meta': '阶段 {phase} · 第 {round} / {max} 轮',
+  'panel.goal.blocked': '受阻：{reason}',
+  'panel.goal.edit': '编辑',
+  'panel.goal.pause': '暂停',
+  'panel.goal.resume': '继续',
+  'panel.goal.complete': '标记完成',
+  'panel.goal.clear': '清除',
+  'goal.phase.active': '进行中',
+  'goal.phase.paused': '已暂停',
+  'goal.phase.blocked': '受阻',
+  'goal.phase.complete': '已完成',
+  'goal.actionFailed': '{op}目标失败：{error}',
+  'goal.edit.title': '编辑目标',
+  'goal.edit.label': '目标描述（Ctrl+Enter 保存，Esc 取消）',
+  'goal.edit.empty': '目标描述不能为空',
+
+  // ---- 上下文面板：队列 ----
+  'panel.queue.title': '待处理消息（{n}）',
+  'queue.placement.queued': '排队',
+  'queue.placement.steering': '插话',
+  'queue.action.steer': '提前',
+  'queue.action.steerHint': '把这条排队的消息改为插话，直接转向当前回合',
+  'queue.action.remove': '撤销',
+  'queue.actionFailed': '队列操作失败：{error}',
+  'queue.item.nonText': '（{n} 个非文本内容块）',
+
+  // ---- 上下文面板：后台任务 ----
+  'panel.jobs.title': '后台任务',
+  'panel.jobs.titleActive': '后台任务（{n} 个运行中）',
+  'job.status.running': '运行中',
+  'job.status.stopping': '停止中',
+  'job.status.completed': '已完成',
+  'job.status.killed': '已终止',
+  'job.status.failed': '失败',
+
+  // ---- 上下文面板：产出文件 ----
+  'panel.files.title': '本回合产出的文件（{n}）',
+  'panel.files.more': '+{n} 个文件',
+  'panel.files.showInFolder': '在文件夹中显示',
+
+  // ---- Plan 模式 ----
+  'plan.chip': '计划中 ✕',
+  'plan.chipHint': '计划模式已开启，点击退出',
+  'plan.placeholder': '描述你的任务以生成计划…',
+  'plan.exitFailed': '退出计划模式失败：{error}',
+
+  // ---- 状态事件可见性 ----
+  // 重试提示要让用户明白界面没坏、是在等上游，此前这里只是静默卡住
+  'event.retry': '{provider} 请求失败，{attempt}，{seconds}s 后重试…',
+  'event.retry.attempt': '第 {n}/{max} 次重试',
+  'event.retry.attemptNoMax': '第 {n} 次重试',
+  'event.compaction.start': '上下文压缩开始…',
+  'event.compaction.summary': '上下文已生成压缩摘要',
+  'event.compaction.end': '上下文压缩完成',
+  'event.compaction.prune': '已裁剪较早的工具结果以腾出上下文',
+  'event.hook.invoked': '触发 hook：{name}',
+  'event.hook.result': 'hook 返回：{name}',
+  // 权限/沙箱/审批策略变更必须回显：静默改权限是安全问题
+  'event.permission.changed': '权限预设已变更为「{value}」',
+  'event.sandbox.changed': '沙箱模式已变更为「{value}」',
+  'event.approval.changed': '审批策略已变更为「{value}」',
+  'event.agentPreset.changed': 'Agent 模式已切换为「{value}」',
+  'event.subagent.descriptor': '子 agent：{name}',
+  'event.workflow.runStart': '工作流开始：{name}',
+  'event.workflow.runEnd': '工作流结束：{name}',
+  'event.workflow.agent': '工作流成员 {phase} {name}',
+  'event.codeDispatch': 'Code Mode 派发',
+  'event.streamError': '事件流错误：{error}',
+
+  // ---- 原始事件调试抽屉 ----
+  'raw.toggle': '原始事件',
+  'raw.drawerTitle': '原始事件（未单独渲染的事件类型，排查用）',
+  'raw.empty': '本会话暂无未分类事件',
 };

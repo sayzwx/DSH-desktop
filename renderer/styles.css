@@ -781,6 +781,223 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
 .notice-warn { border-color: rgba(255, 215, 0, 0.35); background: rgba(255, 215, 0, 0.06); }
 .notice-info { border-color: var(--border); background: rgba(0, 212, 170, 0.05); }
 
+/* ---------------- 上下文 dock（Todo / Goal / 队列 / 后台任务 / 产出文件）---------------- */
+.chat-dock {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 34vh;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(11, 13, 46, 0.55);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+.cd-section {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: rgba(4, 7, 15, 0.35);
+  overflow: hidden;
+}
+.cd-head {
+  padding: 4px 9px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(13, 24, 48, 0.5);
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  color: var(--text-dim);
+}
+
+/* Todo：三态用图标 + 文字弱化区分，不靠颜色单一通道 */
+.cd-todos { padding: 5px 9px; }
+.cd-todo-progress {
+  margin-bottom: 4px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.cd-todo {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 1px 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.cd-todo-ic { flex: none; width: 12px; text-align: center; }
+.cd-todo.st-pending { color: var(--text-dim); }
+.cd-todo.st-in_progress { color: var(--gold); }
+.cd-todo.st-in_progress .cd-todo-ic { color: var(--gold); }
+.cd-todo.st-completed { color: var(--text-dim); text-decoration: line-through; opacity: 0.75; }
+.cd-todo.st-completed .cd-todo-ic { color: var(--ok); text-decoration: none; }
+
+/* Goal */
+.cd-goal { padding: 6px 9px; }
+.cd-goal-objective {
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text);
+}
+.cd-goal-meta {
+  margin-top: 3px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.cd-goal-blocked {
+  margin-top: 3px;
+  font-size: 10.5px;
+  color: var(--warn);
+}
+.cd-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+/* 队列 */
+.cd-queue { padding: 5px 9px; display: flex; flex-direction: column; gap: 4px; }
+.cd-queue-item { display: flex; align-items: center; gap: 6px; }
+.cd-queue-tag {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 9.5px;
+  color: var(--text-dim);
+}
+.cd-queue-item.pl-steering .cd-queue-tag { color: var(--gold); border-color: rgba(255, 215, 0, 0.4); }
+.cd-queue-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text);
+}
+
+/* 后台任务 */
+.cd-jobs { padding: 5px 9px; display: flex; flex-direction: column; gap: 3px; }
+.cd-job { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.cd-job.settled { opacity: 0.6; }
+.cd-job-ic { flex: none; width: 12px; text-align: center; color: var(--accent); }
+.cd-job.settled .cd-job-ic { color: var(--text-dim); }
+.cd-job-kind {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 5px;
+  background: rgba(123, 97, 255, 0.14);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--accent-2);
+}
+.cd-job-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.cd-job-status { flex: none; font-size: 10px; color: var(--text-dim); }
+.cd-job-dur { flex: none; font-size: 10px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+/* 产出文件 */
+.cd-files { padding: 6px 9px; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.cd-file {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.cd-file:hover { color: var(--accent); border-color: var(--accent); }
+.cd-file-more { font-size: 10px; color: var(--text-dim); }
+.cd-files-folder { margin-left: auto; }
+
+/* Plan 芯片：警示色，表示这是一个需要用户注意的模式态 */
+.ct-plan-btn {
+  padding: 2px 9px;
+  border: 1px solid rgba(255, 215, 0, 0.45);
+  border-radius: 999px;
+  background: rgba(255, 215, 0, 0.10);
+  font-size: 10.5px;
+  color: var(--gold);
+  cursor: pointer;
+}
+.ct-plan-btn:hover:not(:disabled) { background: rgba(255, 215, 0, 0.2); }
+.ct-plan-btn:disabled { opacity: 0.55; cursor: default; }
+
+/* 斜杠命令回显：靠右的用户样式气泡 */
+.msg-command {
+  align-self: flex-end;
+  max-width: 80%;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(13, 24, 48, 0.6);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+}
+
+/* 原始事件抽屉 */
+.raw-drawer {
+  flex: none;
+  max-height: 30vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(4, 7, 15, 0.6);
+  overflow: hidden;
+}
+.raw-drawer-head {
+  flex: none;
+  padding: 4px 9px;
+  border-bottom: 1px solid var(--border);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.raw-drawer-body { padding: 5px 9px; overflow-y: auto; }
+.raw-row {
+  padding: 2px 0;
+  border-bottom: 1px dashed var(--border);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.raw-row pre {
+  margin: 2px 0 4px;
+  max-height: 120px;
+  overflow: auto;
+  font-size: 9.5px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ct-raw-toggle { opacity: 0.7; }
+.ct-raw-toggle:hover { opacity: 1; }
+
+/* 模态框输入区（themedPrompt） */
+.modal-input {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  resize: vertical;
+}
+
 /* 通用右键菜单：面板质感沿用 .ct-model-panel 的星云渐变 + 毛玻璃。
    z-index 2000 = 高于模态框(1000)、低于最上层浮层(10000) */
 .ctx-menu {

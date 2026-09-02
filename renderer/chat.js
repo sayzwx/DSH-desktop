@@ -66,7 +66,22 @@
   // ---------- 并发缓冲：每个会话独立 ----------
   const bufs = new Map();
   function buf(sid) {
-    if (!bufs.has(sid)) bufs.set(sid, { turn: false, blocks: new Map(), tool: null, model: null });
+    if (!bufs.has(sid)) {
+      bufs.set(sid, {
+        turn: false, blocks: new Map(), tool: null, model: null,
+        // 上下文面板状态（轨道 C）
+        todos: null,            // todo/write 全量快照
+        planActive: false,      // plan/mode
+        goal: null,             // goal/change 折叠后的当前目标，clear 后为 null
+        queue: null,            // session/queue 权威快照
+        jobs: null,             // session/jobs 权威快照
+        turnFiles: new Map(),   // turn -> Set<path>，进行中的回合收集到的文件变更
+        lastTurnFiles: null,    // 上一个已完成回合的产出，回合结束才发布
+        // 状态可见性（轨道 D）
+        retry: null,            // llm/retry 的重试进度，retry-started 或 turn 结束时清掉
+        rawEvents: [],          // 未分类事件，进"原始事件"调试抽屉（默认关闭）
+      });
+    }
     return bufs.get(sid);
   }
 
@@ -859,6 +874,39 @@
       : `按 ${modelName || '当前模型'} 单价估算的本会话累计花费（仅参考，非账单）`;
   }
 
+  // 投影 seq 水位：sessionId -> Map<key, seq>。
+  // 契约要求 per-key 的 higher-seq-wins，历史尾部 projections 块的 asOfSeq 是播种水位，
+  // 之后实时帧各带自己的 seq，两者可直接比较。没有这层保护，晚到的旧帧会把
+  // 权限预设或上下文占用回退成过期值。
+  const projSeq = new Map();
+
+  function projSeqOf(sessionId) {
+    if (!projSeq.has(sessionId)) projSeq.set(sessionId, new Map());
+    return projSeq.get(sessionId);
+  }
+
+  /**
+   * 用历史尾部的投影块播种水位。
+   * @param sessionId - 目标会话。
+   * @param values - 块里的 values，键存在即表示该能力已挂载。
+   * @param asOfSeq - 块的水位，可与后续帧的 seq 直接比较。
+   */
+  function seedProjectionSeq(sessionId, values, asOfSeq) {
+    const store = projSeqOf(sessionId);
+    store.clear();
+    if (typeof asOfSeq !== 'number') return;
+    for (const key of Object.keys(values || {})) store.set(key, asOfSeq);
+  }
+
+  /** 判断并记录一帧投影是否过期；不过期时把水位推进到该帧的 seq。 */
+  function isStaleProjection(sessionId, key, seq) {
+    const store = projSeqOf(sessionId);
+    const seen = store.get(key);
+    if (typeof seq === 'number' && typeof seen === 'number' && seq <= seen) return true;
+    if (typeof seq === 'number') store.set(key, seq);
+    return false;
+  }
+
   function applyProjections(values) {
     if (!values) return;
     if (values.permissions) {
@@ -940,6 +988,110 @@
   });
   const renderToolCall = (sid, ev, view) => window.__toolcards.renderToolCall(sid, ev, view);
   const renderToolResult = (sid, ev, view) => window.__toolcards.renderToolResult(sid, ev, view);
+
+  // ---------------- 上下文面板（Todo / Goal / 队列 / 后台任务 / 产出文件）与 Plan 芯片 ----------------
+  const dockEl = $('#chatContextDock');
+  const ctPlanRow = $('#ctPlanRow');
+  const ctPlanBtn = $('#ctPlanBtn');
+  const inputPlaceholderDefault = inputEl.placeholder;
+
+  window.__panels.init({
+    host: dockEl,
+    esc,
+    t,
+    openPath,
+    get sessionCwd() {
+      const s = sessions.find((x) => x.sessionId === currentSessionId);
+      return (s && s.cwd) || '';
+    },
+    get canOpenPath() { return !hostCaps || hostCaps.canOpenPath !== false; },
+    onGoal: (op, ref) => goalAction(op, ref),
+    onQueue: (itemId, action) => queueAction(itemId, action),
+  });
+
+  /** 用当前会话缓冲渲染 dock；无当前会话时清空并隐藏。 */
+  function renderPanels() {
+    if (!dockEl) return;
+    const b = currentSessionId ? buf(currentSessionId) : null;
+    window.__panels.render(b ? {
+      todos: b.todos,
+      planActive: b.planActive,
+      goal: b.goal,
+      queue: b.queue,
+      jobs: b.jobs,
+      turnFiles: b.lastTurnFiles,
+    } : null);
+  }
+
+  /** Plan 模式芯片：激活时显示，点击执行 /plan off 退出；同时切换输入框提示语。 */
+  function renderPlanChip() {
+    if (!ctPlanRow || !ctPlanBtn) return;
+    const active = !!(currentSessionId && buf(currentSessionId).planActive);
+    ctPlanRow.hidden = !active;
+    if (!active) {
+      inputEl.placeholder = inputPlaceholderDefault;
+      return;
+    }
+    ctPlanBtn.textContent = t('plan.chip');
+    ctPlanBtn.title = t('plan.chipHint');
+    inputEl.placeholder = t('plan.placeholder');
+    ctPlanBtn.onclick = async () => {
+      ctPlanBtn.disabled = true;
+      // 退出走 /plan off 命令；芯片要等 plan/mode 投影回来才消失，失败时把原因显示出来
+      const r = await api.chatCommandsExecute(currentSessionId, '/plan off');
+      ctPlanBtn.disabled = false;
+      if (!r.ok) showChatError(t('plan.exitFailed', { error: r.error }));
+    };
+  }
+
+  /** Goal 的六个变更动词，全部携带 CAS ref。 */
+  async function goalAction(op, ref) {
+    if (!currentSessionId) return;
+    const call = {
+      edit: () => promptGoalEdit(ref),
+      pause: () => api.goalPause(currentSessionId, ref),
+      resume: () => api.goalResume(currentSessionId, ref),
+      complete: () => api.goalComplete(currentSessionId, ref),
+      clear: () => api.goalClear(currentSessionId, ref),
+    }[op];
+    if (!call) return;
+    let r = await call();
+    // CAS 冲突：服务端持有的 revision 比我们手上的新。用缓冲里最新的权威 ref 回填重试一次，
+    // 仍然失败就把原因告诉用户，不做第三次尝试以免和别的客户端来回抢。
+    if (!r.ok && /conflict|revision/i.test(`${r.code || ''} ${r.error || ''}`)) {
+      const fresh = buf(currentSessionId).goal;
+      if (fresh && fresh.revision !== ref.revision) {
+        const retryRef = { id: fresh.id, revision: fresh.revision };
+        const retryCall = {
+          edit: () => promptGoalEdit(retryRef),
+          pause: () => api.goalPause(currentSessionId, retryRef),
+          resume: () => api.goalResume(currentSessionId, retryRef),
+          complete: () => api.goalComplete(currentSessionId, retryRef),
+          clear: () => api.goalClear(currentSessionId, retryRef),
+        }[op];
+        r = await retryCall();
+      }
+    }
+    if (!r.ok) showChatError(t('goal.actionFailed', { op: t(`panel.goal.${op}`), error: r.error }));
+  }
+
+  /** 编辑目标：用模态框收集新的 objective，轮次上限保持不变。 */
+  async function promptGoalEdit(ref) {
+    const current = buf(currentSessionId).goal;
+    const next = await themedPrompt(t('goal.edit.title'), t('goal.edit.label'), (current && current.objective) || '');
+    if (next === null) return { ok: true, value: null }; // 取消不算失败
+    const objective = String(next).trim();
+    if (!objective) { showChatError(t('goal.edit.empty')); return { ok: true, value: null }; }
+    return api.goalEdit(currentSessionId, ref, objective);
+  }
+
+  /** 队列项变更：steer 提前插话，remove 撤销。 */
+  async function queueAction(itemId, action) {
+    if (!currentSessionId) return;
+    const r = await api.chatUpdateQueue(currentSessionId, itemId, action);
+    if (!r.ok) showChatError(t('queue.actionFailed', { error: r.error }));
+    // 成功与否都以随后到达的 session/queue 权威快照为准，不在本地乐观修改
+  }
 
   /**
    * 会话流里的内联系统提示。
@@ -1206,10 +1358,14 @@
     if (r.ok) {
       renderHistory(r.events);
       renderLiveBuffer(sessionId);
+      seedProjectionSeq(sessionId, r.projections?.values, r.projections?.asOfSeq);
       applyProjections(r.projections?.values);
     } else {
       emptyState();
     }
+    // 面板与 Plan 芯片按会话隔离：不重绘会让上一个会话的 Todo/Goal 残留在 dock 里
+    renderPanels();
+    renderPlanChip();
     setTurnUI(b.turn);
     loadModels(sessionId);
   }
@@ -1801,7 +1957,12 @@ class CommandPanel {
         b.turn = false;
         b.tool = null;
         b.blocks.clear();
+        // 回合结束才发布产出文件：中途的变更集合还不完整
+        const files = b.turnFiles.get(ev.data?.turn ?? ev.turn);
+        b.lastTurnFiles = files ? [...files] : null;
+        b.retry = null;
         if (isCur) {
+          removeRetryNotice(b);
           setTurnUI(false);
           const reason = ev.data?.reason;
           if (reason?.kind === 'error' && reason?.error?.message) {
@@ -1819,6 +1980,7 @@ class CommandPanel {
           renderStatus();
         }
         refreshSessions();
+        if (isCur) renderPanels();
         break;
       }
 
@@ -1897,6 +2059,7 @@ class CommandPanel {
           if (!b2.calls) b2.calls = new Map();
           b2.calls.set(callId, b.tool);
         }
+        collectTurnFiles(b, ev, p.view);
         if (isCur) {
           // p.view 是宿主算好的展示视图（帧形状 { sessionId, event, view? }），不传就只能渲染通用卡
           renderToolCall(p.sessionId, ev, p.view);
@@ -1917,14 +2080,238 @@ class CommandPanel {
       }
 
       case 'session/title':
-      case 'session/projection':
         refreshSessions();
         break;
 
+      // ---- 上下文面板状态（轨道 C）----
+      case 'todo/write':
+        // 全量快照，最新写入覆盖旧的；历史回放与实时到达得到同一结果
+        b.todos = Array.isArray(ev.data?.todos) ? ev.data.todos : null;
+        if (isCur) renderPanels();
+        break;
+
+      case 'plan/mode':
+        b.planActive = !!ev.data?.active;
+        if (isCur) renderPlanChip();
+        break;
+
+      case 'goal/change': {
+        // 非 clear 的载荷带完整 goal 快照；clear 是墓碑，当前目标变为空
+        const d = ev.data || {};
+        b.goal = d.operation === 'clear' || !d.goal
+          ? null
+          : { ...d.goal, roundsStarted: d.roundsStarted || 0 };
+        if (isCur) renderPanels();
+        break;
+      }
+
+      // ---- 状态可见性（轨道 D）----
+      case 'llm/retry': {
+        // 上游限流/网络抖动时界面此前只是静默卡住，这里给出明确的重试进度
+        const d = ev.data || {};
+        b.retry = {
+          provider: d.provider || '',
+          retry: d.retry || 0,
+          maxRetries: d.maxRetries,
+          delayMs: d.delayMs || 0,
+          reason: (d.failure && (d.failure.message || d.failure.kind)) || '',
+        };
+        if (isCur) renderRetryNotice(b);
+        break;
+      }
+
+      case 'llm/retry-started':
+        b.retry = null;
+        if (isCur) removeRetryNotice(b);
+        break;
+
+      case 'compaction/start':
+        if (isCur) showChatNotice(t('event.compaction.start'), 'info');
+        break;
+
+      case 'compaction/summary':
+        if (isCur) showChatNotice(t('event.compaction.summary'), 'info');
+        break;
+
+      case 'compaction/end':
+        if (isCur) showChatNotice(t('event.compaction.end'), 'info');
+        break;
+
+      case 'compaction/prune':
+        if (isCur) showChatNotice(t('event.compaction.prune'), 'info');
+        break;
+
+      case 'command/run':
+        if (isCur) showChatCommand(ev.data?.name, ev.data?.args, 'run');
+        break;
+
+      case 'command/done':
+        if (isCur) showChatCommand(ev.data?.name, ev.data?.text || ev.data?.error, 'done', !!ev.data?.error);
+        break;
+
+      case 'hook/invoked':
+        if (isCur) showChatNotice(t('event.hook.invoked', { name: ev.data?.name || ev.data?.hook || '' }), 'info');
+        break;
+
+      case 'hook/result':
+        if (isCur) showChatNotice(t('event.hook.result', { name: ev.data?.name || ev.data?.hook || '' }), 'info');
+        break;
+
+      // 权限 / 沙箱 / 审批策略 / agent 预设变更：静默改权限是安全问题，必须回显
+      case 'permission/preset':
+        if (isCur) showChatNotice(t('event.permission.changed', { value: String(ev.data?.preset ?? ev.data?.value ?? '') }), 'warn');
+        break;
+
+      case 'sandbox/mode':
+        if (isCur) showChatNotice(t('event.sandbox.changed', { value: String(ev.data?.mode ?? ev.data?.value ?? '') }), 'warn');
+        break;
+
+      case 'approval/policy':
+        if (isCur) showChatNotice(t('event.approval.changed', { value: String(ev.data?.policy ?? ev.data?.value ?? '') }), 'warn');
+        break;
+
+      case 'agent-preset/selected':
+        if (isCur) showChatNotice(t('event.agentPreset.changed', { value: String(ev.data?.agentPreset ?? ev.data?.preset ?? '') }), 'warn');
+        refreshSessions();
+        break;
+
+      case 'subagent/descriptor':
+        if (isCur) showChatNotice(t('event.subagent.descriptor', { name: String(ev.data?.label || ev.data?.name || ev.data?.childSessionId || '') }), 'info');
+        break;
+
+      case 'tool-workflow/run-start':
+        if (isCur) showChatNotice(t('event.workflow.runStart', { name: String(ev.data?.label || ev.data?.runId || '') }), 'info');
+        break;
+
+      case 'tool-workflow/run-end':
+        if (isCur) showChatNotice(t('event.workflow.runEnd', { name: String(ev.data?.label || ev.data?.runId || '') }), 'info');
+        break;
+
+      case 'tool-workflow/agent-start':
+      case 'tool-workflow/agent-end':
+        if (isCur) showChatNotice(t('event.workflow.agent', { phase: String(ev.data?.phase || ''), name: String(ev.data?.label || '') }), 'info');
+        break;
+
+      case 'tool/code-dispatch':
+      case 'tool/code-dispatch-start':
+        if (isCur) showChatNotice(t('event.codeDispatch'), 'info');
+        break;
+
       default:
+        // 其余事件（team/*、schedule/change、request/context|header、session/end-seed、
+        // feedback/record、approval/asked|decided、agent/inbox/spliced 等）不再无声丢弃：
+        // 收进"原始事件"调试抽屉，默认关闭，需要排查时再打开。
+        pushRawEvent(p.sessionId, ev);
         break;
     }
   }
+
+  /**
+   * 收集本回合产出的文件，供回合结束时渲染产出文件行。
+   * 判据是渲染意图而不是工具名（与官方 ui-deliverables 一致）：diff 卡，或 kind 为
+   * edit/delete/move 的 generic 卡。read/search/fetch 这类只读意图不贡献。
+   * view 缺失时不做猜测——宁可少显示，也不要按工具名猜出错误的文件列表。
+   */
+  function collectTurnFiles(b, ev, viewWrap) {
+    const view = viewWrap && viewWrap.view;
+    if (!view) return;
+    const turn = ev.data?.turn ?? ev.turn;
+    if (turn === undefined) return;
+    const paths = [];
+    if (view.card === 'diff') {
+      for (const d of view.diffs || []) { if (d && d.path) paths.push(d.path); }
+    } else if (view.card === 'generic' && ['edit', 'delete', 'move'].includes(view.kind)) {
+      for (const loc of view.locations || []) { if (loc && loc.path) paths.push(loc.path); }
+    }
+    if (paths.length === 0) return;
+    if (!b.turnFiles.has(turn)) b.turnFiles.set(turn, new Set());
+    const set = b.turnFiles.get(turn);
+    for (const p of paths) set.add(p);
+  }
+
+  /** llm/retry 的就地更新提示：同一轮多次重试只保留一条，避免刷屏。 */
+  function renderRetryNotice(b) {
+    const r = b.retry;
+    if (!r) return;
+    const attempt = r.maxRetries === undefined
+      ? t('event.retry.attemptNoMax', { n: r.retry })
+      : t('event.retry.attempt', { n: r.retry, max: r.maxRetries });
+    const text = t('event.retry', { provider: r.provider, attempt, seconds: Math.round((r.delayMs || 0) / 1000) });
+    if (b.retryEl && b.retryEl.isConnected) {
+      b.retryEl.textContent = `⚠ ${text}`;
+      return;
+    }
+    b.retryEl = showChatNotice(text, 'warn');
+  }
+
+  function removeRetryNotice(b) {
+    if (b.retryEl && b.retryEl.isConnected) b.retryEl.remove();
+    b.retryEl = null;
+  }
+
+  /** 斜杠命令回显：run 显示命令本身，done 显示结果或错误。 */
+  function showChatCommand(name, detail, phase, isError) {
+    const label = name ? `/${name}` : '';
+    if (phase === 'run') {
+      const div = document.createElement('div');
+      div.className = 'msg msg-command';
+      div.textContent = detail ? `${label} ${detail}` : label;
+      messagesEl.appendChild(div);
+      scrollBottom(false);
+      return;
+    }
+    if (detail) showChatNotice(`${label}${isError ? ' ✕' : ''} ${detail}`, isError ? 'error' : 'info');
+  }
+
+  // ---------------- 原始事件调试抽屉（默认关闭）----------------
+  const RAW_EVENT_LIMIT = 300;
+  let rawDrawerOpen = false;
+
+  function pushRawEvent(sessionId, ev) {
+    const b = buf(sessionId);
+    b.rawEvents.push({ seq: ev.seq, type: ev.type, time: ev.time, data: ev.data });
+    if (b.rawEvents.length > RAW_EVENT_LIMIT) b.rawEvents.shift();
+    if (rawDrawerOpen && sessionId === currentSessionId) renderRawDrawer();
+  }
+
+  function renderRawDrawer() {
+    const host = $('#rawEventDrawerBody');
+    if (!host) return;
+    const rows = currentSessionId ? buf(currentSessionId).rawEvents : [];
+    host.textContent = '';
+    if (rows.length === 0) {
+      host.textContent = t('raw.empty');
+      return;
+    }
+    for (const r of rows) {
+      const line = document.createElement('div');
+      line.className = 'raw-row';
+      line.textContent = `#${r.seq} ${r.type}`;
+      const det = document.createElement('pre');
+      try { det.textContent = JSON.stringify(r.data, null, 1); } catch { det.textContent = String(r.data); }
+      line.appendChild(det);
+      host.appendChild(line);
+    }
+  }
+
+  function toggleRawDrawer() {
+    const drawer = $('#rawEventDrawer');
+    if (!drawer) return;
+    rawDrawerOpen = !rawDrawerOpen;
+    drawer.hidden = !rawDrawerOpen;
+    if (rawDrawerOpen) renderRawDrawer();
+  }
+
+  // 抽屉开关：文案走 i18n，常显（此前这些事件被 default:break 静默丢弃，排查时无从下手）
+  const ctRawToggle = $('#ctRawToggle');
+  if (ctRawToggle) {
+    ctRawToggle.hidden = false;
+    ctRawToggle.textContent = t('raw.toggle');
+    ctRawToggle.title = t('raw.drawerTitle');
+    ctRawToggle.onclick = toggleRawDrawer;
+  }
+  const rawDrawerTitle = $('#rawEventDrawerTitle');
+  if (rawDrawerTitle) rawDrawerTitle.textContent = t('raw.drawerTitle');
 
   function handleFrame(msg) {
     const p = msg.payload;
@@ -1941,6 +2328,15 @@ class CommandPanel {
         refreshSessions();
       } else if (p.type === 'host/agent-error' && p.message) {
         showChatError(p.message);
+      } else if (p.type === 'host/workspace-changed'
+        || p.type === 'host/workspace-removed'
+        || p.type === 'host/workspace-order-changed') {
+        // 持久化 workspace 变更（创建/挂载/删除/排序）后的推送；此前只能靠重新拉 workspace.list 才看得到
+        loadWorkspaces().then(() => refreshSessions());
+      } else if (p.type === 'host/archived-sessions-changed') {
+        // 全量归档集：直接替换本地维护的那份，否则别的客户端归档时这边会漏
+        archivedSessionIds = new Set(p.archivedSessionIds || []);
+        refreshSessions();
       }
       return;
     }
@@ -1963,10 +2359,24 @@ class CommandPanel {
       if (p.type === 'session/event') handleSessionEvent(p);
       else if (p.type === 'session/projection') {
         if (p.sessionId !== currentSessionId) return;
-        if (p.key === 'title') refreshSessions();
-        else if (['permissions', 'contextPressure', 'tokenUsage', 'sessionStats'].includes(p.key)) {
-          applyProjections({ [p.key]: p.value });
+        // 契约要求 higher-seq-wins：同一 key 的旧帧晚到必须丢弃，
+        // 否则权限预设或上下文占用会回退成过期值
+        if (!isStaleProjection(p.sessionId, p.key, p.seq)) {
+          if (p.key === 'title') refreshSessions();
+          else if (['permissions', 'contextPressure', 'tokenUsage', 'sessionStats'].includes(p.key)) {
+            applyProjections({ [p.key]: p.value });
+          }
         }
+      } else if (p.type === 'session/queue') {
+        // 权威全量快照：每次入队/变更/认领/丢弃后推送，直接整体替换，不做增量合并
+        buf(p.sessionId).queue = Array.isArray(p.items) ? p.items : [];
+        if (p.sessionId === currentSessionId) renderPanels();
+      } else if (p.type === 'session/jobs') {
+        // 同为全量快照。缺键表示空集，但"变空"这一次仍会推 []，两种情况都要写回
+        buf(p.sessionId).jobs = Array.isArray(p.jobs) ? p.jobs : [];
+        if (p.sessionId === currentSessionId) renderPanels();
+      } else if (p.type === 'stream/error') {
+        showChatError(t('event.streamError', { error: (p.error && p.error.message) || '' }));
       } else if (p.type === 'question/requested') {
         // 智能体提问（ask_user_question）：rpcId 在 server-request 帧顶层
         handleQuestionRequested({ rpcId: msg.rpcId, sessionId: p.sessionId, questions: p.questions || [] });
@@ -2011,15 +2421,58 @@ class CommandPanel {
     });
   }
 
+  /**
+   * 带输入的模态框：在正文下方追加 textarea，确认 resolve 输入文本、取消 resolve null。
+   * 不传 input 时走上面 openModal 的 confirm 语义，返回值与既有调用点完全一致。
+   */
+  function openPromptModal({ title, message, value = '', okText, cancelText, rows = 3 }) {
+    return new Promise((resolve) => {
+      modalTitle.textContent = title;
+      modalBody.textContent = message;
+      const field = document.createElement('textarea');
+      field.className = 'sm-input modal-input';
+      field.rows = rows;
+      field.value = value;
+      modalBody.appendChild(field);
+      modalOk.textContent = okText;
+      modalCancel.textContent = cancelText;
+      modalCancel.hidden = false;
+      modalOk.className = 'primary-btn';
+      modalOverlay.hidden = false;
+      const done = (v) => {
+        modalOverlay.hidden = true;
+        modalOk.onclick = null;
+        modalCancel.onclick = null;
+        modalOverlay.onclick = null;
+        field.remove();
+        resolve(v);
+      };
+      modalOk.onclick = () => done(field.value);
+      modalCancel.onclick = () => done(null);
+      modalOverlay.onclick = (e) => { if (e.target === modalOverlay) done(null); };
+      field.focus();
+      field.select();
+      field.onkeydown = (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); done(field.value); }
+        else if (e.key === 'Escape') { e.preventDefault(); done(null); }
+      };
+    });
+  }
+
   // 通用确认框：okText 必须由调用方语义决定（删除类操作传「确认删除」，风险确认传对应动作），
   // 不再全局硬编码为删除文案。
   const themedConfirm = (message, title = '确认操作', { okText = '确定', danger = true } = {}) =>
     openModal({ title, message, okText, danger });
   const themedAlert = (message, title = '提示') => openModal({ title, message, okText: '知道了', cancelText: '' });
+  /** 文本输入框；取消返回 null。 */
+  const themedPrompt = (title, message, value, { okText, rows } = {}) =>
+    openPromptModal({ title, message, value, okText: okText || t('common.save'), cancelText: t('common.cancel'), rows });
   // 供 app.js / settings.js 复用
   window.__modal = {
     confirm: themedConfirm,
     alert: (message, title) => themedAlert(message, title),
+    prompt: themedPrompt,
   };
 
   // ---------------- 智能体提问（ask_user_question 多选项卡片） ----------------
@@ -2308,6 +2761,8 @@ class CommandPanel {
       streamMsg = null;
       domBlocks = new Map();
       hostCaps = null;
+      renderPanels();
+      renderPlanChip();
       ctStatusDot.className = 'ct-status-dot idle';
       ctStatusText.textContent = '空闲';
       ctOther.hidden = true;
