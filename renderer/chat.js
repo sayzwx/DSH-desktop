@@ -32,6 +32,7 @@
   const ctOther = $('#ctOtherRunning');
 
   const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const t = (key, params) => window.__i18n.t(key, params);
 
   let running = false;
   let currentSessionId = null;
@@ -40,6 +41,18 @@
   let workspaces = [];           // workspace.list items
   let currentWorkspaceId = null; // null = 全部
   let archivedSessionIds = new Set();
+  // 就地改名：列表会被 refreshSessions 频繁整段重绘（turn/start、session/title 等都会触发），
+  // 草稿必须存在这里而不是只存在 DOM 里，否则输入到一半就被重绘清掉。
+  let renameDraft = null;        // { sessionId, value } | null
+  // 会话全文搜索：searchResults 为 null 表示未在搜索（渲染分组视图），为数组表示渲染结果视图
+  let searchQuery = '';
+  let searchResults = null;
+  let searchError = null;
+  let searchHasMore = false;
+  let searchDisabled = false;   // 引擎把 session-query 配成 openAt:'never'，全文搜索未启用
+  // host.describe 的能力快照（{ version, cwd, home, attachedSessions, canOpenPath }）。
+  // canOpenPath 决定"在文件夹中显示"是否可点；同一份数据也供引擎诊断使用。
+  let hostCaps = null;
   let modelState = null;     // 当前会话的 session.models
   let modelLoadError = null; // 模型加载失败信息（区别于"未连接"）
   let streamMsg = null;      // 当前会话正在流的消息 DOM
@@ -201,11 +214,16 @@
   }
 
   function sessionRowHTML(s) {
-    return `<div class="chat-session ${s.sessionId === currentSessionId ? 'active' : ''}" data-id="${esc(s.sessionId)}">
-      ${s.blank ? '<span class="cs-blank" title="空白新会话">新</span>' : ''}
-      <span class="cs-title">${esc(s.title)}</span>
-      ${s.running ? '<span class="cs-dot" title="运行中"></span>' : ''}
-      <span class="cs-del" title="删除该历史会话">✕</span>
+    const renaming = !!renameDraft && renameDraft.sessionId === s.sessionId;
+    const titleCell = renaming
+      ? `<input class="cs-title-input" type="text" value="${esc(renameDraft.value)}" spellcheck="false" />`
+      : `<span class="cs-title">${esc(s.title)}</span>`;
+    return `<div class="chat-session ${s.sessionId === currentSessionId ? 'active' : ''}${renaming ? ' renaming' : ''}" data-id="${esc(s.sessionId)}" data-title="${esc(s.title || '')}">
+      ${s.blank ? `<span class="cs-blank" title="${esc(t('session.blank.title'))}">${esc(t('session.blank.badge'))}</span>` : ''}
+      ${titleCell}
+      ${s.running ? `<span class="cs-dot" title="${esc(t('session.running'))}"></span>` : ''}
+      ${renaming ? '' : `<span class="cs-rename" title="${esc(t('session.action.rename'))}">✎</span>`}
+      <span class="cs-del" title="${esc(t('session.delete.title'))}">✕</span>
     </div>`;
   }
 
@@ -225,35 +243,59 @@
   }
 
   function renderSessions() {
+    if (searchResults !== null) { renderSearchResults(); return; }
     const list = visibleSessions();
     const parts = [];
     if (currentWorkspaceId) {
       const w = workspaces.find((x) => x.workspaceId === currentWorkspaceId);
       if (w) {
-        parts.push(groupSectionHTML(w.workspaceId, w.title || w.path || '未命名工作区', w.path, list, false));
+        parts.push(groupSectionHTML(w.workspaceId, w.title || w.path || t('workspace.unnamed'), w.path, list, false));
       }
     } else {
       for (const w of workspaces) {
         const wsSessions = list.filter((s) => (w.sessionIds || []).includes(s.sessionId));
-        parts.push(groupSectionHTML(w.workspaceId, w.title || w.path || '未命名工作区', w.path, wsSessions, true));
+        parts.push(groupSectionHTML(w.workspaceId, w.title || w.path || t('workspace.unnamed'), w.path, wsSessions, true));
       }
       const ungrouped = list.filter((s) => !workspaceOf(s.sessionId));
       if (ungrouped.length > 0) {
-        parts.push(groupSectionHTML('__ungrouped__', '未分组', '', ungrouped, false));
+        parts.push(groupSectionHTML('__ungrouped__', t('workspace.ungrouped'), '', ungrouped, false));
       }
     }
     if (parts.length === 0) {
-      sessionsEl.innerHTML = '<div class="chat-empty" style="padding:20px 8px">暂无会话<br />点击「＋ 新会话」开始</div>';
+      // 换行标签由渲染侧拼接，语言包里只放纯文本，否则 esc() 会把 <br/> 转义成可见字符
+      sessionsEl.innerHTML = `<div class="chat-empty" style="padding:20px 8px">${esc(t('session.list.empty'))}<br />${esc(t('session.list.emptyHint'))}</div>`;
       return;
     }
     sessionsEl.innerHTML = parts.join('');
+    wireSessionRows();
+  }
+
+  /**
+   * 绑定会话行事件。分组视图与搜索结果视图共用，因此这里的选择器在另一种视图下
+   * 匹配不到元素是正常的（querySelectorAll 返回空集）。
+   */
+  function wireSessionRows() {
     sessionsEl.querySelectorAll('.chat-session').forEach((el) => {
-      el.onclick = () => openSession(el.dataset.id);
+      el.onclick = () => {
+        // 改名进行中时点击本行不切会话，否则焦点一丢草稿就被 cancelRename 清掉
+        if (renameDraft && renameDraft.sessionId === el.dataset.id) return;
+        openSession(el.dataset.id);
+      };
+      el.oncontextmenu = (e) => {
+        e.preventDefault();
+        openSessionMenu(e.clientX, e.clientY, el.dataset.id);
+      };
     });
     sessionsEl.querySelectorAll('.cs-del').forEach((el) => {
       el.onclick = (e) => {
         e.stopPropagation();
         deleteSession(el.closest('.chat-session').dataset.id);
+      };
+    });
+    sessionsEl.querySelectorAll('.cs-rename').forEach((el) => {
+      el.onclick = (e) => {
+        e.stopPropagation();
+        beginRename(el.closest('.chat-session').dataset.id);
       };
     });
     sessionsEl.querySelectorAll('.ws-group-toggle').forEach((el) => {
@@ -270,6 +312,259 @@
         const key = el.closest('.ws-group').dataset.key;
         createSessionInWorkspace(key === '__ungrouped__' ? null : key);
       };
+    });
+    focusRenameInput();
+  }
+
+  // ---------------- 就地改名 ----------------
+  function beginRename(sessionId) {
+    const s = sessions.find((x) => x.sessionId === sessionId);
+    renameDraft = { sessionId, value: (s && s.title) || '' };
+    renderSessions();
+  }
+
+  function cancelRename() {
+    if (!renameDraft) return;
+    renameDraft = null;
+    renderSessions();
+  }
+
+  /** 列表每次重绘都会重建 input，所以焦点与草稿回填要在渲染后统一做。 */
+  function focusRenameInput() {
+    if (!renameDraft) return;
+    const input = sessionsEl.querySelector('.cs-title-input');
+    if (!input) return;
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    input.oninput = () => { if (renameDraft) renameDraft.value = input.value; };
+    input.onkeydown = (e) => {
+      e.stopPropagation(); // 输入时不要触发全局快捷键
+      if (e.key === 'Enter') { e.preventDefault(); commitRename(); }
+      else if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+    };
+    input.onblur = () => cancelRename();
+  }
+
+  async function commitRename() {
+    if (!renameDraft) return;
+    const { sessionId, value } = renameDraft;
+    renameDraft = null;
+    const title = String(value || '').trim().replace(/\s+/g, ' ');
+    const s = sessions.find((x) => x.sessionId === sessionId);
+    if (!title) {
+      renderSessions();
+      showChatError(t('session.rename.empty'));
+      return;
+    }
+    if (s && s.title === title) { renderSessions(); return; } // 没改就不发请求
+    const r = await api.chatRename(sessionId, title);
+    if (!r.ok) {
+      renderSessions();
+      showChatError(r.code === 'title-invalid'
+        ? t('session.rename.empty')
+        : t('session.rename.failed', { error: r.error }));
+      return;
+    }
+    // 引擎会推 session/title 事件并触发一次刷新；这里主动刷一次保证改名立刻可见
+    refreshSessions();
+  }
+
+  // ---------------- 会话右键菜单 ----------------
+  function openSessionMenu(x, y, sessionId) {
+    const s = sessions.find((v) => v.sessionId === sessionId);
+    const cwd = s && s.cwd;
+    // canOpenPath 为 false 时（远程/容器部署）灰掉"在文件夹中显示"，而不是点击后才报错
+    const canOpen = !hostCaps || hostCaps.canOpenPath !== false;
+    window.__ctxMenu.open(x, y, [
+      { label: t('session.action.rename'), onSelect: () => beginRename(sessionId) },
+      { label: t('session.action.fork'), title: t('session.fork.menuTitle'), onSelect: () => forkSession(sessionId) },
+      { separator: true },
+      {
+        label: t('session.action.showInFolder'),
+        disabled: !cwd || !canOpen,
+        title: !cwd ? t('session.showInFolder.noCwd') : (!canOpen ? t('host.openPath.unavailable') : cwd),
+        onSelect: () => openPath(cwd),
+      },
+      { label: t('session.action.delete'), danger: true, onSelect: () => deleteSession(sessionId) },
+    ]);
+  }
+
+  async function forkSession(sessionId) {
+    const s = sessions.find((x) => x.sessionId === sessionId);
+    const title = (s && s.title) || sessionId;
+    const r = await api.chatFork(sessionId); // 不传 atSeq = 从最后一个已完成的 turn 分叉
+    if (!r.ok) {
+      showChatError(r.code === 'fork-unavailable' ? t('session.fork.unavailable')
+        : r.code === 'session-not-found' ? t('session.fork.notFound')
+          : t('session.fork.failed', { error: r.error }));
+      return;
+    }
+    const newId = r.value && r.value.sessionId;
+    await refreshSessions();
+    if (newId) await openSession(newId);
+    showChatNotice(t('session.fork.done', { title }));
+  }
+
+  /** 经引擎 host.openPath 交给系统默认程序打开（Finder / Explorer / xdg-open）。 */
+  async function openPath(target) {
+    if (!target) return;
+    const r = await api.hostOpenPath(target);
+    if (!r.ok) showChatError(t('host.openPath.failed', { error: r.error }));
+  }
+
+  // ---------------- 会话全文搜索（session.search）----------------
+  const csSearchInput = $('#csSearchInput');
+  const csSearchClear = $('#csSearchClear');
+  // 引擎上限：session.search 最多返回 20 个会话且不带续游标，hasMore 是"请细化关键词"的意思
+  const SEARCH_LIMIT = 20;
+  // 启用全文搜索所需的最小覆盖。~/.dsh/profiles/web/cordis.patch.yml 是用户 patch 层，
+  // 在所有 bundle 层之后生效，正好能覆盖 web bundle 里的 openAt: never。
+  // 只改 openAt：path 保持部署默认的 ':memory:'，改持久路径是另一个决定，不由这段提示替用户做。
+  const SEARCH_ENABLE_SNIPPET = `- id: session-query-sqlite
+  config:
+    openAt: first-search`;
+  let searchTimer = null;
+  let searchSeq = 0;
+
+  function exitSearch() {
+    if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
+    searchSeq++;                 // 让在途响应失效
+    searchQuery = '';
+    searchResults = null;
+    searchError = null;
+    searchHasMore = false;
+    searchDisabled = false;
+    if (csSearchInput) csSearchInput.value = '';
+    if (csSearchClear) csSearchClear.hidden = true;
+    renderSessions();
+  }
+
+  async function runSearch(query) {
+    const seq = ++searchSeq;
+    const r = await api.chatSearch(query);
+    if (seq !== searchSeq) return; // 已有更新的查询在途或已退出搜索，丢弃这次结果
+    if (!r.ok) {
+      // 全文搜索是上游刻意 opt-in 的能力：web 部署的 cordis patch 把 session-query-sqlite
+      // 配成 path ':memory:' + openAt 'never'，而该插件不在 settings.describe 的命名空间里，
+      // 所以应用无法通过 RPC 打开它，只能改引擎部署层配置。
+      // 引擎返回的 wire code 是通用的 'internal'，具体标识 SESSION_QUERY_SEARCH_DISABLED
+      // 只存在于 message 文本里，因此这里只能按子串识别（上游改文案就会失效，届时降级为普通报错）。
+      searchDisabled = /session search is disabled/i.test(String(r.error || ''));
+      searchError = searchDisabled ? null : t('session.search.failed', { error: r.error });
+      searchResults = [];
+      searchHasMore = false;
+    } else {
+      searchDisabled = false;
+      searchError = null;
+      const items = (r.value && r.value.items) || [];
+      // 引擎按 list 可见范围搜索，但归档集是桌面端自己维护的，这里过滤掉已归档的
+      searchResults = items.filter((it) => !archivedSessionIds.has(it.sessionId));
+      searchHasMore = !!(r.value && r.value.hasMore);
+    }
+    renderSessions();
+  }
+
+  /**
+   * 高亮 snippet 里的命中片段。
+   * 逐字符标记命中区间再拼装，而不是用正则替换：替换会把已插入的 <mark> 标签
+   * 当成文本再次参与匹配，多个关键词重叠时结果会错乱。
+   */
+  function highlightSnippet(snippet, query) {
+    const text = String(snippet || '');
+    const terms = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
+    const hits = new Array(text.length).fill(false);
+    const lower = text.toLowerCase();
+    for (const term of terms) {
+      for (let at = lower.indexOf(term); at >= 0; at = lower.indexOf(term, at + term.length)) {
+        for (let k = at; k < at + term.length && k < hits.length; k++) hits[k] = true;
+      }
+    }
+    let html = '';
+    let inMark = false;
+    for (let k = 0; k < text.length; k++) {
+      if (hits[k] && !inMark) { html += '<mark>'; inMark = true; }
+      else if (!hits[k] && inMark) { html += '</mark>'; inMark = false; }
+      html += esc(text[k]);
+    }
+    if (inMark) html += '</mark>';
+    return html;
+  }
+
+  function renderSearchResults() {
+    const byId = new Map(sessions.map((s) => [s.sessionId, s]));
+    const parts = [];
+    if (searchDisabled) {
+      // 引擎把全文搜索设为 opt-in，应用无法通过 RPC 打开，只能给出可执行的启用方法
+      parts.push(`<div class="cs-search-off">
+        <div class="cs-off-title">${esc(t('session.search.disabled.title'))}</div>
+        <div class="cs-off-body">${esc(t('session.search.disabled.body'))}</div>
+        <pre class="cs-off-code" id="csOffCode">${esc(SEARCH_ENABLE_SNIPPET)}</pre>
+        <button type="button" class="mini-btn" id="csOffCopy">${esc(t('session.search.disabled.copy'))}</button>
+      </div>`);
+      sessionsEl.innerHTML = parts.join('');
+      const copyBtn = sessionsEl.querySelector('#csOffCopy');
+      if (copyBtn) {
+        copyBtn.onclick = async () => {
+          try {
+            await navigator.clipboard.writeText(SEARCH_ENABLE_SNIPPET);
+            copyBtn.textContent = t('session.search.disabled.copied');
+          } catch {
+            copyBtn.textContent = t('session.search.disabled.copyFailed');
+          }
+        };
+      }
+      return;
+    }
+    if (searchError) {
+      parts.push(`<div class="cs-search-msg error">${esc(searchError)}</div>`);
+    } else {
+      const count = t('session.search.resultCount', { n: searchResults.length });
+      const more = searchHasMore ? ` · ${t('session.search.truncated', { n: SEARCH_LIMIT })}` : '';
+      parts.push(`<div class="cs-search-msg">${esc(count)}${esc(more)}</div>`);
+      if (searchResults.length === 0) {
+        parts.push(`<div class="chat-empty" style="padding:20px 8px">${esc(t('session.search.empty'))}</div>`);
+      }
+    }
+    for (const item of searchResults) {
+      const s = byId.get(item.sessionId);
+      parts.push(`<div class="chat-session cs-result ${item.sessionId === currentSessionId ? 'active' : ''}" data-id="${esc(item.sessionId)}" data-title="${esc((s && s.title) || '')}">
+        <span class="cs-title">${esc((s && s.title) || item.sessionId)}</span>
+        <span class="cs-snippet">${highlightSnippet(item.snippet, searchQuery)}</span>
+      </div>`);
+    }
+    sessionsEl.innerHTML = parts.join('');
+    wireSessionRows();
+  }
+
+  if (csSearchInput) {
+    csSearchInput.placeholder = t('session.search.placeholder');
+    csSearchInput.setAttribute('aria-label', t('session.search.placeholder'));
+  }
+  if (csSearchClear) csSearchClear.title = t('session.search.clear');
+  if (csSearchInput) {
+    csSearchInput.addEventListener('input', () => {
+      if (csSearchClear) csSearchClear.hidden = !csSearchInput.value;
+      if (searchTimer) clearTimeout(searchTimer);
+      const q = csSearchInput.value.trim();
+      if (!q) { exitSearch(); return; }
+      searchTimer = setTimeout(() => { searchQuery = q; runSearch(q); }, 300);
+    });
+    csSearchInput.addEventListener('keydown', (e) => {
+      e.stopPropagation(); // 输入时不要触发全局快捷键
+      if (e.key === 'Escape') { e.preventDefault(); exitSearch(); csSearchInput.blur(); }
+      else if (e.key === 'Enter') {
+        // 回车立即搜，不等防抖
+        e.preventDefault();
+        if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
+        const q = csSearchInput.value.trim();
+        if (q) { searchQuery = q; runSearch(q); } else exitSearch();
+      }
+    });
+  }
+  if (csSearchClear) {
+    csSearchClear.addEventListener('click', () => {
+      exitSearch();
+      if (csSearchInput) csSearchInput.focus();
     });
   }
 
@@ -644,14 +939,23 @@
   const renderToolCall = (sid, ev) => window.__toolcards.renderToolCall(sid, ev);
   const renderToolResult = (sid, ev) => window.__toolcards.renderToolResult(sid, ev);
 
-  function showChatError(message) {
+  /**
+   * 会话流里的内联系统提示。
+   * error = 操作失败；warn = 需要注意但不是失败的状态变更（权限/沙箱/上下文压缩等）；
+   * info = 中性通知（如分叉成功）。三者共用一个原语，避免每处各写一套样式。
+   */
+  const NOTICE_ICON = { info: 'ℹ', warn: '⚠', error: '⚠' };
+  function showChatNotice(message, kind = 'info') {
     const div = document.createElement('div');
-    div.className = 'msg msg-assistant';
-    div.style.borderColor = 'rgba(255,107,53,0.45)';
-    div.style.background = 'rgba(255,107,53,0.08)';
-    div.textContent = `⚠ ${message}`;
+    div.className = `msg msg-assistant msg-notice notice-${kind}`;
+    div.textContent = `${NOTICE_ICON[kind] || NOTICE_ICON.info} ${message}`;
     messagesEl.appendChild(div);
     scrollBottom(false);
+    return div;
+  }
+
+  function showChatError(message) {
+    return showChatNotice(message, 'error');
   }
 
   function makeTyping() {
@@ -1973,6 +2277,12 @@ class CommandPanel {
   chatCollapsedBar.addEventListener('click', () => applyCollapsed(false));
 
   // ---------------- UI 联动 ----------------
+  /** 读一次 host.describe 的能力快照；失败不阻塞界面，只是"在文件夹中显示"保持可点、点击后再报错。 */
+  async function loadHostCaps() {
+    const r = await api.hostDescribe();
+    hostCaps = r.ok ? (r.value || null) : null;
+  }
+
   function setConnected(on) {
     running = on;
     if (on) {
@@ -1982,6 +2292,7 @@ class CommandPanel {
       api.chatConnect().then(() => {
         refreshSessions();
         loadWorkspaces();
+        loadHostCaps();
       });
     } else {
       shell.style.display = 'none';
@@ -1989,6 +2300,7 @@ class CommandPanel {
       currentSessionId = null;
       streamMsg = null;
       domBlocks = new Map();
+      hostCaps = null;
       ctStatusDot.className = 'ct-status-dot idle';
       ctStatusText.textContent = '空闲';
       ctOther.hidden = true;

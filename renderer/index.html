@@ -158,6 +158,11 @@
               <button class="mini-btn cs-collapse" id="chatCollapseSessions" title="收起历史面板">«</button>
             </div>
           </div>
+          <div class="cs-search" id="csSearchRow">
+            <span class="cs-search-ic" aria-hidden="true">🔍</span>
+            <input type="text" id="csSearchInput" class="cs-search-input" autocomplete="off" spellcheck="false" />
+            <button class="cs-search-clear" id="csSearchClear" type="button" hidden>✕</button>
+          </div>
           <div class="chat-sessions-list" id="chatSessions"></div>
         </aside>
         <button class="chat-collapsed-bar" id="chatCollapsedBar" hidden title="展开历史面板">☰</button>
@@ -549,6 +554,7 @@
   <script src="i18n.js"></script>
   <script src="markdown.js"></script>
   <script src="toolcards.js"></script>
+  <script src="contextmenu.js"></script>
   <script src="starfield.js"></script>
   <script src="settings.js"></script>
   <script src="dashboard.js"></script>

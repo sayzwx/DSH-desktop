@@ -212,6 +212,137 @@ async function main() {
       failures.push(`katex 未产出公式 HTML: ${JSON.stringify(String(katexOut).slice(0, 120))}`);
     }
 
+    // --- 轨道 A：会话重命名 / 搜索 / 分叉 / 右键菜单 ---
+    // 先在 Node 侧探测 :3080。只有引擎已在线才调 startHarness：
+    // main.js:369 的 startHarness 在端口空闲时会 discoverHarness 失败并触发 autoInstallHarness，
+    // 那会真的下载安装一个引擎；端口在线时它只 setState('running') 接管，不另起进程。
+    const engineUp = await new Promise((resolve) => {
+      const req = http.get('http://127.0.0.1:3080/api/host.describe', { timeout: 2500 }, (res) => {
+        res.resume(); // 只关心连得上，不关心状态码（该端点是 POST，GET 会 4xx）
+        resolve(true);
+      });
+      req.on('error', () => resolve(false));
+      req.on('timeout', () => { req.destroy(); resolve(false); });
+    });
+
+    if (!engineUp) {
+      console.log('  (引擎未在线 — 跳过需要连接态的轨道 A 断言；端口空闲时 startHarness 会触发引擎自动安装，不能调)');
+    } else {
+      const started = await evalJs(`window.api.startHarness()`);
+      await new Promise((r) => setTimeout(r, 2500)); // 等 setState → chatConnect → refreshSessions
+      if (!started || started.ok !== true) failures.push(`startHarness 接管失败: ${JSON.stringify(started)}`);
+
+      check('搜索框 placeholder 取自 i18n',
+        await evalJs(`document.getElementById('csSearchInput')?.placeholder`), '搜索会话内容…');
+
+      const sidebar = await evalJs(`(() => {
+        const rows = [...document.querySelectorAll('#chatSessions .chat-session')];
+        return {
+          rowCount: rows.length,
+          withRenameBtn: rows.filter((r) => r.querySelector('.cs-rename')).length,
+          hasGroupOrEmpty: !!document.querySelector('#chatSessions .ws-group, #chatSessions .chat-empty'),
+        };
+      })()`);
+      if (sidebar.rowCount > 0) {
+        check('每个会话行都带改名按钮', sidebar.withRenameBtn, sidebar.rowCount);
+      } else {
+        console.log('  (当前无可见会话 — 跳过会话行断言，只验证空态渲染)');
+        check('无会话时渲染空态或分组', sidebar.hasGroupOrEmpty, true);
+      }
+
+      // 真实驱动一次搜索。session.search 只读，不改动引擎状态。
+      // 本机引擎把 session-query 配成 openAt:'never'，所以确定性路径是降级面板而非结果列表；
+      // 两种结果都算通过，但降级面板必须真的带出配置片段与复制按钮。
+      // 轮询而非固定睡眠：防抖 300ms + IPC + 引擎 RPC 往返的总耗时随机器负载漂移，
+      // 实测 1200ms 偶发不够、1500ms 才稳，固定值迟早变成 flaky 测试。
+      const searched = await evalJs(`(async () => {
+        const waitFor = async (fn, timeoutMs) => {
+          const deadline = Date.now() + timeoutMs;
+          for (;;) {
+            if (fn()) return true;
+            if (Date.now() > deadline) return false;
+            await new Promise((r) => setTimeout(r, 150));
+          }
+        };
+        const input = document.getElementById('csSearchInput');
+        input.value = 'e';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        const settled = await waitFor(
+          () => document.querySelector('#chatSessions .cs-search-off, #chatSessions .cs-search-msg'), 5000);
+        const off = document.querySelector('#chatSessions .cs-search-off');
+        const msg = document.querySelector('#chatSessions .cs-search-msg');
+        const shape = {
+          settled,
+          disabled: !!off,
+          hasMsg: !!msg,
+          msgText: msg ? msg.textContent : null,
+          offHasSnippet: off ? /openAt:\\s*first-search/.test(off.querySelector('.cs-off-code')?.textContent || '') : false,
+          offHasCopy: off ? !!off.querySelector('#csOffCopy') : false,
+          resultRows: document.querySelectorAll('#chatSessions .cs-result').length,
+          groups: document.querySelectorAll('#chatSessions .ws-group').length,
+        };
+        input.value = '';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        shape.backToGroups = await waitFor(
+          () => document.querySelector('#chatSessions .ws-group, #chatSessions .chat-empty'), 3000);
+        shape.offGoneAfterClear = !document.querySelector('#chatSessions .cs-search-off');
+        return shape;
+      })()`);
+      if (searched?.__error) failures.push(`搜索驱动抛错: ${searched.__error}`);
+      else {
+        check('搜索在 5s 内出结果', searched.settled, true);
+        check('搜索后渲染结果视图头或未启用面板', searched.hasMsg || searched.disabled, true);
+        if (searched.disabled) {
+          check('降级面板带出 openAt 配置片段', searched.offHasSnippet, true);
+          check('降级面板带复制按钮', searched.offHasCopy, true);
+          check('清空查询后降级面板消失', searched.offGoneAfterClear, true);
+        }
+        check('搜索视图下不再渲染分组', searched.groups, 0);
+        check('清空查询后回到分组/空态视图', searched.backToGroups, true);
+        console.log(`  (搜索 "e": ${searched.disabled ? '引擎未启用全文搜索 → 降级面板' : `${searched.msgText}；命中行 ${searched.resultRows}`})`);
+      }
+    }
+
+    // 右键菜单组件：不依赖引擎，任何时候都能测
+    const menuProbe = await evalJs(`(() => {
+      let clicked = null;
+      window.__ctxMenu.open(120, 120, [
+        { label: '甲', onSelect: () => { clicked = '甲'; } },
+        { label: '乙', disabled: true, onSelect: () => { clicked = '乙'; } },
+        { separator: true },
+        { label: '丙', danger: true, onSelect: () => { clicked = '丙'; } },
+      ]);
+      const menu = document.querySelector('.ctx-menu');
+      const items = menu ? [...menu.querySelectorAll('.ctx-item')] : [];
+      const shape = {
+        present: !!menu,
+        itemCount: items.length,
+        sepCount: menu ? menu.querySelectorAll('.ctx-sep').length : 0,
+        disabledCount: items.filter((b) => b.disabled).length,
+        dangerCount: menu ? menu.querySelectorAll('.ctx-danger').length : 0,
+        inViewport: menu ? (() => { const r = menu.getBoundingClientRect(); return r.left >= 0 && r.top >= 0; })() : false,
+      };
+      if (items[0]) items[0].click();
+      shape.closedAfterClick = !document.querySelector('.ctx-menu');
+      shape.callbackRan = clicked === '甲';
+      window.__ctxMenu.open(120, 120, [{ label: '丁', onSelect: () => {} }]);
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      shape.closedOnEscape = !document.querySelector('.ctx-menu');
+      return shape;
+    })()`);
+    if (menuProbe?.__error) failures.push(`右键菜单探针抛错: ${menuProbe.__error}`);
+    else {
+      check('菜单已渲染', menuProbe.present, true);
+      check('菜单项数量', menuProbe.itemCount, 3);
+      check('分隔线数量', menuProbe.sepCount, 1);
+      check('禁用项不可点', menuProbe.disabledCount, 1);
+      check('danger 项带标记类', menuProbe.dangerCount, 1);
+      check('菜单落在视口内', menuProbe.inViewport, true);
+      check('点击后菜单先关闭', menuProbe.closedAfterClick, true);
+      check('点击后回调执行', menuProbe.callbackRan, true);
+      check('Esc 关闭菜单', menuProbe.closedOnEscape, true);
+    }
+
     // --- RPC 桥：preload 暴露面 ---
     // 只调只读方法，或用必定失败的路径触发错误分支。开发实例的 rpcCall 同样指向
     // 127.0.0.1:3080，正式版引擎可能正在那里跑，调用 chat:rename / chat:fork / goal:* /
@@ -276,7 +407,7 @@ async function main() {
     for (const f of failures) console.error(`  - ${f}`);
     process.exit(1);
   }
-  console.log('PASS: 渲染层冒烟（模块挂载 / markdown / 工具卡片 / i18n 与键位对齐 / vendored 库 / RPC 桥 / 启动无错误）');
+  console.log('PASS: 渲染层冒烟（模块 / markdown / 工具卡片 / i18n / vendored / 轨道A 搜索与右键菜单 / RPC 桥 / 启动无错误）');
 }
 
 main();
