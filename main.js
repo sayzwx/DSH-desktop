@@ -133,6 +133,15 @@ function showMainWindow() {
   }
 }
 
+// 开发实例隔离：单实例锁按 userData 路径判定，开发副本与已安装的正式版共用同一 userData 时，
+// 从仓库启动的实例拿不到锁会立即退出并聚焦到正式版窗口——"改的是开发副本、测的是正式版"，
+// 且不会报任何错。设 DSH_DEV_INSTANCE=<tag> 把 userData 指到同级独立目录，两者即可并存。
+// 必须在 requestSingleInstanceLock 之前设置才生效。
+if (process.env.DSH_DEV_INSTANCE) {
+  const prodUserData = app.getPath('userData');
+  app.setPath('userData', `${prodUserData}-dev-${process.env.DSH_DEV_INSTANCE}`);
+}
+
 // 单实例：再次双击 DSH.exe / 快捷方式时唤回既有窗口，而不是开第二个进程
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
@@ -685,6 +694,96 @@ async function rpcCallTypert(method, args) {
     return { ok: false, error: body.result?.error || { message: 'unknown rpc error' } };
   }
   return { ok: true, value: body.result.value };
+}
+
+/**
+ * 表驱动的 RPC 桥：把引擎的纯透传方法一次性暴露给渲染层。
+ *
+ * 每个条目显式挑选字段而非整体透传 —— 引擎侧用 zod 严格 schema 校验载荷，
+ * 渲染层多带一个 UI 专用字段就会让整个请求被拒。可选字段留空时不写进载荷
+ * （JSON 里出现 undefined 值会被 zod 当成显式传入而校验失败）。
+ *
+ * 返回统一为 { ok:true, value } 或 { ok:false, error, code }。code 必须透传：
+ * 调用方靠 title-invalid / fork-unavailable / workspace-name-conflict 这类错误码
+ * 给出可理解的提示，而不是把裸错误码抛给用户。
+ *
+ * 载荷契约以引擎 harness/packages/host/apiproxy/src/api/ 下的
+ * SessionsApi / SubagentsApi / WorkspaceApi / HostApi / AgentPresetsApi / GoalsApi /
+ * SettingsApi 为准（注册表见同目录 rpc-map.ts）。
+ *
+ * 有真实主进程逻辑的方法不走这张表，仍各自单独 ipcMain.handle：
+ * chat:send 要 stage 上传文件、chat:history 要折叠 chunk 并截断。
+ */
+const RPC_BRIDGE = {
+  // ---- 会话：重命名 / 全文搜索 / 分叉 / 队列变更 ----
+  'chat:rename': ['session.rename', (a) => ({ sessionId: a.sessionId, title: a.title })],
+  'chat:search': ['session.search', (a) => ({ query: a.query })],
+  'chat:fork': ['session.fork', (a) => withOptional({ sessionId: a.sessionId }, 'atSeq', a.atSeq)],
+  // action: {kind:'edit',content} | {kind:'remove'} | {kind:'steer'}
+  'chat:updateQueue': ['session.updateQueue', (a) => ({ sessionId: a.sessionId, itemId: a.itemId, action: a.action })],
+
+  // ---- Goal：目标条的六个变更动词，全部携带 CAS ref ----
+  'goal:create': ['goal.create', (a) => withOptional({ sessionId: a.sessionId, objective: a.objective }, 'maxGoalRounds', a.maxGoalRounds)],
+  'goal:edit': ['goal.edit', (a) => withOptional(withOptional({ sessionId: a.sessionId, ref: a.ref }, 'objective', a.objective), 'maxGoalRounds', a.maxGoalRounds)],
+  'goal:pause': ['goal.pause', (a) => ({ sessionId: a.sessionId, ref: a.ref })],
+  'goal:resume': ['goal.resume', (a) => ({ sessionId: a.sessionId, ref: a.ref })],
+  'goal:complete': ['goal.complete', (a) => ({ sessionId: a.sessionId, ref: a.ref })],
+  'goal:clear': ['goal.clear', (a) => ({ sessionId: a.sessionId, ref: a.ref })],
+
+  // ---- 子 agent：地址是扁平的 {parentSessionId, childSessionId, mode} ----
+  'subagent:list': ['subagent.list', (a) => ({ parentSessionId: a.parentSessionId })],
+  'subagent:history': ['subagent.history', (a) => withOptional(withOptional(
+    subagentAddress(a), 'beforeSeq', a.beforeSeq), 'maxMessages', a.maxMessages)],
+  // prompt / interrupt 只对 mode:'continuable' 的子会话有效，one-shot 是只读执行记录
+  'subagent:prompt': ['subagent.prompt', (a) => withOptional({ ...subagentAddress(a), content: a.content }, 'clientTimeZone', a.clientTimeZone)],
+  'subagent:interrupt': ['subagent.interrupt', (a) => subagentAddress(a)],
+
+  // ---- 工作区：重命名 / 删除 / 分组排序 / 会话排序 ----
+  'chat:renameWorkspace': ['workspace.rename', (a) => ({ workspaceId: a.workspaceId, title: a.title })],
+  // 只删注册表：目录、用户文件、会话日志都不动，这些会话随之变为未分组
+  'chat:deleteWorkspace': ['workspace.delete', (a) => ({ workspaceId: a.workspaceId })],
+  'chat:moveWorkspace': ['workspace.insertBefore', (a) => withOptional({ workspaceId: a.workspaceId }, 'beforeWorkspaceId', a.beforeWorkspaceId)],
+  'chat:moveSession': ['workspace.insertSessionBefore', (a) => withOptional(
+    { workspaceId: a.workspaceId, sessionId: a.sessionId }, 'beforeSessionId', a.beforeSessionId)],
+
+  // ---- Agent 预设：copy 是唯一的授权写入路径（from=源 id，agentPreset=新 id）----
+  'settings:presetCopy': ['agentPreset.copy', (a) => withOptional({ from: a.from, agentPreset: a.agentPreset }, 'name', a.name)],
+  'settings:presetRemove': ['agentPreset.remove', (a) => ({ agentPreset: a.agentPreset })],
+
+  // ---- 设置：整段替换一个命名空间（mutate 的补集）----
+  'settings:replace': ['settings.replace', (a) => withOptional({ ns: a.ns, section: a.section }, 'expectedRevision', a.expectedRevision)],
+
+  // ---- Host：诊断快照 / 打开路径 ----
+  // describe 返回 { version, cwd, provider?, model?, attachedSessions, home, canOpenPath }，
+  // 其中 canOpenPath 是 openPath 的能力开关，调用前应先读它。
+  // 不接 host.listDirectory / host.createDirectory：两者仅在引擎组合了 browse capability 时可用，
+  // 当前组合装的是 native（原生选择器），调用必定失败；桌面端主进程本就有 fs 与 Electron
+  // 原生 dialog（chat:pickWorkspaceDir 已在用），比引擎的目录浏览能力更强。
+  'host:describe': ['host.describe', () => ({})],
+  'host:openPath': ['host.openPath', (a) => ({ path: a.path })],
+};
+
+/** 仅在值不是 undefined 时写入键，避免把 undefined 传给 zod 严格 schema。 */
+function withOptional(payload, key, value) {
+  if (value !== undefined) payload[key] = value;
+  return payload;
+}
+
+/** 子 agent 地址：mode 决定可用动词，缺省按 one-shot 处理（只读）。 */
+function subagentAddress(a) {
+  return {
+    parentSessionId: a.parentSessionId,
+    childSessionId: a.childSessionId,
+    mode: a.mode === 'continuable' ? 'continuable' : 'one-shot',
+  };
+}
+
+for (const [channel, [method, toPayload]] of Object.entries(RPC_BRIDGE)) {
+  ipcMain.handle(channel, async (_e, args) => {
+    const r = await rpcCall(method, toPayload(args || {}));
+    if (!r.ok) return { ok: false, error: r.error?.message || `${method} failed`, code: r.error?.code };
+    return { ok: true, value: r.value };
+  });
 }
 
 function openStream(kind) {

@@ -91,7 +91,6 @@ contextBridge.exposeInMainWorld('api', {
   checkUpdate: () => ipcRenderer.invoke('updater:check'),
   downloadUpdate: (url) => ipcRenderer.invoke('updater:download', url),
   installUpdate: (exePath) => ipcRenderer.invoke('updater:install', exePath),
-  relaunchApp: () => ipcRenderer.invoke('app:relaunch'),
   onUpdaterProgress: (cb) => ipcRenderer.on('updater:progress', (_e, p) => cb(p)),
   onUpdaterResult: (cb) => ipcRenderer.on('updater:result', (_e, p) => cb(p)),
   getApiKey: () => ipcRenderer.invoke('settings:getApiKey'),
@@ -99,4 +98,43 @@ contextBridge.exposeInMainWorld('api', {
   zenuaStatus: () => ipcRenderer.invoke('zenua:status'),
   zenuaEnable: () => ipcRenderer.invoke('zenua:enable'),
   zenuaDisable: () => ipcRenderer.invoke('zenua:disable'),
+
+  // ---- 以下为表驱动 RPC 桥（见 main.js 的 RPC_BRIDGE）----
+  // 返回值统一：成功 { ok:true, value }，失败 { ok:false, error, code }。
+  // code 是引擎错误码（title-invalid / fork-unavailable / workspace-name-conflict 等），
+  // 调用方据此给出可理解的提示，不要把裸码抛给用户。
+  // 会话
+  chatRename: (sessionId, title) => ipcRenderer.invoke('chat:rename', { sessionId, title }),
+  chatSearch: (query) => ipcRenderer.invoke('chat:search', { query }),
+  chatFork: (sessionId, atSeq) => ipcRenderer.invoke('chat:fork', { sessionId, atSeq }),
+  chatUpdateQueue: (sessionId, itemId, action) => ipcRenderer.invoke('chat:updateQueue', { sessionId, itemId, action }),
+  // Goal（六个变更动词都要带上当前投影里的 CAS ref）
+  goalCreate: (sessionId, objective, maxGoalRounds) => ipcRenderer.invoke('goal:create', { sessionId, objective, maxGoalRounds }),
+  goalEdit: (sessionId, ref, objective, maxGoalRounds) => ipcRenderer.invoke('goal:edit', { sessionId, ref, objective, maxGoalRounds }),
+  goalPause: (sessionId, ref) => ipcRenderer.invoke('goal:pause', { sessionId, ref }),
+  goalResume: (sessionId, ref) => ipcRenderer.invoke('goal:resume', { sessionId, ref }),
+  goalComplete: (sessionId, ref) => ipcRenderer.invoke('goal:complete', { sessionId, ref }),
+  goalClear: (sessionId, ref) => ipcRenderer.invoke('goal:clear', { sessionId, ref }),
+  // 子 agent（addr = { parentSessionId, childSessionId, mode }；
+  // mode 'one-shot' 是只读执行记录，'continuable' 才能续聊与中断）
+  subagentList: (parentSessionId) => ipcRenderer.invoke('subagent:list', { parentSessionId }),
+  subagentHistory: (addr, beforeSeq, maxMessages) =>
+    ipcRenderer.invoke('subagent:history', { ...addr, beforeSeq, maxMessages }),
+  subagentPrompt: (addr, content, clientTimeZone) =>
+    ipcRenderer.invoke('subagent:prompt', { ...addr, content, clientTimeZone }),
+  subagentInterrupt: (addr) => ipcRenderer.invoke('subagent:interrupt', addr),
+  // 工作区（delete 只删注册表，目录与会话日志不动，会话随之变为未分组）
+  chatRenameWorkspace: (workspaceId, title) => ipcRenderer.invoke('chat:renameWorkspace', { workspaceId, title }),
+  chatDeleteWorkspace: (workspaceId) => ipcRenderer.invoke('chat:deleteWorkspace', { workspaceId }),
+  chatMoveWorkspace: (workspaceId, beforeWorkspaceId) => ipcRenderer.invoke('chat:moveWorkspace', { workspaceId, beforeWorkspaceId }),
+  chatMoveSession: (workspaceId, sessionId, beforeSessionId) =>
+    ipcRenderer.invoke('chat:moveSession', { workspaceId, sessionId, beforeSessionId }),
+  // Agent 预设（copy: from=源 id，agentPreset=新 id）
+  copyPreset: (from, agentPreset, name) => ipcRenderer.invoke('settings:presetCopy', { from, agentPreset, name }),
+  removePreset: (agentPreset) => ipcRenderer.invoke('settings:presetRemove', { agentPreset }),
+  // 设置
+  replaceSettings: (ns, section, expectedRevision) => ipcRenderer.invoke('settings:replace', { ns, section, expectedRevision }),
+  // Host（openPath 受 host.describe 返回的 canOpenPath 门控，调用前先读它）
+  hostDescribe: () => ipcRenderer.invoke('host:describe'),
+  hostOpenPath: (path) => ipcRenderer.invoke('host:openPath', { path }),
 });
