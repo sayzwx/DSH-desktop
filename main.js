@@ -1,5 +1,5 @@
 const { app, BrowserWindow, ipcMain, shell, dialog, net } = require('electron');
-const { Tray, Menu, nativeImage } = require('electron');
+const { Tray, Menu, nativeImage, Notification } = require('electron');
 const { spawn, spawnSync, execFile } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -784,6 +784,64 @@ for (const [channel, [method, toPayload]] of Object.entries(RPC_BRIDGE)) {
     if (!r.ok) return { ok: false, error: r.error?.message || `${method} failed`, code: r.error?.code };
     return { ok: true, value: r.value };
   });
+}
+
+// ---------------- 系统通知 ----------------
+// 本应用主打"关窗只是隐藏到托盘、Harness 后台常驻"，但此前长任务跑完没有任何提示，
+// 用户只能反复切回窗口看。这里补上：回合结束且用户没在看这个窗口时通知一次。
+function notifyPrefsPath() {
+  return path.join(app.getPath('userData'), 'notify-prefs.json');
+}
+
+function readNotifyPrefs() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(notifyPrefsPath(), 'utf8'));
+    return { enabled: raw.enabled !== false, onlyWhenHidden: raw.onlyWhenHidden !== false };
+  } catch {
+    // 文件不存在或损坏都按默认值走：开启，且仅在窗口不可见时通知
+    return { enabled: true, onlyWhenHidden: true };
+  }
+}
+
+function writeNotifyPrefs(prefs) {
+  try {
+    fs.mkdirSync(path.dirname(notifyPrefsPath()), { recursive: true });
+    fs.writeFileSync(notifyPrefsPath(), JSON.stringify(prefs, null, 2), 'utf8');
+    return true;
+  } catch (err) {
+    pushLog('stderr', `[通知偏好写入失败] ${err.message}`);
+    return false;
+  }
+}
+
+/** 用户此刻是否正看着主窗口；看着就不打扰。 */
+function userIsLookingAtWindow() {
+  return !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && !mainWindow.isMinimized() && mainWindow.isFocused();
+}
+
+/**
+ * 回合结束时通知。由渲染层在 turn/end 时调用——它才知道会话标题，
+ * 主进程只知道窗口可见性，两边各出自己那份信息。
+ * @param title - 会话标题，用于通知正文。
+ * @returns 是否真的发了通知。
+ */
+function notifyTurnEnd(title) {
+  const prefs = readNotifyPrefs();
+  if (!prefs.enabled) return false;
+  if (prefs.onlyWhenHidden && userIsLookingAtWindow()) return false;
+  const body = title || '';
+  if (Notification.isSupported()) {
+    const n = new Notification({ title: 'DSH · 回合已完成', body, silent: false });
+    n.on('click', () => showMainWindow());
+    n.show();
+  } else if (tray) {
+    // 少数环境不支持系统通知，用托盘气泡兜底
+    tray.displayBalloon({ title: 'DSH · 回合已完成', content: body });
+  } else {
+    return false;
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.flashFrame(true);
+  return true;
 }
 
 function openStream(kind) {
@@ -2541,7 +2599,96 @@ ipcMain.handle('updater:download', async (_e, url) => {
   return { ok: false, error: '所有下载源均失败（GitHub 及加速镜像不可达）' };
 });
 
+/** 把渲染层动作转发过去；主进程不操作 DOM。 */
+function sendMenu(action, extra) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('app:menu', { action, ...(extra || {}) });
+  }
+}
+
+/**
+ * 应用菜单与快捷键。
+ * 编辑菜单全部用 role：缺了它，部分焦点场景下的复制/粘贴只能依赖 Chromium 默认行为，
+ * 表现随平台漂移。F5 绑"重启 Harness"而不是刷新页面，刷新用 Ctrl+Shift+R，
+ * 菜单文案写清楚以免用户按 F5 期望刷新时困惑。
+ */
+function buildApplicationMenu() {
+  const template = [
+    {
+      label: '文件',
+      submenu: [
+        { label: '新会话', accelerator: 'CmdOrCtrl+N', click: () => sendMenu('newSession') },
+        { label: '隐藏到托盘', accelerator: 'CmdOrCtrl+W', click: () => sendMenu('hideToTray') },
+        { type: 'separator' },
+        { label: '停止 Harness 并退出', click: () => sendMenu('quitWithService') },
+      ],
+    },
+    {
+      label: '编辑',
+      submenu: [
+        { role: 'undo', label: '撤销' },
+        { role: 'redo', label: '重做' },
+        { type: 'separator' },
+        { role: 'cut', label: '剪切' },
+        { role: 'copy', label: '复制' },
+        { role: 'paste', label: '粘贴' },
+        { role: 'selectAll', label: '全选' },
+      ],
+    },
+    {
+      label: '视图',
+      submenu: [
+        { label: '仪表盘', accelerator: 'CmdOrCtrl+1', click: () => sendMenu('navigate', { page: 'dashboard' }) },
+        { label: '对话', accelerator: 'CmdOrCtrl+2', click: () => sendMenu('navigate', { page: 'chat' }) },
+        { label: '实时日志', accelerator: 'CmdOrCtrl+3', click: () => sendMenu('navigate', { page: 'logs' }) },
+        { label: '结果查看', accelerator: 'CmdOrCtrl+4', click: () => sendMenu('navigate', { page: 'results' }) },
+        { label: '设置与主题', accelerator: 'CmdOrCtrl+,', click: () => sendMenu('navigate', { page: 'settings' }) },
+        { label: '插件市场', accelerator: 'CmdOrCtrl+5', click: () => sendMenu('navigate', { page: 'market' }) },
+        { type: 'separator' },
+        { role: 'reload', label: '重新加载页面', accelerator: 'CmdOrCtrl+Shift+R' },
+        { role: 'toggleDevTools', label: '开发者工具', accelerator: 'CmdOrCtrl+Shift+I' },
+        { type: 'separator' },
+        { role: 'resetZoom', label: '实际大小' },
+        { role: 'zoomIn', label: '放大' },
+        { role: 'zoomOut', label: '缩小' },
+      ],
+    },
+    {
+      label: '会话',
+      submenu: [
+        { label: '搜索会话内容', accelerator: 'CmdOrCtrl+K', click: () => sendMenu('focusSearch') },
+      ],
+    },
+    {
+      label: '引擎',
+      submenu: [
+        { label: '启动 Harness', click: () => sendMenu('startHarness') },
+        { label: '重启 Harness（不是刷新页面）', accelerator: 'F5', click: () => sendMenu('restartHarness') },
+        { label: '停止 Harness', click: () => sendMenu('stopHarness') },
+        { type: 'separator' },
+        { label: '打开 Web UI (:3080)', click: () => sendMenu('openWeb') },
+      ],
+    },
+    { role: 'windowMenu', label: '窗口' },
+    {
+      role: 'help',
+      label: '帮助',
+      submenu: [
+        { label: 'DSH Desktop 仓库', click: () => shell.openExternal('https://github.com/sayzwx/DSH-desktop') },
+        { label: 'DeepSeek Harness 仓库', click: () => shell.openExternal('https://github.com/deepseek-ai/DeepSeek-Harness') },
+        { type: 'separator' },
+        {
+          label: '关于 DSH Desktop',
+          click: () => sendMenu('about', { version: app.getVersion(), engine: HARNESS_DIR || '' }),
+        },
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 app.whenReady().then(() => {
+  buildApplicationMenu();
   createWindow();
   createTray();
   ensureShortcut();
@@ -2573,6 +2720,15 @@ ipcMain.handle('windows:list', () => ({
     id: rec.id, label: rec.label, kind: rec.kind, title: rec.title || '', visible: !!(win && !win.isDestroyed() && win.isVisible()),
   })),
 }));
+ipcMain.handle('notify:getPrefs', () => ({ ok: true, ...readNotifyPrefs() }));
+ipcMain.handle('notify:setPrefs', (_e, patch) => {
+  const next = { ...readNotifyPrefs(), ...(patch || {}) };
+  const ok = writeNotifyPrefs(next);
+  return { ok, ...next };
+});
+// 渲染层在 turn/end 时调用：它知道会话标题，主进程知道窗口可见性
+ipcMain.handle('notify:turnEnd', (_e, title) => ({ ok: true, notified: notifyTurnEnd(title) }));
+
 ipcMain.handle('app:hideToTray', () => {
   winWasVisible = true;
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();

@@ -355,5 +355,57 @@ $('#bgQuitOnlyBtn')?.addEventListener('click', () => {
   }
 });
 
+// ---------------- 应用菜单 / 快捷键动作 ----------------
+// 菜单与 accelerator 在主进程（见 main.js 的 buildApplicationMenu），动作转发到这里执行。
+// 一律复用页面上既有的控件与逻辑，不在菜单路径上重写一遍启停与确认对话框——
+// 两条入口各写一份，行为迟早分叉。
+api.onMenuAction((a) => {
+  if (!a || !a.action) return;
+  const click = (sel) => document.querySelector(sel)?.click();
+  switch (a.action) {
+    case 'navigate':
+      click(`.nav-btn[data-page="${a.page}"]`);
+      break;
+    case 'newSession':
+      // 新会话按钮在对话页，先切过去再点，否则用户看不到结果
+      click('.nav-btn[data-page="chat"]');
+      click('#chatNewSession');
+      break;
+    case 'focusSearch':
+      // 搜索框归对话页管，用事件解耦，这里不需要知道它的存在
+      click('.nav-btn[data-page="chat"]');
+      window.dispatchEvent(new CustomEvent('dsh:focus-session-search'));
+      break;
+    case 'hideToTray':
+      api.hideToTray();
+      break;
+    case 'quitWithService':
+      click('#bgQuitServiceBtn'); // 走设置页那颗按钮，保留它的二次确认
+      break;
+    case 'startHarness':
+      click('#startBtn');
+      break;
+    case 'stopHarness':
+      click('#stopBtn');
+      break;
+    case 'restartHarness':
+      api.stopHarness().then(() => api.startHarness());
+      break;
+    case 'openWeb':
+      click('#openWebBtn');
+      break;
+    case 'about':
+      if (window.__modal) {
+        window.__modal.alert(
+          `DSH Desktop v${a.version || ''}\n引擎目录：${a.engine || '（未探测到）'}\n\nDeepSeek Harness 的社区桌面封装。`,
+          '关于 DSH Desktop',
+        );
+      }
+      break;
+    default:
+      break;
+  }
+});
+
 setInterval(refreshStatus, 5000);
 })();

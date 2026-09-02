@@ -582,6 +582,14 @@
       if (csSearchInput) csSearchInput.focus();
     });
   }
+  // Ctrl+K 由主进程菜单转发到 app.js，再用 window 事件解耦到这里
+  window.addEventListener('dsh:focus-session-search', () => {
+    if (!csSearchInput) return;
+    // 侧栏收起时先展开，否则聚焦的是一个看不见的输入框
+    if (shell.classList.contains('sessions-collapsed')) applyCollapsed(false);
+    csSearchInput.focus();
+    csSearchInput.select();
+  });
 
   function renderOtherRunning() {
     const n = sessions.filter((s) => s.running && s.sessionId !== currentSessionId).length;
@@ -1961,6 +1969,12 @@ class CommandPanel {
         const files = b.turnFiles.get(ev.data?.turn ?? ev.turn);
         b.lastTurnFiles = files ? [...files] : null;
         b.retry = null;
+        // 对所有会话触发，不只是当前会话：后台会话跑完正是通知的主要场景。
+        // 是否真的弹通知由主进程按窗口可见性决定，这里只把标题送过去。
+        {
+          const s = sessions.find((x) => x.sessionId === p.sessionId);
+          api.notifyTurnEnd((s && s.title) || p.sessionId);
+        }
         if (isCur) {
           removeRetryNotice(b);
           setTurnUI(false);

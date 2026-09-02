@@ -137,4 +137,12 @@ contextBridge.exposeInMainWorld('api', {
   // Host（openPath 受 host.describe 返回的 canOpenPath 门控，调用前先读它）
   hostDescribe: () => ipcRenderer.invoke('host:describe'),
   hostOpenPath: (path) => ipcRenderer.invoke('host:openPath', { path }),
+
+  // ---- 应用菜单 / 快捷键 / 系统通知 ----
+  // 菜单项与快捷键在主进程，页面跳转这类动作转发给渲染层执行，主进程不操作 DOM
+  onMenuAction: (cb) => ipcRenderer.on('app:menu', (_e, action) => cb(action)),
+  // 回合结束时调用：渲染层知道会话标题，主进程知道窗口可见性，由主进程决定是否真的通知
+  notifyTurnEnd: (title) => ipcRenderer.invoke('notify:turnEnd', title),
+  getNotifyPrefs: () => ipcRenderer.invoke('notify:getPrefs'),
+  setNotifyPrefs: (patch) => ipcRenderer.invoke('notify:setPrefs', patch),
 });

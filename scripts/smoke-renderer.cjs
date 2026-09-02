@@ -643,6 +643,33 @@ async function main() {
       check('Esc 关闭菜单', menuProbe.closedOnEscape, true);
     }
 
+    // --- 轨道 G：菜单动作转发 / 系统通知 ---
+    check('onMenuAction 已暴露', await evalJs(`typeof window.api?.onMenuAction`), 'function');
+    const notify = await evalJs(`(async () => {
+      const before = await window.api.getNotifyPrefs();
+      await window.api.setNotifyPrefs({ enabled: false });
+      const afterOff = await window.api.getNotifyPrefs();
+      await window.api.setNotifyPrefs({ enabled: true, onlyWhenHidden: true });
+      const restored = await window.api.getNotifyPrefs();
+      // 测试期间开发窗口可见且聚焦，onlyWhenHidden 应当抑制这次通知
+      const fired = await window.api.notifyTurnEnd('冒烟测试会话');
+      // Ctrl+K 的落点：先切到对话页（隐藏元素拿不到焦点，app.js 的动作也是先切页再派发）
+      document.querySelector('.nav-btn[data-page="chat"]')?.click();
+      window.dispatchEvent(new CustomEvent('dsh:focus-session-search'));
+      const focused = document.activeElement && document.activeElement.id === 'csSearchInput';
+      if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+      return { before, afterOff, restored, fired, focused };
+    })()`);
+    if (notify?.__error) failures.push(`通知探针抛错: ${notify.__error}`);
+    else {
+      check('通知偏好默认开启', notify.before?.enabled, true);
+      check('通知偏好默认仅在窗口隐藏时', notify.before?.onlyWhenHidden, true);
+      check('通知偏好可关闭', notify.afterOff?.enabled, false);
+      check('通知偏好可恢复', notify.restored?.enabled, true);
+      check('窗口可见时不打扰（notified=false）', notify.fired?.notified, false);
+      check('Ctrl+K 事件让搜索框拿到焦点', notify.focused, true);
+    }
+
     // --- RPC 桥：preload 暴露面 ---
     // 只调只读方法，或用必定失败的路径触发错误分支。开发实例的 rpcCall 同样指向
     // 127.0.0.1:3080，正式版引擎可能正在那里跑，调用 chat:rename / chat:fork / goal:* /
@@ -707,7 +734,7 @@ async function main() {
     for (const f of failures) console.error(`  - ${f}`);
     process.exit(1);
   }
-  console.log('PASS: 渲染层冒烟（模块 / markdown / 工具卡片 / i18n / vendored / 轨道A 搜索与右键菜单 / 轨道C 面板 / 轨道D 抽屉 / RPC 桥 / 启动无错误）');
+  console.log('PASS: 渲染层冒烟（模块 / markdown / 工具卡片 / i18n / vendored / 轨道A 搜索与右键菜单 / 轨道C 面板 / 轨道D 抽屉 / 轨道G 通知与菜单 / RPC 桥 / 启动无错误）');
 }
 
 main();
