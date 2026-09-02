@@ -50,7 +50,48 @@ window.__dshLocales['zh-CN'] = {
   'session.fork.notFound': '会话不存在或已被删除',
   'session.fork.failed': '分叉失败：{error}',
 
+  // ---- Markdown 代码块 ----
+  'md.copy': '复制',
+  'md.copied': '已复制',
+  'md.copyFailed': '复制失败',
+
   // ---- 打开路径（host.openPath，受 canOpenPath 门控）----
   'host.openPath.failed': '打开失败：{error}',
   'host.openPath.unavailable': '当前引擎部署不支持从界面打开本地路径',
+
+  // ---- 工具卡片：状态 ----
+  'tool.card.pending': '调用中…',
+  'tool.card.done': '✓ 完成',
+  'tool.card.error': '⚠ 出错',
+  'tool.card.noOutput': '（无输出）',
+  'tool.card.output': '查看输出（{n} 字符）',
+  'tool.card.outputFull': '展开全部（{n} 字符）',
+  'tool.card.outputCollapse': '收起',
+  'tool.card.rawInput': '查看入参',
+  'tool.card.openFile': '打开',
+
+  // ---- 工具卡片：terminal ----
+  'tool.card.exit': 'exit {code}',
+  'tool.card.signal': '被信号 {signal} 终止',
+
+  // ---- 工具卡片：diff ----
+  'tool.card.newFile': '新建文件（无原内容可比对）',
+  'tool.card.diffTooLarge': '文件过大（{old} 行 → {new} 行，逐行比对上限 {cap} 行），已改为显示新内容全文',
+  'tool.card.diffGap': '⋯ {n} 行未改动 ⋯',
+
+  // ---- 工具卡片：search ----
+  // 契约要求不能把截断结果当完整结果呈现，所以截断时必须同时给出总数与已显示数
+  'tool.card.searchTotal': '共 {total} 处命中',
+  'tool.card.searchTruncated': '共 {total} 处命中，已截断显示 {shown} 处',
+  'tool.card.searchFileCount': '{n} 处',
+  'tool.card.pathsTotal': '共 {total} 个路径',
+  'tool.card.pathsTruncated': '共 {total} 个路径，已截断显示 {shown} 个',
+
+  // ---- 工具卡片：read ----
+  'tool.card.readRange': '第 {from}–{to} 行 / 共 {total} 行',
+
+  // ---- 工具卡片：web ----
+  'tool.card.webSources': '{n} 个来源',
+  'tool.card.webSourcesTruncated': '{n} 个来源（已按上限截断）',
+  'tool.card.fetchTruncated': '内容已截断',
 };

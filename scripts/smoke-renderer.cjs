@@ -130,6 +130,49 @@ async function main() {
       await evalJs(`window.__md.block('<script>alert(1)<\\/script>')`),
       '<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>',
     );
+    // 旧实现先整体转义、再对行内代码内容转义第二次，反引号里的 `a < b` 会显示成 a &lt; b
+    check('行内代码不再双重转义', await evalJs(`window.__md.inline('\`a < b\`')`), '<code>a &lt; b</code>');
+    const mdProbe = await evalJs(`(() => {
+      const box = document.createElement('div');
+      box.innerHTML = window.__md.block([
+        '\\\`\\\`\\\`js', 'const a = 1;', '\\\`\\\`\\\`',
+        '- [ ] 待办', '- [x] 已完成',
+        '- 甲', '  - 甲一', '  - 甲二',
+        '- 乙',
+        '行内 $x^2$ 公式',
+        '$$', 'a + b', '$$',
+        '价格 $5 和 $10 不是公式',
+      ].join('\\n'));
+      return {
+        codeBar: !!box.querySelector('.md-code .md-code-bar'),
+        codeLang: (box.querySelector('.md-code-lang') || {}).textContent || null,
+        copyBtn: !!box.querySelector('.md-code-copy'),
+        codeHighlighted: box.querySelectorAll('.md-code pre code .hljs-keyword').length > 0,
+        tasks: box.querySelectorAll('.md-task input[type=checkbox]').length,
+        taskChecked: [...box.querySelectorAll('.md-task input')].filter((c) => c.checked).length,
+        taskReadOnly: [...box.querySelectorAll('.md-task input')].every((c) => c.disabled),
+        nestedUl: box.querySelectorAll('ul ul').length,
+        nestedLeaf: (box.querySelector('ul ul') || {}).textContent || null,
+        inlineMath: box.querySelectorAll('.katex').length,
+        blockMath: !!box.querySelector('.md-math-block .katex'),
+        moneyLiteral: box.textContent.includes('$5 和 $10'),
+      };
+    })()`);
+    if (mdProbe?.__error) failures.push(`markdown 探针抛错: ${mdProbe.__error}`);
+    else {
+      check('代码块带工具条', mdProbe.codeBar, true);
+      check('代码块显示语言标签', mdProbe.codeLang, 'js');
+      check('代码块带复制按钮', mdProbe.copyBtn, true);
+      check('代码块已语法高亮', mdProbe.codeHighlighted, true);
+      check('任务列表项数', mdProbe.tasks, 2);
+      check('任务列表勾选态', mdProbe.taskChecked, 1);
+      check('任务列表复选框只读', mdProbe.taskReadOnly, true);
+      check('嵌套列表产生子 ul', mdProbe.nestedUl, 1);
+      check('子列表内容', (mdProbe.nestedLeaf || '').replace(/\\s+/g, ''), '甲一甲二');
+      check('公式已渲染（行内 + 块级 ≥2 个 katex 节点）', mdProbe.inlineMath >= 2, true);
+      check('块级公式在独立容器', mdProbe.blockMath, true);
+      check('货币写法不被误判为公式', mdProbe.moneyLiteral, true);
+    }
 
     // --- 工具卡片走 chat.js 注入的真实 ctx（验证 init 拿到了可用的 messagesEl）---
     const cardProbe = await evalJs(`(() => {
@@ -169,6 +212,163 @@ async function main() {
       check('pending 态显示参数摘要', cardProbe.pendingArg, 'echo hi');
       check('result 态徽标', cardProbe.doneBadge, '✓ 完成');
       check('result 态输出文本', cardProbe.detail, 'hi\nworld');
+    }
+
+    // 六种卡片 + 未知 card 兜底：用合成的 ToolEventView 直接驱动，
+    // 第三参数就是实时帧上的 p.view（历史回放则挂在 ev.view 上）。
+    const cards = await evalJs(`(() => {
+      const host = document.getElementById('chatMessages');
+      const made = [];
+      const run = (sid, callView, resultView, resultData) => {
+        const callId = 'probe-' + sid;
+        window.__toolcards.renderToolCall(sid, { seq: 1, data: { callId, name: sid, arguments: '{}' } },
+          callView ? { for: 'call', view: callView } : undefined);
+        window.__toolcards.renderToolResult(sid, {
+          seq: 2,
+          data: Object.assign({ callId, name: sid, message: { content: [] } }, resultData || {}),
+        }, resultView ? { for: 'result', view: resultView } : undefined);
+        const el = host.querySelector('[data-call-id="' + callId + '"]');
+        made.push(el);
+        return el;
+      };
+      const q = (el, sel) => el && el.querySelector(sel);
+      const qa = (el, sel) => (el ? [...el.querySelectorAll(sel)] : []);
+      const txt = (el, sel) => { const n = q(el, sel); return n ? n.textContent.trim() : null; };
+      const out = {};
+
+      // terminal：非零退出必须判为失败并显示退出码胶囊
+      const term = run('bash', { card: 'terminal', title: 'echo hi', cwd: '/tmp' },
+        { card: 'terminal', output: 'hi\\nthere', exitCode: 1 });
+      out.termExit = txt(term, '.mt-exit');
+      out.termExitBad = !!q(term, '.mt-exit.bad');
+      out.termBadge = txt(term, '.mt-badge');
+      out.termOutput = (q(term, '.mt-term-out pre') || {}).textContent || null;
+
+      // terminal：被信号杀死时没有 exitCode，用 signal 表述
+      const sig = run('pwsh', { card: 'terminal', title: 'sleep' }, { card: 'terminal', output: '', signal: 'SIGTERM' });
+      out.sigExit = txt(sig, '.mt-exit');
+
+      // diff：增删行、+N/-M 统计、未改动行折叠
+      const diff = run('edit', { card: 'diff', title: 'Edit a.txt', diffs: [{ path: 'a.txt', oldText: 'a\\nb\\nc', newText: 'a\\nB\\nc' }] },
+        { card: 'diff', title: 'Edit a.txt', diffs: [{ path: 'a.txt', oldText: 'a\\nb\\nc', newText: 'a\\nB\\nc' }] });
+      out.diffAdd = qa(diff, '.mt-diff-row.add').length;
+      out.diffDel = qa(diff, '.mt-diff-row.del').length;
+      out.diffCtx = qa(diff, '.mt-diff-row.ctx').length;
+      out.diffStats = txt(diff, '.mt-diff-stats');
+      out.diffPath = txt(diff, '.mt-path');
+      out.diffOpenBtn = !!q(diff, '.mt-path-open');
+
+      // diff：oldText 为 null 表示新建/覆写，无前像可比
+      const created = run('write', null, { card: 'diff', title: 'Write n.txt', diffs: [{ path: 'n.txt', oldText: null, newText: 'x\\ny' }] });
+      out.newFileNote = txt(created, '.mt-diff-note');
+      out.newFileAdd = qa(created, '.mt-diff-row.add').length;
+
+      // diff：超过逐行比对上限要降级而不是卡死主线程
+      const bigOld = Array.from({ length: 600 }, (_, k) => 'old' + k).join('\\n');
+      const bigNew = Array.from({ length: 600 }, (_, k) => 'new' + k).join('\\n');
+      const big = run('big', null, { card: 'diff', title: 'Big', diffs: [{ path: 'b.txt', oldText: bigOld, newText: bigNew }] });
+      out.diffTooLarge = !!q(big, '.mt-diff-toobig');
+
+      // search matches：截断横幅必须同时给出总数与已显示数
+      const sm = run('grep', null, {
+        card: 'search', shape: 'matches', truncated: true, total: 137,
+        files: [{ path: 'f.js', matches: [{ lineNumber: 3, line: 'const x = 1' }, { lineNumber: 9, line: 'x++' }] }],
+      });
+      out.searchBanner = txt(sm, '.mt-search-banner');
+      out.searchRows = qa(sm, '.mt-search-row').length;
+      out.searchFileCount = txt(sm, '.mt-search-count');
+
+      // search paths
+      const sp = run('glob', null, { card: 'search', shape: 'paths', truncated: false, total: 2, paths: ['a.ts', 'b.ts'] });
+      out.pathsBanner = txt(sp, '.mt-search-banner');
+      out.pathsRows = qa(sp, '.mt-path-row').length;
+
+      // read：行号沟槽 + hljs 高亮
+      const rd = run('read', null, {
+        card: 'read', path: 'a.ts', offset: 1, totalLines: 10, lang: 'typescript',
+        lines: [{ number: 1, text: 'const a = 1;' }, { number: 2, text: '// c' }],
+      });
+      out.readGutter = (q(rd, '.mt-read-gutter') || {}).textContent || null;
+      out.readRange = txt(rd, '.mt-read-range');
+      out.readHighlighted = qa(rd, '.mt-read-code .hljs-keyword').length > 0;
+
+      // web search / web fetch
+      const ws = run('web_search', null, {
+        card: 'web', kind: 'search', truncated: false, answer: 'A',
+        sources: [{ url: 'https://x.example/p', title: 'T', snippet: 'S', publishedAt: '2026-01-01' }],
+      });
+      out.webSourceLink = (q(ws, '.mt-web-source a') || {}).textContent || null;
+      out.webSourceHref = (q(ws, '.mt-web-source a') || {}).href || null;
+      out.webAnswer = txt(ws, '.mt-web-answer');
+      const wf = run('web_fetch', null, { card: 'web', kind: 'fetch', url: 'https://x.example/p', statusCode: 404, truncated: true });
+      out.fetchStatus = txt(wf, '.mt-web-status');
+      out.fetchTrunc = txt(wf, '.mt-web-trunc');
+
+      // generic：locations 渲染为可点击 chip
+      const gen = run('other', { card: 'generic', title: 'Do thing', kind: 'read', locations: [{ path: 'z.txt', line: 4 }] },
+        { card: 'generic', title: 'Do thing', content: [{ type: 'text', text: 'result body' }] });
+      out.locChip = txt(gen, '.mt-loc');
+      out.locChipIsButton = (q(gen, '.mt-loc') || {}).tagName || null;
+      out.genericBody = !!q(gen, '.mt-detail');
+
+      // 未知 card 值：上游新增卡类型时必须回落通用卡，不能抛错
+      let unknownThrew = null;
+      try {
+        const un = run('future', { card: 'hologram', title: 'New kind' }, { card: 'hologram', title: 'New kind' });
+        out.unknownFallsBack = !!q(un, '.mt-summary') && !!q(un, '.mt-badge');
+      } catch (e) { unknownThrew = String(e && e.message || e); }
+      out.unknownThrew = unknownThrew;
+
+      // 长输出：不再被硬截到 4000 字符，而是预览 + 展开按钮
+      const longText = 'L'.repeat(9000);
+      const lg = run('longtool', null, { card: 'terminal', output: longText, exitCode: 0 });
+      const pre = q(lg, '.mt-long pre');
+      out.longPreviewShorter = !!pre && pre.textContent.length < longText.length;
+      out.longHasExpandBtn = !!q(lg, '.mt-long-more');
+      if (q(lg, '.mt-long-more')) q(lg, '.mt-long-more').click();
+      out.longExpandedFull = !!pre && pre.textContent.length === longText.length;
+
+      for (const el of made) { if (el && el.isConnected) el.remove(); }
+      return out;
+    })()`);
+
+    if (cards?.__error) failures.push(`卡片探针抛错: ${cards.__error}`);
+    else {
+      check('terminal 退出码胶囊', cards.termExit, 'exit 1');
+      check('terminal 非零退出标红', cards.termExitBad, true);
+      check('terminal 非零退出判为失败', cards.termBadge, '⚠ 出错');
+      check('terminal 输出完整保留', cards.termOutput, 'hi\nthere');
+      check('terminal 信号终止表述', cards.sigExit, '被信号 SIGTERM 终止');
+      check('diff 新增行数', cards.diffAdd, 1);
+      check('diff 删除行数', cards.diffDel, 1);
+      check('diff 上下文行数', cards.diffCtx, 2);
+      check('diff 增删统计', cards.diffStats.replace(/\\s+/g, ' '), '+1 -1');
+      check('diff 文件路径', cards.diffPath, 'a.txt');
+      check('diff 带打开按钮', cards.diffOpenBtn, true);
+      check('diff 新建文件提示', cards.newFileNote, '新建文件（无原内容可比对）');
+      check('diff 新建文件全为新增', cards.newFileAdd, 2);
+      check('diff 超上限降级', cards.diffTooLarge, true);
+      check('search 截断横幅含总数与已显示数', /137/.test(cards.searchBanner || '') && /2/.test(cards.searchBanner || ''), true);
+      check('search 命中行数', cards.searchRows, 2);
+      check('search 文件内命中数', cards.searchFileCount, '2 处');
+      check('paths 横幅', cards.pathsBanner, '共 2 个路径');
+      check('paths 行数', cards.pathsRows, 2);
+      check('read 行号沟槽', cards.readGutter, '1\n2');
+      check('read 行区间', cards.readRange, '第 1–2 行 / 共 10 行');
+      check('read 代码已高亮', cards.readHighlighted, true);
+      check('web 来源标题', cards.webSourceLink, 'T');
+      check('web 来源链接', cards.webSourceHref, 'https://x.example/p');
+      check('web 答案', cards.webAnswer, 'A');
+      check('fetch 状态码', cards.fetchStatus, 'HTTP 404');
+      check('fetch 截断标记', cards.fetchTrunc, '内容已截断');
+      check('generic locations chip', cards.locChip, 'z.txt:4');
+      check('locations chip 是按钮（可点击打开）', cards.locChipIsButton, 'BUTTON');
+      check('generic 有输出详情', cards.genericBody, true);
+      check('未知 card 未抛错', cards.unknownThrew, null);
+      check('未知 card 回落通用卡', cards.unknownFallsBack, true);
+      check('长输出先给预览', cards.longPreviewShorter, true);
+      check('长输出有展开按钮', cards.longHasExpandBtn, true);
+      check('展开后拿到完整内容（不再被截到 4000 字符）', cards.longExpandedFull, true);
     }
 
     // --- i18n 运行时 ---

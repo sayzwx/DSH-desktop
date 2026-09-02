@@ -1059,6 +1059,371 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
 .mt-badge.pending { color: var(--gold); background: rgba(255, 215, 0, 0.12); }
 .mt-badge.done { color: var(--cyan); background: rgba(0, 212, 170, 0.12); }
 .mt-badge.error { color: #ff6c33; background: rgba(255, 108, 51, 0.14); }
+/* ---------------- Markdown 增强（见 renderer/markdown.js）---------------- */
+/* 代码块：顶部一条语言标签 + 复制按钮，代码区沿用既有 pre 观感 */
+.md-code {
+  margin: 6px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(4, 7, 15, 0.6);
+}
+.md-code-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 8px;
+  background: rgba(13, 24, 48, 0.6);
+  border-bottom: 1px solid var(--border);
+}
+.md-code-lang {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  text-transform: lowercase;
+}
+.md-code-copy {
+  margin-left: auto;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  font-size: 9.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.15s var(--ease-light);
+}
+.md-code-copy:hover { color: var(--accent); border-color: var(--accent); }
+.md-code pre {
+  margin: 0;
+  padding: 8px 10px;
+  max-height: 420px;
+  overflow: auto;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+/* 任务列表：复选框只读（模型写的清单不是用户可勾的待办） */
+.md-task {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  list-style: none;
+}
+.md-task input[type='checkbox'] {
+  flex: none;
+  margin: 0;
+  accent-color: var(--accent);
+  pointer-events: none;
+}
+
+/* 块级公式：居中，长公式横向滚动而不是撑破气泡 */
+.md-math-block {
+  margin: 8px 0;
+  padding: 6px 8px;
+  overflow-x: auto;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(13, 24, 48, 0.35);
+}
+
+/* ---------------- 工具卡片：六种展示视图（见 renderer/toolcards.js）---------------- */
+.mt-body {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mt-empty {
+  padding: 5px 8px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+
+/* 长文本：预览 + 按需展开，取代旧的 4000 字符硬截断 */
+.mt-long pre {
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  background: rgba(4, 7, 15, 0.6);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.mt-long-more { margin-top: 5px; }
+
+/* 路径与"打开"按钮：diff / read / search / locations 共用 */
+.mt-path {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--accent);
+  word-break: break-all;
+}
+.mt-path-open { margin-left: auto; }
+.mt-locations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+}
+.mt-loc {
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.mt-loc:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.mt-loc:disabled { cursor: default; opacity: 0.6; }
+
+/* terminal：等宽深色块 + 退出状态胶囊 */
+.mt-term-desc {
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+.mt-term-out pre { background: rgba(2, 4, 10, 0.78); }
+.mt-exit {
+  flex: none;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+}
+.mt-exit.good { color: var(--ok); background: rgba(0, 212, 170, 0.12); }
+.mt-exit.bad { color: var(--warn); background: rgba(255, 108, 51, 0.14); }
+
+/* diff */
+.mt-diff-file {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.mt-diff-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: rgba(13, 24, 48, 0.6);
+  border-bottom: 1px solid var(--border);
+}
+.mt-diff-note {
+  flex: none;
+  font-size: 9.5px;
+  color: var(--gold);
+}
+.mt-diff-stats {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.mt-add { color: var(--ok); }
+.mt-del { color: var(--warn); }
+.mt-diff-rows {
+  max-height: 340px;
+  overflow: auto;
+  background: rgba(4, 7, 15, 0.5);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+.mt-diff-row {
+  display: flex;
+  gap: 6px;
+  padding: 0 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.mt-ln {
+  flex: none;
+  width: 34px;
+  text-align: right;
+  color: var(--text-dim);
+  opacity: 0.65;
+  user-select: none;
+}
+.mt-sign {
+  flex: none;
+  width: 10px;
+  user-select: none;
+}
+.mt-diff-text { flex: 1 1 auto; min-width: 0; }
+.mt-diff-row.add { background: rgba(0, 212, 170, 0.10); }
+.mt-diff-row.add .mt-sign, .mt-diff-row.add .mt-diff-text { color: var(--ok); }
+.mt-diff-row.del { background: rgba(255, 108, 51, 0.10); }
+.mt-diff-row.del .mt-sign, .mt-diff-row.del .mt-diff-text { color: var(--warn); }
+.mt-diff-row.gap {
+  justify-content: center;
+  padding: 2px 8px;
+  font-size: 9.5px;
+  color: var(--text-dim);
+  opacity: 0.75;
+  background: rgba(13, 24, 48, 0.35);
+}
+.mt-diff-toobig {
+  padding: 5px 8px;
+  font-size: 10.5px;
+  color: var(--gold);
+}
+
+/* search：截断横幅 + 按文件分组 */
+.mt-search-banner {
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+.mt-search-file summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 10.5px;
+}
+.mt-search-count {
+  flex: none;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+.mt-search-rows {
+  margin-top: 4px;
+  max-height: 240px;
+  overflow: auto;
+  background: rgba(4, 7, 15, 0.5);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+.mt-search-row { display: flex; gap: 6px; padding: 0 8px; }
+.mt-search-line {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.mt-search-paths {
+  max-height: 240px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.mt-path-row {
+  padding: 1px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  word-break: break-all;
+}
+.mt-path-row:hover { background: var(--panel-hover); color: var(--accent); }
+
+/* read：行号沟槽与代码区必须同字号同行高，否则对不齐 */
+.mt-read-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mt-read-range {
+  flex: none;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.mt-read-body {
+  display: flex;
+  max-height: 340px;
+  overflow: auto;
+  background: rgba(4, 7, 15, 0.55);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.mt-read-gutter,
+.mt-read-code {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+.mt-read-gutter {
+  flex: none;
+  padding: 8px 6px 8px 10px;
+  text-align: right;
+  color: var(--text-dim);
+  opacity: 0.6;
+  user-select: none;
+  white-space: pre;
+  border-right: 1px solid var(--border);
+}
+.mt-read-code {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 8px 10px;
+  white-space: pre;
+  background: transparent;
+}
+
+/* web */
+.mt-web-fetch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.mt-web-status {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(0, 212, 170, 0.12);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--ok);
+}
+.mt-web-trunc {
+  flex: none;
+  font-size: 9.5px;
+  color: var(--gold);
+}
+.mt-web-answer {
+  padding: 6px 8px;
+  border-left: 2px solid var(--accent-2);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text);
+}
+.mt-web-sources { display: flex; flex-direction: column; gap: 5px; }
+.mt-web-source {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.mt-web-source a {
+  font-size: 11px;
+  color: var(--accent);
+  text-decoration: none;
+}
+.mt-web-source a:hover { text-decoration: underline; }
+.mt-web-meta {
+  margin-left: 6px;
+  font-size: 9.5px;
+  color: var(--text-dim);
+}
+.mt-web-snippet {
+  margin-top: 2px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
 .mt-detail {
   border-top: 1px dashed var(--border-strong);
   padding-top: 5px;

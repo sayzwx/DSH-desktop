@@ -54,7 +54,49 @@ window.__dshLocales['en-US'] = {
   'session.fork.notFound': 'Session does not exist or has been removed',
   'session.fork.failed': 'Fork failed: {error}',
 
+  // ---- Markdown code blocks ----
+  'md.copy': 'Copy',
+  'md.copied': 'Copied',
+  'md.copyFailed': 'Copy failed',
+
   // ---- Open path (host.openPath, gated on canOpenPath) ----
   'host.openPath.failed': 'Open failed: {error}',
   'host.openPath.unavailable': 'This engine deployment cannot open local paths from the UI',
+
+  // ---- Tool cards: status ----
+  'tool.card.pending': 'Running…',
+  'tool.card.done': '✓ Done',
+  'tool.card.error': '⚠ Failed',
+  'tool.card.noOutput': '(no output)',
+  'tool.card.output': 'View output ({n} chars)',
+  'tool.card.outputFull': 'Expand all ({n} chars)',
+  'tool.card.outputCollapse': 'Collapse',
+  'tool.card.rawInput': 'View arguments',
+  'tool.card.openFile': 'Open',
+
+  // ---- Tool cards: terminal ----
+  'tool.card.exit': 'exit {code}',
+  'tool.card.signal': 'killed by {signal}',
+
+  // ---- Tool cards: diff ----
+  'tool.card.newFile': 'New file (no prior content to diff against)',
+  'tool.card.diffTooLarge': 'File too large ({old} → {new} lines; line-diff cap is {cap}), showing the new content in full instead',
+  'tool.card.diffGap': '⋯ {n} unchanged lines ⋯',
+
+  // ---- Tool cards: search ----
+  // The contract forbids presenting a capped result as complete, so a truncated
+  // search must show both the total and what is actually displayed.
+  'tool.card.searchTotal': '{total} matches',
+  'tool.card.searchTruncated': '{total} matches, truncated to {shown} shown',
+  'tool.card.searchFileCount': '{n}',
+  'tool.card.pathsTotal': '{total} paths',
+  'tool.card.pathsTruncated': '{total} paths, truncated to {shown} shown',
+
+  // ---- Tool cards: read ----
+  'tool.card.readRange': 'lines {from}–{to} of {total}',
+
+  // ---- Tool cards: web ----
+  'tool.card.webSources': '{n} sources',
+  'tool.card.webSourcesTruncated': '{n} sources (capped)',
+  'tool.card.fetchTruncated': 'content truncated',
 };

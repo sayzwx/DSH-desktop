@@ -933,11 +933,13 @@
     messagesEl,
     esc,
     buf,
+    t,
+    openPath,
     currentSessionId: () => currentSessionId,
     scrollBottom,
   });
-  const renderToolCall = (sid, ev) => window.__toolcards.renderToolCall(sid, ev);
-  const renderToolResult = (sid, ev) => window.__toolcards.renderToolResult(sid, ev);
+  const renderToolCall = (sid, ev, view) => window.__toolcards.renderToolCall(sid, ev, view);
+  const renderToolResult = (sid, ev, view) => window.__toolcards.renderToolResult(sid, ev, view);
 
   /**
    * 会话流里的内联系统提示。
@@ -1042,7 +1044,11 @@
         if ((ev.data?.content || []).length === 0) continue; // 空消息不渲染
         surface.push(ev);
       } else if (ev.type === 'tool/call' || ev.type === 'tool/result') {
-        surface.push(ev);
+        // session.history 给的是 HistoryEntry { event, view? }。view 是宿主算好的工具卡展示视图
+        // （diff / terminal / search / read / web），解包成裸 event 就把它丢了，工具卡只能退回
+        // 通用渲染。仅在工具事件上把 view 附回事件对象，surface 数组仍然同质。
+        const view = events[i].view;
+        surface.push(view ? { ...ev, view } : ev);
       }
     }
     for (const ev of surface.reverse()) {
@@ -1892,7 +1898,8 @@ class CommandPanel {
           b2.calls.set(callId, b.tool);
         }
         if (isCur) {
-          renderToolCall(p.sessionId, ev);
+          // p.view 是宿主算好的展示视图（帧形状 { sessionId, event, view? }），不传就只能渲染通用卡
+          renderToolCall(p.sessionId, ev, p.view);
           renderStatus();
           scrollBottom(false);
         }
@@ -1902,7 +1909,7 @@ class CommandPanel {
       case 'tool/result': {
         b.tool = null;
         if (isCur) {
-          renderToolResult(p.sessionId, ev);
+          renderToolResult(p.sessionId, ev, p.view);
           renderStatus();
           scrollBottom(false);
         }
