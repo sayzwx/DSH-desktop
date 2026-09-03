@@ -15,18 +15,33 @@ function getLayoutRoot() {
   return path.resolve(__dirname, '..', '..', '..'); // 打包形态
 }
 const LAYOUT_ROOT = getLayoutRoot();
-// 旧版固定布局兼容：默认与安装器一致（%LOCALAPPDATA%\DSH），自定义路径时以推导根为准
-const DSH_ROOT = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'DSH') : '';
+// 安装根目录（旧版固定布局兼容 + 引擎/工具的默认落点）：按平台解析。
+// 打包形态优先用 app 相对推导的 LAYOUT_ROOT；DSH_ROOT 是次级兜底与历史固定布局，
+// 各平台都只作为"候选"参与探测（存在性逐一校验），不存在就跳过，绝不绑开发者本机路径。
+function resolveDshRoot() {
+  if (process.platform === 'win32') {
+    return process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'DSH') : '';
+  }
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', 'DSH');
+  }
+  // linux / 其他 POSIX：遵循 XDG 数据目录约定
+  const xdg = process.env.XDG_DATA_HOME;
+  return path.join(xdg || path.join(os.homedir(), '.local', 'share'), 'DSH');
+}
+const DSH_ROOT = resolveDshRoot();
 const DSH_HOME = path.join(os.homedir(), '.dsh');
 const PORT = 3080;
 const LOG_LIMIT = 5000;
 
-// 解析 Node 可执行文件：显式 DSH_NODE_EXE → 安装布局 tools\node（安装根目录）→ 与 app 同级 tools\node → PATH 上的 node
+// 解析 Node 可执行文件：显式 DSH_NODE_EXE → 安装布局 tools/node（安装根目录）→ 与 app 同级 tools/node → PATH 上的 node
+// node 二进制名按平台取（Windows 是 node.exe，mac/linux 是 node）。
 function resolveNodeExe() {
+  const bin = process.platform === 'win32' ? 'node.exe' : 'node';
   const cands = [
     process.env.DSH_NODE_EXE || '',
-    path.join(LAYOUT_ROOT, 'tools', 'node', 'node.exe'),
-    DSH_ROOT ? path.join(DSH_ROOT, 'tools', 'node', 'node.exe') : '',
+    path.join(LAYOUT_ROOT, 'tools', 'node', bin),
+    DSH_ROOT ? path.join(DSH_ROOT, 'tools', 'node', bin) : '',
   ];
   for (const c of cands) if (c && fs.existsSync(c)) return c;
   return 'node';

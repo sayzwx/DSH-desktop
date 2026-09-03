@@ -1,0 +1,103 @@
+name: release
+
+# 跨平台打包矩阵：Windows（Inno Setup 官方链路）/ macOS（dmg+zip）/ Linux（AppImage+deb）。
+# 触发：推送 v* 标签，或手动 dispatch。各平台先跑渲染层冒烟做回归门，再产出安装包，
+# 最后由 release 作业聚合上传到 GitHub Release。
+#
+# 注意：macOS/Linux 产物只能由本工作流的对应 runner 产出并验证（开发者在 Windows 上无法本地验证）；
+# 首次运行后按日志修正 electron-builder / 依赖问题属预期内。
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+          - os: macos-latest
+            name: mac
+          - os: ubuntu-latest
+            name: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      # 渲染层冒烟：CI 上没有引擎（:3080 空闲），脚本会自动跳过需要连接态的断言，
+      # 只验证模块挂载 / markdown / 工具卡片 / i18n / vendored 库 / DOM 骨架等确定性项。
+      - name: Renderer smoke (Windows / macOS)
+        if: matrix.name != 'linux'
+        run: npm run smoke
+
+      - name: Renderer smoke (Linux, xvfb)
+        if: matrix.name == 'linux'
+        run: xvfb-run -a npm run smoke
+
+      # ---- Windows：官方 Inno Setup 链路（build-dist.ps1 → ISCC 编译 dsh-installer.iss）----
+      - name: Build Windows installer (Inno Setup)
+        if: matrix.name == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\scripts\build-dist.ps1
+          choco install innosetup -y --no-progress
+          $iscc = "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { $iscc = "ISCC.exe" }
+          & $iscc .\installer\dsh-installer.iss
+
+      # ---- macOS / Linux：electron-builder ----
+      - name: Build macOS (dmg + zip)
+        if: matrix.name == 'mac'
+        run: npm run dist:mac
+
+      - name: Build Linux (AppImage + deb)
+        if: matrix.name == 'linux'
+        run: npm run dist:linux
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          # electron-builder 默认输出 dist/；Inno Setup 输出见 iss 的 OutputDir（这里宽匹配常见安装包后缀）
+          find dist installer -maxdepth 3 -type f \
+            \( -name '*.dmg' -o -name '*.zip' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.exe' \) \
+            -exec cp {} artifacts/ \; 2>/dev/null || true
+          ls -la artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-${{ matrix.name }}
+          path: artifacts/*
+          if-no-files-found: warn
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: all
+          merge-multiple: true
+      - name: List collected artifacts
+        run: ls -laR all
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: all/*
+          generate_release_notes: true
+          fail_on_unmatched_files: false

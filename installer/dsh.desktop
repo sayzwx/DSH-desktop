@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=DSH
+GenericName=DeepSeek Harness Desktop
+Comment=Electron shell for the DeepSeek Harness engine
+# 打包安装后 electron-builder 会生成对应 .desktop 并填好 Exec/Icon；
+# 手动安装时把本文件复制到 ~/.local/share/applications/ 并按实际路径改 Exec 与 Icon。
+Exec=/usr/bin/dsh %U
+Icon=dsh
+Terminal=false
+Categories=Development;Utility;
+StartupNotify=true
+StartupWMClass=DSH
+Keywords=deepseek;harness;agent;ai;

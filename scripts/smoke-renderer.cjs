@@ -44,13 +44,30 @@ async function waitForPage(deadlineMs) {
 }
 
 function killTree(pid) {
+  if (pid == null) return;
   try {
-    execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore' });
+    if (process.platform === 'win32') {
+      execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore' });
+    } else {
+      // POSIX：先尝试杀进程组，再杀主进程；Electron 主进程退出通常会带走渲染/GPU 子进程
+      try { process.kill(-pid, 'SIGKILL'); } catch { /* 非 detached，无独立进程组，忽略 */ }
+      try { process.kill(pid, 'SIGKILL'); } catch { /* 已退出 */ }
+    }
   } catch { /* 进程可能已自行退出 */ }
 }
 
 async function main() {
-  const electron = path.join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe');
+  // 跨平台解析 Electron 可执行文件：优先 require('electron')（Node 侧返回平台正确的二进制路径），
+  // 回退到 dist 下按平台命名（win32=electron.exe，其他=electron）。这样 CI 的 mac/linux runner 也能跑。
+  let electron = null;
+  try {
+    const resolved = require(path.join(ROOT, 'node_modules', 'electron'));
+    if (typeof resolved === 'string') electron = resolved;
+  } catch { /* 回退到 dist 路径 */ }
+  if (!electron) {
+    const bin = process.platform === 'win32' ? 'electron.exe' : 'electron';
+    electron = path.join(ROOT, 'node_modules', 'electron', 'dist', bin);
+  }
   const child = spawn(electron, [`--remote-debugging-port=${PORT}`, '--remote-allow-origins=*', ROOT], {
     cwd: ROOT,
     stdio: 'ignore',
