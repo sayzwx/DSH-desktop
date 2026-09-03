@@ -57,6 +57,7 @@
   // host.describe 的能力快照（{ version, cwd, home, attachedSessions, canOpenPath }）。
   // canOpenPath 决定"在文件夹中显示"是否可点；同一份数据也供引擎诊断使用。
   let hostCaps = null;
+  let inspectOpen = false;       // 轨道 E：会话透视抽屉是否展开（展开时轨迹 tab 随实时事件刷新）
   let modelState = null;     // 当前会话的 session.models
   let modelLoadError = null; // 模型加载失败信息（区别于"未连接"）
   let streamMsg = null;      // 当前会话正在流的消息 DOM
@@ -84,6 +85,9 @@
         // 状态可见性（轨道 D）
         retry: null,            // llm/retry 的重试进度，retry-started 或 turn 结束时清掉
         rawEvents: [],          // 未分类事件，进"原始事件"调试抽屉（默认关闭）
+        // 事件轨迹（轨道 E）：里程碑事件的有序台账，历史播种 + 实时追加，供透视抽屉的轨迹 tab 读
+        // （不含 assistant/chunk 流式增量，否则台账会被 delta 淹没）
+        eventLog: [],
       });
     }
     return bufs.get(sid);
@@ -1407,9 +1411,17 @@
   // Markdown 渲染器已抽到 renderer/markdown.js（window.__md）；此处仅保留调用点用的别名。
   const mdBlock = (text) => window.__md.block(text);
 
+  // 轨迹台账上限：够回放一整个长会话的里程碑事件，又不至于无界占内存
+  const TRAJ_LIMIT = 3000;
+
   function renderHistory(events) {
     messagesEl.innerHTML = '';
     renderedIds.set(currentSessionId, new Set()); // 整段重绘：重置该会话的去重集合
+    // 轨迹台账由整段历史播种（不含流式 chunk），实时事件随后追加
+    buf(currentSessionId).eventLog = (events || [])
+      .map((h) => h && h.event)
+      .filter((ev) => ev && ev.type && ev.type !== 'assistant/chunk')
+      .slice(-TRAJ_LIMIT);
     const surface = [];
     for (let i = (events || []).length - 1; i >= 0 && surface.length < 80; i--) {
       const ev = events[i]?.event;
@@ -1725,6 +1737,9 @@
     // 面板与 Plan 芯片按会话隔离：不重绘会让上一个会话的 Todo/Goal 残留在 dock 里
     renderPanels();
     renderPlanChip();
+    // 透视抽屉同样按会话隔离：清掉上个会话选中的子 agent / 轨迹行，展开时立即重绘
+    window.__inspector.reset();
+    if (inspectOpen) window.__inspector.render();
     setTurnUI(b.turn);
     loadModels(sessionId);
   }
@@ -2548,6 +2563,13 @@ class ReferencePanel {
     const b = buf(p.sessionId);
     const isCur = p.sessionId === currentSessionId;
 
+    // 轨迹台账（轨道 E）：追加里程碑事件，透视抽屉打开且停在轨迹 tab 时实时刷新
+    if (ev.type !== 'assistant/chunk') {
+      b.eventLog.push(ev);
+      if (b.eventLog.length > TRAJ_LIMIT) b.eventLog.shift();
+      if (isCur && inspectOpen && window.__inspector) window.__inspector.onEvent();
+    }
+
     switch (ev.type) {
       case 'turn/start':
         b.turn = true;
@@ -2907,7 +2929,12 @@ class ReferencePanel {
     if (!drawer) return;
     rawDrawerOpen = !rawDrawerOpen;
     drawer.hidden = !rawDrawerOpen;
-    if (rawDrawerOpen) renderRawDrawer();
+    if (rawDrawerOpen) {
+      // 两个抽屉互斥：打开原始事件就收起透视抽屉
+      const insp = $('#inspectDrawer');
+      if (insp && !insp.hidden) { insp.hidden = true; inspectOpen = false; }
+      renderRawDrawer();
+    }
   }
 
   // 抽屉开关：文案走 i18n，常显（此前这些事件被 default:break 静默丢弃，排查时无从下手）
@@ -2920,6 +2947,39 @@ class ReferencePanel {
   }
   const rawDrawerTitle = $('#rawEventDrawerTitle');
   if (rawDrawerTitle) rawDrawerTitle.textContent = t('raw.drawerTitle');
+
+  // ---------------- 会话透视抽屉（轨道 E：子 agent 目录 / 事件轨迹）----------------
+  window.__inspector.init({
+    host: $('#inspectDrawerBody'),
+    api,
+    esc,
+    t,
+    mdBlock,
+    getCurrentSessionId: () => currentSessionId,
+    getEventLog: (sid) => (sid ? buf(sid).eventLog : []),
+    notify: (msg, kind) => showChatNotice(msg, kind),
+  });
+
+  function toggleInspectDrawer() {
+    const drawer = $('#inspectDrawer');
+    if (!drawer) return;
+    inspectOpen = !inspectOpen;
+    drawer.hidden = !inspectOpen;
+    if (inspectOpen) {
+      // 两个抽屉互斥：打开透视就收起原始事件抽屉
+      const raw = $('#rawEventDrawer');
+      if (raw && !raw.hidden) { raw.hidden = true; rawDrawerOpen = false; }
+      window.__inspector.render();
+    }
+  }
+
+  const ctInspectBtn = $('#ctInspectBtn');
+  if (ctInspectBtn) {
+    ctInspectBtn.hidden = false;
+    ctInspectBtn.textContent = t('inspect.toggle');
+    ctInspectBtn.title = t('inspect.title');
+    ctInspectBtn.onclick = toggleInspectDrawer;
+  }
 
   function handleFrame(msg) {
     const p = msg.payload;

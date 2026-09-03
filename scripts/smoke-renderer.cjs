@@ -118,6 +118,14 @@ async function main() {
     check('__md 已挂载', await evalJs(`typeof window.__md?.block`), 'function');
     check('__md.inline 已挂载', await evalJs(`typeof window.__md?.inline`), 'function');
     check('__toolcards 已挂载', await evalJs(`typeof window.__toolcards?.renderToolCall`), 'function');
+    // 轨道 E：会话透视模块与 DOM 骨架（确定性，不依赖引擎）
+    check('__inspector.render 已挂载', await evalJs(`typeof window.__inspector?.render`), 'function');
+    check('__inspector.onEvent 已挂载', await evalJs(`typeof window.__inspector?.onEvent`), 'function');
+    check('透视抽屉骨架就位', await evalJs(`(() => ({
+      btn: !!document.getElementById('ctInspectBtn'),
+      drawer: !!document.getElementById('inspectDrawer'),
+      tabs: document.querySelectorAll('#inspectTabs .inspect-tab').length,
+    }))()`), { btn: true, drawer: true, tabs: 2 });
 
     // --- markdown 走真实模块 ---
     check(
@@ -570,6 +578,54 @@ async function main() {
       }
     }
 
+    // --- 轨道 E：会话透视（子 agent 目录只读 + 事件轨迹本地台账）---
+    // subagent.list 只读；轨迹台账读 chat.js 的本地 eventLog，不发 RPC。复用轨道 A 已打开的会话。
+    if (engineUp) {
+      const trackE = await evalJs(`(async () => {
+        const waitFor = async (fn, ms) => {
+          const dl = Date.now() + ms;
+          for (;;) { if (fn()) return true; if (Date.now() > dl) return false; await new Promise((r) => setTimeout(r, 120)); }
+        };
+        const out = {};
+        const btn = document.getElementById('ctInspectBtn');
+        const drawer = document.getElementById('inspectDrawer');
+        const body = document.getElementById('inspectDrawerBody');
+        btn.click();
+        out.opened = !drawer.hidden;
+        // 子 agent tab：等加载占位消失、出现目录行 / 空态 / 父不可用提示（只读，取决于本会话有无子 agent）
+        out.subSettled = await waitFor(() => body.querySelector('.sa-row, .inspect-empty, .inspect-warn'), 4000);
+        out.subRows = body.querySelectorAll('.sa-row').length;
+        out.subEmpty = !!body.querySelector('.inspect-empty');
+        // 切到轨迹 tab：读本地事件台账（历史播种），应渲染台账行或空态
+        document.querySelector('#inspectTabs .inspect-tab[data-tab="trajectory"]').click();
+        out.trajSettled = await waitFor(() => body.querySelector('.traj-row, .inspect-empty'), 2000);
+        out.trajRows = body.querySelectorAll('.traj-row').length;
+        out.trajTurns = body.querySelectorAll('.traj-turn').length;
+        const firstRow = body.querySelector('.traj-row');
+        if (firstRow) {
+          firstRow.click();
+          out.inspectorDetail = !!body.querySelector('.traj-inspector .traj-field, .traj-inspector .traj-pre');
+        }
+        btn.click();
+        out.closed = drawer.hidden;
+        return out;
+      })()`);
+      if (trackE?.__error) failures.push(`轨道 E 探针抛错: ${trackE.__error}`);
+      else {
+        check('点击透视按钮展开抽屉', trackE.opened, true);
+        check('子 agent tab 在 4s 内出目录或空态', trackE.subSettled, true);
+        check('轨迹 tab 渲染台账或空态', trackE.trajSettled, true);
+        if (trackE.trajRows > 0) {
+          check('轨迹台账按回合分组', trackE.trajTurns >= 1, true);
+          check('点击台账行在检查器出详情', trackE.inspectorDetail, true);
+        } else {
+          console.log('  (当前会话事件台账为空 — 跳过台账行 / 检查器断言)');
+        }
+        check('再次点击收起抽屉', trackE.closed, true);
+        console.log(`  (轨道 E: 子 agent 行 ${trackE.subRows}${trackE.subEmpty ? '（空态）' : ''}、轨迹行 ${trackE.trajRows}、回合 ${trackE.trajTurns})`);
+      }
+    }
+
     // --- 轨道 C：上下文面板 ---
     // 面板状态由 chat.js 从事件与帧里累积，这里直接用合成状态驱动渲染。
     const panels = await evalJs(`(() => {
@@ -804,7 +860,7 @@ async function main() {
     for (const f of failures) console.error(`  - ${f}`);
     process.exit(1);
   }
-  console.log('PASS: 渲染层冒烟（模块 / markdown / 工具卡片 / i18n / vendored / 轨道A 搜索与右键菜单 / 轨道C 面板 / 轨道D 抽屉 / 轨道F 工作区管理·消息操作条·@引用·typert 只读探针 / 轨道G 通知与菜单 / RPC 桥 / 启动无错误）');
+  console.log('PASS: 渲染层冒烟（模块 / markdown / 工具卡片 / i18n / vendored / 轨道A 搜索与右键菜单 / 轨道C 面板 / 轨道D 抽屉 / 轨道E 会话透视·子agent·轨迹 / 轨道F 工作区管理·消息操作条·@引用·typert 只读探针 / 轨道G 通知与菜单 / RPC 桥 / 启动无错误）');
 }
 
 main();

@@ -206,6 +206,7 @@
               <span id="ctStatusText">空闲</span>
             </div>
             <button class="ct-other" id="ctOtherRunning" hidden></button>
+            <button class="mini-btn ct-inspect-toggle" id="ctInspectBtn" type="button" hidden></button>
             <button class="mini-btn ct-raw-toggle" id="ctRawToggle" type="button" hidden></button>
           </div>
           <div class="chat-input-row">
@@ -222,6 +223,16 @@
           <div class="raw-drawer" id="rawEventDrawer" hidden>
             <div class="raw-drawer-head" id="rawEventDrawerTitle"></div>
             <div class="raw-drawer-body" id="rawEventDrawerBody"></div>
+          </div>
+          <div class="raw-drawer inspect-drawer" id="inspectDrawer" hidden>
+            <div class="raw-drawer-head inspect-head">
+              <span id="inspectDrawerTitle"></span>
+              <div class="inspect-tabs" id="inspectTabs">
+                <button type="button" class="inspect-tab" data-tab="subagent"></button>
+                <button type="button" class="inspect-tab" data-tab="trajectory"></button>
+              </div>
+            </div>
+            <div class="raw-drawer-body inspect-body" id="inspectDrawerBody"></div>
           </div>
         </div>
       </div>
@@ -565,6 +576,7 @@
   <script src="toolcards.js"></script>
   <script src="contextmenu.js"></script>
   <script src="panels.js"></script>
+  <script src="inspector.js"></script>
   <script src="starfield.js"></script>
   <script src="settings.js"></script>
   <script src="dashboard.js"></script>
