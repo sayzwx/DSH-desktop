@@ -1403,6 +1403,77 @@
         updateStatus.textContent = `下载失败：${(r && r.error) || 'unknown'}`;
       }
     });
+
+    // ---- 轨道 G：系统通知偏好（notify:getPrefs / setPrefs，主进程已就绪，这里补界面）----
+    const notifyEnabled = $('#notifyEnabled');
+    const notifyOnlyHidden = $('#notifyOnlyHidden');
+    (async () => {
+      const p = await api.getNotifyPrefs();
+      if (p && typeof p === 'object') {
+        if (notifyEnabled) notifyEnabled.checked = p.enabled !== false;
+        if (notifyOnlyHidden) notifyOnlyHidden.checked = p.onlyWhenHidden !== false;
+      }
+    })();
+    if (notifyEnabled) notifyEnabled.addEventListener('change', () => api.setNotifyPrefs({ enabled: notifyEnabled.checked }));
+    if (notifyOnlyHidden) notifyOnlyHidden.addEventListener('change', () => api.setNotifyPrefs({ onlyWhenHidden: notifyOnlyHidden.checked }));
+
+    // ---- 轨道 G：引擎诊断（主进程运行时快照 + 引擎 host.describe + 工具卡降级计数）----
+    const diagGrid = $('#diagGrid');
+    const diagStatus = $('#diagStatus');
+    const diagRow = (k, v) => `<div class="diag-cell"><span class="diag-k">${esc(k)}</span><span class="diag-v">${esc(String(v ?? '—'))}</span></div>`;
+    async function refreshDiagnostics() {
+      if (!diagGrid) return;
+      if (diagStatus) diagStatus.textContent = t('diag.reading');
+      const [d, host] = await Promise.all([
+        api.getDiagnostics().catch(() => null),
+        api.hostDescribe().catch(() => null),
+      ]);
+      const dg = (window.__toolcards && window.__toolcards.getDowngrades)
+        ? window.__toolcards.getDowngrades() : { count: 0, kinds: [] };
+      const rows = [];
+      if (d && d.ok) {
+        rows.push(diagRow(t('diag.appVersion'), d.appVersion));
+        rows.push(diagRow(t('diag.platform'), `${d.platform} / ${d.arch}`));
+        rows.push(diagRow(t('diag.electron'), d.electron));
+        rows.push(diagRow(t('diag.node'), d.node));
+        rows.push(diagRow(t('diag.chromium'), d.chrome));
+        rows.push(diagRow(t('diag.port'), d.port));
+        rows.push(diagRow(t('diag.state'), d.state));
+        rows.push(diagRow(t('diag.dshHome'), d.dshHome));
+        rows.push(diagRow(t('diag.harnessDir'), d.harnessDir || t('diag.notDetected')));
+        rows.push(diagRow(t('diag.nodeExe'), d.nodeExe || t('diag.pathNode')));
+        if (d.devInstance) rows.push(diagRow(t('diag.devInstance'), d.devInstance));
+      }
+      const eng = host && host.ok ? host.value : null;
+      if (eng) {
+        rows.push(diagRow(t('diag.engineVersion'), eng.version));
+        rows.push(diagRow(t('diag.engineCwd'), eng.cwd));
+        rows.push(diagRow(t('diag.attached'), eng.attachedSessions));
+        rows.push(diagRow(t('diag.canOpenPath'), eng.canOpenPath ? t('diag.yes') : t('diag.no')));
+      } else {
+        rows.push(diagRow(t('diag.engine'), t('diag.engineOffline')));
+      }
+      const dgText = dg.count === 0
+        ? t('diag.downgradesNone')
+        : t('diag.downgradesSome', { count: dg.count, kinds: dg.kinds.map((k) => `${k.card}×${k.n}`).join(', ') });
+      rows.push(diagRow(t('diag.downgrades'), dgText));
+      diagGrid.innerHTML = rows.join('');
+      if (diagStatus) diagStatus.textContent = t('diag.updatedAt', { time: new Date().toLocaleTimeString() });
+    }
+    const diagRefreshBtn = $('#diagRefreshBtn');
+    if (diagRefreshBtn) diagRefreshBtn.addEventListener('click', refreshDiagnostics);
+    const diagBackupBtn = $('#diagBackupBtn');
+    if (diagBackupBtn) diagBackupBtn.addEventListener('click', async () => {
+      diagBackupBtn.disabled = true;
+      const r = await api.backupDsh();
+      diagBackupBtn.disabled = false;
+      const modal = window.__modal || { alert: () => {} };
+      if (r && r.ok) modal.alert(t('diag.backupDone', { path: r.path }), t('diag.backupTitle'));
+      else modal.alert(t('diag.backupFailed', { error: (r && r.error) || 'unknown' }), t('diag.backupTitle'));
+    });
+    const diagDevtoolsBtn = $('#diagDevtoolsBtn');
+    if (diagDevtoolsBtn) diagDevtoolsBtn.addEventListener('click', () => api.openDevTools());
+    refreshDiagnostics();
   }
 
   function bindModules() {

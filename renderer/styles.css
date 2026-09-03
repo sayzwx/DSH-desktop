@@ -2844,6 +2844,30 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
   letter-spacing: 1px;
   min-width: 60px;
 }
+/* 系统通知等开关行 */
+.sm-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.sm-check input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+/* 引擎诊断快照：两列自适应网格，值可选中复制以便报障 */
+.diag-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 4px 16px;
+  margin-top: 10px;
+}
+.diag-cell { display: flex; gap: 8px; align-items: baseline; font-size: 11.5px; padding: 2px 0; }
+.diag-k { flex: none; width: 108px; color: var(--text-dim); }
+.diag-v {
+  flex: 1; min-width: 0; color: var(--text);
+  font-family: var(--font-mono); word-break: break-all; user-select: text;
+}
 .sm-select {
   appearance: none;
   -webkit-appearance: none;

@@ -156,4 +156,10 @@ contextBridge.exposeInMainWorld('api', {
   notifyTurnEnd: (title) => ipcRenderer.invoke('notify:turnEnd', title),
   getNotifyPrefs: () => ipcRenderer.invoke('notify:getPrefs'),
   setNotifyPrefs: (patch) => ipcRenderer.invoke('notify:setPrefs', patch),
+
+  // ---- 轨道 G：引擎诊断 / 备份 ~/.dsh / 会话导出 Markdown ----
+  getDiagnostics: () => ipcRenderer.invoke('diagnostics:get'),
+  backupDsh: () => ipcRenderer.invoke('diagnostics:backupDsh'),
+  exportMarkdown: (defaultName, markdown) => ipcRenderer.invoke('chat:exportMarkdown', { defaultName, markdown }),
+  openDevTools: () => ipcRenderer.invoke('app:openDevTools'),
 });

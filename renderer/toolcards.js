@@ -33,6 +33,19 @@
   const esc = (s) => ctx.esc(s);
   const t = (key, params) => ctx.t(key, params);
 
+  // 降级计数：上游新增了客户端不认识的 card 值时，回落 generic 卡并记一笔，供设置页诊断暴露。
+  // 只统计"有 card 值但不在契约六种之内"；view 缺失走 generic 是契约里的正常默认，不算降级。
+  const KNOWN_CARDS = new Set(['generic', 'terminal', 'diff', 'search', 'read', 'web']);
+  let downgradeCount = 0;
+  const downgradeKinds = new Map(); // card 值 -> 命中次数
+  function noteDowngrade(card) {
+    downgradeCount++;
+    downgradeKinds.set(card, (downgradeKinds.get(card) || 0) + 1);
+  }
+  function getDowngrades() {
+    return { count: downgradeCount, kinds: [...downgradeKinds.entries()].map(([card, n]) => ({ card, n })) };
+  }
+
   function toolCardsOf(sid) {
     if (!toolCards.has(sid)) toolCards.set(sid, new Map());
     return toolCards.get(sid);
@@ -643,6 +656,7 @@
     } else {
       // generic 结果卡与未知 card 值都走通用兜底：上游新增卡类型时降级而非抛错。
       // GenericResultView 只有 title/content，locations 要从调用视图兜底。
+      if (view && view.card && !KNOWN_CARDS.has(view.card)) noteDowngrade(view.card);
       renderGenericFallback(el, ev, view, output, isErr, callView && callView.locations);
     }
 
@@ -657,5 +671,5 @@
     return d;
   }
 
-  window.__toolcards = { init, renderToolCall, renderToolResult };
+  window.__toolcards = { init, renderToolCall, renderToolResult, getDowngrades };
 })();

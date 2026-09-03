@@ -126,6 +126,17 @@ async function main() {
       drawer: !!document.getElementById('inspectDrawer'),
       tabs: document.querySelectorAll('#inspectTabs .inspect-tab').length,
     }))()`), { btn: true, drawer: true, tabs: 2 });
+    // 轨道 G：工具卡降级计数 + 设置页通知/诊断骨架（确定性，不依赖引擎）
+    check('__toolcards.getDowngrades 已挂载', await evalJs(`typeof window.__toolcards?.getDowngrades`), 'function');
+    check('降级计数返回 {count,kinds} 形状', await evalJs(`(() => { const d = window.__toolcards.getDowngrades(); return { isCount: typeof d.count === 'number', kindsIsArray: Array.isArray(d.kinds) }; })()`), { isCount: true, kindsIsArray: true });
+    check('设置页通知/诊断骨架就位', await evalJs(`(() => ({
+      notifyEnabled: !!document.getElementById('notifyEnabled'),
+      notifyOnlyHidden: !!document.getElementById('notifyOnlyHidden'),
+      diagGrid: !!document.getElementById('diagGrid'),
+      diagRefresh: !!document.getElementById('diagRefreshBtn'),
+      diagBackup: !!document.getElementById('diagBackupBtn'),
+      diagDevtools: !!document.getElementById('diagDevtoolsBtn'),
+    }))()`), { notifyEnabled: true, notifyOnlyHidden: true, diagGrid: true, diagRefresh: true, diagBackup: true, diagDevtools: true });
 
     // --- markdown 走真实模块 ---
     check(
@@ -807,6 +818,8 @@ async function main() {
       'hostDescribe', 'hostOpenPath',
       // 轨道 F typert Remote：引用候选与消息反馈（put/delete 是写操作，只查暴露面不调用）
       'fileRefs', 'sessionRefs', 'feedbackList', 'feedbackPut', 'feedbackDelete',
+      // 轨道 G：诊断只读；备份/导出/DevTools 有副作用（复制 ~/.dsh、弹保存框、开调试窗），只查暴露面不调用
+      'getDiagnostics', 'backupDsh', 'exportMarkdown', 'openDevTools',
     ];
     const missing = await evalJs(`(() => {
       const want = ${JSON.stringify(BRIDGE_METHODS)};
@@ -842,6 +855,21 @@ async function main() {
       failures.push(`桥的失败分支 error 不是字符串: ${JSON.stringify(openBogus)}`);
     }
 
+    // --- 轨道 G：引擎诊断快照（主进程本地，只读，不依赖引擎在线）---
+    const diag = await evalJs(`(async () => {
+      const d = await window.api.getDiagnostics();
+      return { d, cells: document.querySelectorAll('#diagGrid .diag-cell').length };
+    })()`);
+    if (diag?.__error) failures.push(`诊断探针抛错: ${diag.__error}`);
+    else {
+      const d = diag.d || {};
+      check('diagnostics:get 返回 ok', d.ok, true);
+      check('diagnostics.appVersion 是字符串', typeof d.appVersion, 'string');
+      check('diagnostics.platform 是字符串', typeof d.platform, 'string');
+      check('diagnostics.port 是数字', typeof d.port, 'number');
+      check('设置页加载即渲染出诊断行', diag.cells > 0, true);
+    }
+
     // 启动期无错误 ---
     const realErrors = consoleErrors.filter((e) => !/favicon|ERR_FILE_NOT_FOUND.*\.ico/i.test(e));
     if (realErrors.length > 0) {
@@ -860,7 +888,7 @@ async function main() {
     for (const f of failures) console.error(`  - ${f}`);
     process.exit(1);
   }
-  console.log('PASS: 渲染层冒烟（模块 / markdown / 工具卡片 / i18n / vendored / 轨道A 搜索与右键菜单 / 轨道C 面板 / 轨道D 抽屉 / 轨道E 会话透视·子agent·轨迹 / 轨道F 工作区管理·消息操作条·@引用·typert 只读探针 / 轨道G 通知与菜单 / RPC 桥 / 启动无错误）');
+  console.log('PASS: 渲染层冒烟（模块 / markdown / 工具卡片 / i18n / vendored / 轨道A 搜索与右键菜单 / 轨道C 面板 / 轨道D 抽屉 / 轨道E 会话透视·子agent·轨迹 / 轨道F 工作区管理·消息操作条·@引用·typert 只读探针 / 轨道G 通知·菜单·诊断·导出 / RPC 桥 / 启动无错误）');
 }
 
 main();

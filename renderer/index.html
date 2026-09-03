@@ -427,6 +427,29 @@
               <button class="mini-btn" id="bgQuitOnlyBtn" type="button">仅退出应用（保留服务）</button>
               <span class="meta">关闭应用，后台 Harness 继续运行（重启后自动接管 :3080）</span>
             </div>
+            <div class="env-box" id="notifyPrefsBox">
+              <div class="env-title">系统通知</div>
+              <label class="sm-check"><input type="checkbox" id="notifyEnabled" /> 回合结束时发系统通知（长任务跑完给提示）</label>
+              <label class="sm-check"><input type="checkbox" id="notifyOnlyHidden" /> 仅在窗口隐藏 / 失焦时通知（正在看就不打扰）</label>
+              <div class="meta">关窗进托盘后，任务跑完会发系统通知；点击通知聚焦窗口并跳到该会话。</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-module" data-module="diagnostics">
+          <div class="settings-module-head">
+            <span class="sm-icon">🩺</span>
+            <span class="sm-title">引擎诊断</span>
+            <span class="sm-chevron">▾</span>
+          </div>
+          <div class="settings-module-body">
+            <div class="sm-row">
+              <button class="mini-btn" id="diagRefreshBtn" type="button">刷新诊断</button>
+              <button class="mini-btn" id="diagBackupBtn" type="button">备份 ~/.dsh</button>
+              <button class="mini-btn" id="diagDevtoolsBtn" type="button">打开开发者工具</button>
+            </div>
+            <div class="meta" id="diagStatus">应用与引擎的运行时快照，报障时可截图此处。</div>
+            <div class="diag-grid" id="diagGrid"></div>
           </div>
         </div>
 

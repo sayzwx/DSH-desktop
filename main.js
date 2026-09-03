@@ -2773,6 +2773,66 @@ ipcMain.handle('notify:setPrefs', (_e, patch) => {
 // 渲染层在 turn/end 时调用：它知道会话标题，主进程知道窗口可见性
 ipcMain.handle('notify:turnEnd', (_e, title) => ({ ok: true, notified: notifyTurnEnd(title) }));
 
+// ---------- 轨道 G：引擎诊断 / 备份 / 会话导出 ----------
+// 诊断快照：把主进程已知的运行时事实收敛成结构化数据，供设置页「引擎诊断」模块展示。
+// 引擎侧的 host.describe（version/cwd/home/attachedSessions/canOpenPath）由渲染层另调 hostDescribe。
+ipcMain.handle('diagnostics:get', () => ({
+  ok: true,
+  appVersion: app.getVersion(),
+  platform: process.platform,
+  arch: process.arch,
+  electron: process.versions.electron,
+  node: process.versions.node,
+  chrome: process.versions.chrome,
+  port: PORT,
+  dshHome: DSH_HOME,
+  harnessDir: HARNESS_DIR || '',
+  nodeExe: (() => { try { return resolveNodeExe(); } catch { return ''; } })(),
+  state: harnessState,
+  devInstance: process.env.DSH_DEV_INSTANCE || '',
+}));
+
+// 备份 ~/.dsh 到同级时间戳目录（升级 / 回滚前的安全网）：纯复制，绝不动原目录。
+ipcMain.handle('diagnostics:backupDsh', async () => {
+  try {
+    if (!fs.existsSync(DSH_HOME)) return { ok: false, error: '找不到 ~/.dsh 目录' };
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const dest = `${DSH_HOME}.backup-${stamp}`;
+    await fs.promises.cp(DSH_HOME, dest, { recursive: true });
+    return { ok: true, path: dest };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+});
+
+// 会话导出：渲染层把整段会话拼成 Markdown 交来，主进程只管选路径与落盘（不经过引擎）。
+ipcMain.handle('chat:exportMarkdown', async (_e, { defaultName, markdown }) => {
+  const win = BrowserWindow.getFocusedWindow()
+    || (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
+  const opts = {
+    title: '导出会话为 Markdown',
+    buttonLabel: '导出',
+    defaultPath: defaultName || 'session.md',
+    filters: [{ name: 'Markdown', extensions: ['md'] }],
+  };
+  const res = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+  if (res.canceled || !res.filePath) return { ok: true, cancelled: true };
+  try {
+    await fs.promises.writeFile(res.filePath, String(markdown || ''), 'utf8');
+    return { ok: true, path: res.filePath };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+});
+
+// 设置页「引擎诊断」里的 DevTools 按钮：与菜单项 / 快捷键同一入口，聚焦窗口优先
+ipcMain.handle('app:openDevTools', () => {
+  const win = BrowserWindow.getFocusedWindow()
+    || (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
+  if (win) win.webContents.openDevTools({ mode: 'detach' });
+  return { ok: !!win };
+});
+
 ipcMain.handle('app:hideToTray', () => {
   winWasVisible = true;
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();

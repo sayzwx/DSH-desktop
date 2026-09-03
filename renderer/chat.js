@@ -432,6 +432,8 @@
         title: !cwd ? t('session.showInFolder.noCwd') : (!canOpen ? t('host.openPath.unavailable') : cwd),
         onSelect: () => openPath(cwd),
       },
+      { label: t('export.menuLabel'), onSelect: () => exportSessionMarkdown(sessionId) },
+      { separator: true },
       { label: t('session.action.delete'), danger: true, onSelect: () => deleteSession(sessionId) },
     ]);
   }
@@ -457,6 +459,75 @@
     if (!target) return;
     const r = await api.hostOpenPath(target);
     if (!r.ok) showChatError(t('host.openPath.failed', { error: r.error }));
+  }
+
+  // ---------------- 会话导出 Markdown（轨道 G）----------------
+  function firstTextOf(content) {
+    const blocks = Array.isArray(content) ? content : [];
+    for (const b of blocks) {
+      if (b && b.type === 'text' && typeof b.text === 'string' && b.text.trim()) return b.text;
+    }
+    return '';
+  }
+
+  function sanitizeFilename(name) {
+    const clean = String(name || '').replace(/[\\/:*?"<>|\r\n\t]/g, '_').replace(/\s+/g, ' ').trim().slice(0, 80);
+    return clean || 'session';
+  }
+
+  /** 正文 = user/assistant 消息；工具调用折叠进附录（与官方"工具卡进附录"的做法一致）。 */
+  function buildSessionMarkdown(title, sid, events) {
+    const body = [];
+    const tools = [];
+    body.push(t('export.title', { title }));
+    body.push('');
+    body.push(`> sessionId: \`${sid}\` · ${new Date().toLocaleString()}`);
+    body.push('');
+    for (const ev of events) {
+      const data = ev.data || {};
+      if (ev.type === 'user/message') {
+        if (data.source && data.source.kind && data.source.kind !== 'user') continue;
+        const text = firstTextOf(data.content);
+        if (!text) continue;
+        body.push(`## ${t('export.role.user')}`, '', text, '');
+      } else if (ev.type === 'assistant/message') {
+        const blocks = Array.isArray(data.content) ? data.content : [];
+        const text = blocks.filter((b) => b.type === 'text' && b.text).map((b) => b.text).join('\n\n');
+        if (!text) continue;
+        body.push(`## ${t('export.role.assistant')}`, '', text);
+        const u = data.usage;
+        if (u) body.push('', `_${u.inputTokens}↑ / ${u.outputTokens}↓ tokens_`);
+        body.push('');
+      } else if (ev.type === 'tool/call') {
+        tools.push(`- 🔧 \`${data.name || 'tool'}\``);
+      } else if (ev.type === 'tool/result') {
+        const out = typeof data.output === 'string' ? data.output : firstTextOf(data.content);
+        const snippet = out ? ` — ${out.replace(/\s+/g, ' ').slice(0, 200)}` : '';
+        tools.push(`- ${data.isError ? '⚠' : '✓'} \`${data.name || 'result'}\`${snippet}`);
+      }
+    }
+    if (tools.length > 0) {
+      body.push(`## ${t('export.toolSection')}`, '');
+      body.push(...tools, '');
+    }
+    return body.join('\n');
+  }
+
+  async function exportSessionMarkdown(sessionId) {
+    const sid = sessionId || currentSessionId;
+    if (!sid) return;
+    const s = sessions.find((x) => x.sessionId === sid);
+    const title = (s && s.title) || sid;
+    // 用只读的 chatHistory 现拉，导出任意会话都成立（eventLog 只为当前会话播种）
+    const r = await api.chatHistory(sid);
+    if (!r.ok) { showChatError(t('export.failed', { error: r.error })); return; }
+    const events = (r.events || []).map((h) => h && h.event).filter(Boolean);
+    const md = buildSessionMarkdown(title, sid, events);
+    if (!md.trim() || events.length === 0) { showChatError(t('export.empty')); return; }
+    const save = await api.exportMarkdown(`${sanitizeFilename(title)}.md`, md);
+    if (save.cancelled) { showChatNotice(t('export.cancelled')); return; }
+    if (!save.ok) { showChatError(t('export.failed', { error: save.error })); return; }
+    showChatNotice(t('export.done', { path: save.path }));
   }
 
   // ---------------- 工作区管理（重命名 / 删除 / 右键菜单）----------------
