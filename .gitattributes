@@ -24,6 +24,11 @@
 *.html   text eol=lf
 *.css    text eol=lf
 
+# POSIX 脚本与桌面项：必须 LF。CRLF 会让 shebang 变成 `/usr/bin/env bash\r`，
+# 在 macOS/Linux（含 CI runner）上直接 "bad interpreter" 而无法执行。
+*.sh      text eol=lf
+*.desktop text eol=lf
+
 # 二进制文件（不做换行转换）
 *.ico    binary
 *.png    binary
