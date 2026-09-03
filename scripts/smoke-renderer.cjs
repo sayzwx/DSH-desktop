@@ -503,6 +503,73 @@ async function main() {
       }
     }
 
+    // --- 轨道 F：工作区管理入口 / 消息操作条 / @引用面板 / typert 只读探针 ---
+    // 只调只读端点：fileReferences/list、sessionReferenceResolver/candidates、messageFeedback/list。
+    // workspace.rename|delete|insertBefore、agentPreset.copy|remove、messageFeedback.put|delete 都会改
+    // 用户真实数据，绝不在此调用（同轨道 A 的安全约束）。复用轨道 A 已打开的会话。
+    if (engineUp) {
+      const trackF = await evalJs(`(async () => {
+        const waitFor = async (fn, ms) => {
+          const dl = Date.now() + ms;
+          for (;;) { if (fn()) return true; if (Date.now() > dl) return false; await new Promise((r) => setTimeout(r, 120)); }
+        };
+        const out = {};
+        const groups = [...document.querySelectorAll('#chatSessions .ws-group')];
+        const realGroups = groups.filter((g) => g.dataset.key !== '__ungrouped__');
+        out.groupCount = groups.length;
+        out.realGroupCount = realGroups.length;
+        out.groupsWithMore = realGroups.filter((g) => g.querySelector('.ws-group-more')).length;
+        out.ungroupedHasMore = groups.some((g) => g.dataset.key === '__ungrouped__' && g.querySelector('.ws-group-more'));
+        const assistants = [...document.querySelectorAll('#chatMessages .msg-assistant:not(.msg-notice)')];
+        out.assistantCount = assistants.length;
+        out.assistantsWithActions = assistants.filter((m) => m.querySelector('.msg-actions')).length;
+        out.assistantsWithCopy = assistants.filter((m) => m.querySelector('.msg-actions .msg-act')).length;
+        const activeRow = document.querySelector('#chatSessions .chat-session.active');
+        const sid = activeRow ? activeRow.dataset.id : null;
+        out.sid = sid;
+        if (sid) {
+          const fr = await window.api.fileRefs(sid, '');
+          out.fileRefs = { ok: fr.ok, isArray: Array.isArray(fr.value), sample: (Array.isArray(fr.value) && fr.value[0]) || null };
+          const sr = await window.api.sessionRefs(sid, '');
+          out.sessionRefs = { ok: sr.ok, isArray: Array.isArray(sr.value), sample: (Array.isArray(sr.value) && sr.value[0]) || null };
+          const fl = await window.api.feedbackList(sid);
+          out.feedbackList = { ok: fl.ok, itemsIsArray: Array.isArray(fl.items), code: fl.code || null };
+        }
+        const input = document.getElementById('chatInput');
+        if (input && sid) {
+          input.focus();
+          input.value = '@';
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          out.refPanelOpened = await waitFor(() => { const p = document.querySelector('.ref-panel'); return !!p && p.style.display !== 'none'; }, 1500);
+          input.value = '';
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          out.refPanelClosed = await waitFor(() => { const p = document.querySelector('.ref-panel'); return !p || p.style.display === 'none'; }, 1200);
+          input.blur();
+        }
+        return out;
+      })()`);
+      if (trackF?.__error) failures.push(`轨道 F 探针抛错: ${trackF.__error}`);
+      else {
+        if (trackF.realGroupCount > 0) check('每个真实工作区分组都带管理入口（⋯）', trackF.groupsWithMore, trackF.realGroupCount);
+        else console.log('  (无真实工作区分组 — 跳过 ⋯ 管理入口断言)');
+        check('未分组伪分组不带管理入口', trackF.ungroupedHasMore, false);
+        if (trackF.assistantCount > 0) {
+          check('每条定稿 assistant 消息都带操作条', trackF.assistantsWithActions, trackF.assistantCount);
+          check('操作条含复制按钮', trackF.assistantsWithCopy, trackF.assistantCount);
+        } else console.log('  (当前会话无定稿 assistant 消息 — 跳过操作条断言)');
+        if (trackF.sid) {
+          check('fileReferences/list 只读探针成功且 value 是数组', trackF.fileRefs.ok === true && trackF.fileRefs.isArray, true);
+          if (trackF.fileRefs.sample) check('文件候选含 path 与 kind', typeof trackF.fileRefs.sample.path === 'string' && typeof trackF.fileRefs.sample.kind === 'string', true);
+          check('sessionReferenceResolver/candidates 只读探针成功且 value 是数组', trackF.sessionRefs.ok === true && trackF.sessionRefs.isArray, true);
+          if (trackF.sessionRefs.sample) check('会话候选带可直接插入的 mention', typeof trackF.sessionRefs.sample.mention === 'string', true);
+          check('messageFeedback/list 双层信封拆解后 items 是数组', trackF.feedbackList.ok === true && trackF.feedbackList.itemsIsArray, true);
+          check('输入 @ 弹出引用面板', trackF.refPanelOpened, true);
+          check('清空输入后引用面板关闭', trackF.refPanelClosed, true);
+        } else console.log('  (无活动会话 — 跳过 typert 只读探针与引用面板断言)');
+        console.log(`  (轨道 F: 分组 ${trackF.groupCount} 个、定稿消息 ${trackF.assistantCount} 条、活动会话 ${trackF.sid ? '有' : '无'})`);
+      }
+    }
+
     // --- 轨道 C：上下文面板 ---
     // 面板状态由 chat.js 从事件与帧里累积，这里直接用合成状态驱动渲染。
     const panels = await evalJs(`(() => {
@@ -673,7 +740,8 @@ async function main() {
     // --- RPC 桥：preload 暴露面 ---
     // 只调只读方法，或用必定失败的路径触发错误分支。开发实例的 rpcCall 同样指向
     // 127.0.0.1:3080，正式版引擎可能正在那里跑，调用 chat:rename / chat:fork / goal:* /
-    // workspace.delete 这类会改状态的桥会污染用户真实数据。
+    // workspace.delete / feedback:put / feedback:delete / agentPreset.copy 这类会改状态的桥
+    // 会污染用户真实数据 —— 它们在这里只做 typeof 暴露面断言，绝不实际调用。
     const BRIDGE_METHODS = [
       'chatRename', 'chatSearch', 'chatFork', 'chatUpdateQueue',
       'goalCreate', 'goalEdit', 'goalPause', 'goalResume', 'goalComplete', 'goalClear',
@@ -681,6 +749,8 @@ async function main() {
       'chatRenameWorkspace', 'chatDeleteWorkspace', 'chatMoveWorkspace', 'chatMoveSession',
       'copyPreset', 'removePreset', 'replaceSettings',
       'hostDescribe', 'hostOpenPath',
+      // 轨道 F typert Remote：引用候选与消息反馈（put/delete 是写操作，只查暴露面不调用）
+      'fileRefs', 'sessionRefs', 'feedbackList', 'feedbackPut', 'feedbackDelete',
     ];
     const missing = await evalJs(`(() => {
       const want = ${JSON.stringify(BRIDGE_METHODS)};
@@ -734,7 +804,7 @@ async function main() {
     for (const f of failures) console.error(`  - ${f}`);
     process.exit(1);
   }
-  console.log('PASS: 渲染层冒烟（模块 / markdown / 工具卡片 / i18n / vendored / 轨道A 搜索与右键菜单 / 轨道C 面板 / 轨道D 抽屉 / 轨道G 通知与菜单 / RPC 桥 / 启动无错误）');
+  console.log('PASS: 渲染层冒烟（模块 / markdown / 工具卡片 / i18n / vendored / 轨道A 搜索与右键菜单 / 轨道C 面板 / 轨道D 抽屉 / 轨道F 工作区管理·消息操作条·@引用·typert 只读探针 / 轨道G 通知与菜单 / RPC 桥 / 启动无错误）');
 }
 
 main();

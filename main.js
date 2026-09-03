@@ -1262,6 +1262,50 @@ ipcMain.handle('chat:commandsList', async (_e, { sessionId }) => {
   return { ok: true, commands: r.value || [] };
 });
 
+// ---------- @文件 / @会话 引用候选（typert Remote，agent 作用域，只读）----------
+// 两者都是只读查询：agentId=目标会话，query=@ 之后已输入的文本。返回单层 RemoteResult，
+// 其 value 直接是候选数组（FileReferenceCandidate[] / SessionReferenceMentionCandidate[]）。
+// 输入框并发拉两个域，各自独立降级：一个失败返回 { ok:false } 不影响另一个。
+ipcMain.handle('chat:fileRefs', async (_e, { agentId, query }) => {
+  const r = await rpcCallTypert('fileReferences/list', { agentId, query });
+  if (!r.ok) return { ok: false, error: r.error?.message || 'fileReferences/list failed', code: r.error?.code };
+  return { ok: true, value: r.value || [] };
+});
+ipcMain.handle('chat:sessionRefs', async (_e, { agentId, query }) => {
+  const r = await rpcCallTypert('sessionReferenceResolver/candidates', { agentId, query });
+  if (!r.ok) return { ok: false, error: r.error?.message || 'sessionReferenceResolver/candidates failed', code: r.error?.code };
+  return { ok: true, value: r.value || [] };
+});
+
+// ---------- 消息反馈：赞 / 踩（typert Remote，per-message 乐观并发）----------
+// 双层信封：rpcCallTypert 已拆掉传输层 RemoteResult，r.value 才是业务结果
+// { ok:true, value } | { ok:false, error:{ code, current? } }。put/delete 必须把业务
+// error.code 与权威 current 透出，渲染层据此做 version-conflict 回填重试（同官方客户端）。
+// note 为空时不写入 request，避免把空串交给引擎 zod 严格 schema（会判 note-blank）。
+ipcMain.handle('feedback:list', async (_e, { sessionId }) => {
+  const r = await rpcCallTypert('messageFeedback/list', { request: { sessionId } });
+  if (!r.ok) return { ok: false, error: r.error?.message || 'messageFeedback/list failed' };
+  const biz = r.value;
+  if (!biz || !biz.ok) return { ok: false, code: biz?.error?.code, error: biz?.error?.code || 'messageFeedback/list rejected' };
+  return { ok: true, items: (biz.value && biz.value.items) || [] };
+});
+ipcMain.handle('feedback:put', async (_e, { sessionId, messageId, rating, note, ifVersion }) => {
+  const request = { sessionId, messageId, rating, ifVersion: ifVersion ?? null };
+  if (note !== undefined && note !== null && note !== '') request.note = note;
+  const r = await rpcCallTypert('messageFeedback/put', { request });
+  if (!r.ok) return { ok: false, error: r.error?.message || 'messageFeedback/put failed' };
+  const biz = r.value;
+  if (!biz || !biz.ok) return { ok: false, code: biz?.error?.code, current: biz?.error?.current ?? null };
+  return { ok: true, item: biz.value };
+});
+ipcMain.handle('feedback:delete', async (_e, { sessionId, messageId, ifVersion }) => {
+  const r = await rpcCallTypert('messageFeedback/delete', { request: { sessionId, messageId, ifVersion } });
+  if (!r.ok) return { ok: false, error: r.error?.message || 'messageFeedback/delete failed' };
+  const biz = r.value;
+  if (!biz || !biz.ok) return { ok: false, code: biz?.error?.code, current: biz?.error?.current ?? null };
+  return { ok: true };
+});
+
 // ---------- 设置：插件（agent preset）与模型配置 IPC ----------
 ipcMain.handle('settings:presets', async () => {
   const r = await rpcCall('agentPreset.list', {});

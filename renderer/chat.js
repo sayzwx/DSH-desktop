@@ -44,6 +44,10 @@
   // 就地改名：列表会被 refreshSessions 频繁整段重绘（turn/start、session/title 等都会触发），
   // 草稿必须存在这里而不是只存在 DOM 里，否则输入到一半就被重绘清掉。
   let renameDraft = null;        // { sessionId, value } | null
+  let wsRenameDraft = null;      // { workspaceId, value } | null —— 工作区分组就地改名，同上理由
+  // 拖拽排序的瞬态：dragstart 记下被拖项，dragover/drop 读取，dragend 清理。
+  // 列表随时会整段重绘，故不能把状态挂在 DOM 上。
+  let dragItem = null;           // { kind:'workspace'|'session', id, workspaceId? } | null
   // 会话全文搜索：searchResults 为 null 表示未在搜索（渲染分组视图），为数组表示渲染结果视图
   let searchQuery = '';
   let searchResults = null;
@@ -233,7 +237,7 @@
     const titleCell = renaming
       ? `<input class="cs-title-input" type="text" value="${esc(renameDraft.value)}" spellcheck="false" />`
       : `<span class="cs-title">${esc(s.title)}</span>`;
-    return `<div class="chat-session ${s.sessionId === currentSessionId ? 'active' : ''}${renaming ? ' renaming' : ''}" data-id="${esc(s.sessionId)}" data-title="${esc(s.title || '')}">
+    return `<div class="chat-session ${s.sessionId === currentSessionId ? 'active' : ''}${renaming ? ' renaming' : ''}" data-id="${esc(s.sessionId)}" data-title="${esc(s.title || '')}" draggable="${renaming ? 'false' : 'true'}">
       ${s.blank ? `<span class="cs-blank" title="${esc(t('session.blank.title'))}">${esc(t('session.blank.badge'))}</span>` : ''}
       ${titleCell}
       ${s.running ? `<span class="cs-dot" title="${esc(t('session.running'))}"></span>` : ''}
@@ -244,16 +248,24 @@
 
   function groupSectionHTML(key, title, pathTitle, sessionList, showAdd) {
     const collapsed = groupCollapsed(key);
+    const isRealWs = key !== '__ungrouped__';
+    const renaming = !!wsRenameDraft && wsRenameDraft.workspaceId === key;
     const rows = sessionList.map(sessionRowHTML).join('');
-    return `<div class="ws-group" data-key="${esc(key)}">
-      <div class="ws-group-head">
+    const titleCell = renaming
+      ? `<input class="ws-title-input" type="text" value="${esc(wsRenameDraft.value)}" spellcheck="false" />`
+      : `<span class="ws-group-title" title="${esc(pathTitle || title)}">${esc(title)}</span>`;
+    // 真实工作区的分组头可拖拽排序；改名进行中不拖（输入框要能选中文字）
+    const headDrag = isRealWs && !renaming ? ` draggable="true" data-ws="${esc(key)}"` : '';
+    return `<div class="ws-group${renaming ? ' renaming' : ''}" data-key="${esc(key)}">
+      <div class="ws-group-head"${headDrag}>
         <button type="button" class="ws-group-toggle" title="折叠 / 展开">${collapsed ? '▸' : '▾'}</button>
         <span class="ws-group-icon">📁</span>
-        <span class="ws-group-title" title="${esc(pathTitle || title)}">${esc(title)}</span>
+        ${titleCell}
         <span class="ws-group-count">${sessionList.length}</span>
         ${showAdd ? '<button type="button" class="ws-group-add" title="在此工作区新建会话">＋</button>' : ''}
+        ${isRealWs ? `<button type="button" class="ws-group-more" title="${esc(t('workspace.more'))}">⋯</button>` : ''}
       </div>
-      ${collapsed ? '' : `<div class="ws-group-body">${rows || '<div class="ws-group-empty">暂无会话</div>'}</div>`}
+      ${collapsed ? '' : `<div class="ws-group-body" data-ws="${esc(key)}">${rows || '<div class="ws-group-empty">暂无会话</div>'}</div>`}
     </div>`;
   }
 
@@ -328,7 +340,23 @@
         createSessionInWorkspace(key === '__ungrouped__' ? null : key);
       };
     });
+    sessionsEl.querySelectorAll('.ws-group-more').forEach((el) => {
+      el.onclick = (e) => {
+        e.stopPropagation();
+        const key = el.closest('.ws-group').dataset.key;
+        const rect = el.getBoundingClientRect();
+        openWorkspaceMenu(rect.left, rect.bottom + 4, key);
+      };
+    });
+    sessionsEl.querySelectorAll('.ws-group-head[draggable="true"]').forEach((el) => {
+      el.oncontextmenu = (e) => {
+        e.preventDefault();
+        openWorkspaceMenu(e.clientX, e.clientY, el.dataset.ws);
+      };
+    });
+    wireSidebarDrag();
     focusRenameInput();
+    focusWsRenameInput();
   }
 
   // ---------------- 就地改名 ----------------
@@ -425,6 +453,218 @@
     if (!target) return;
     const r = await api.hostOpenPath(target);
     if (!r.ok) showChatError(t('host.openPath.failed', { error: r.error }));
+  }
+
+  // ---------------- 工作区管理（重命名 / 删除 / 右键菜单）----------------
+  function openWorkspaceMenu(x, y, workspaceId) {
+    const w = workspaces.find((v) => v.workspaceId === workspaceId);
+    if (!w) return;
+    const canOpen = !hostCaps || hostCaps.canOpenPath !== false;
+    window.__ctxMenu.open(x, y, [
+      { label: t('workspace.action.rename'), onSelect: () => beginWsRename(workspaceId) },
+      {
+        label: t('workspace.action.showInFolder'),
+        disabled: !w.path || !canOpen,
+        title: !w.path ? t('workspace.noPath') : (!canOpen ? t('host.openPath.unavailable') : w.path),
+        onSelect: () => openPath(w.path),
+      },
+      { separator: true },
+      { label: t('workspace.action.delete'), danger: true, onSelect: () => deleteWorkspace(workspaceId) },
+    ]);
+  }
+
+  function beginWsRename(workspaceId) {
+    const w = workspaces.find((x) => x.workspaceId === workspaceId);
+    wsRenameDraft = { workspaceId, value: (w && (w.title || '')) || '' };
+    // 改名时强制展开该组，否则输入框在折叠态下根本不渲染
+    setGroupCollapsed(workspaceId, false);
+    renderSessions();
+  }
+
+  function cancelWsRename() {
+    if (!wsRenameDraft) return;
+    wsRenameDraft = null;
+    renderSessions();
+  }
+
+  function focusWsRenameInput() {
+    if (!wsRenameDraft) return;
+    const input = sessionsEl.querySelector('.ws-title-input');
+    if (!input) return;
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    input.oninput = () => { if (wsRenameDraft) wsRenameDraft.value = input.value; };
+    input.onkeydown = (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); commitWsRename(); }
+      else if (e.key === 'Escape') { e.preventDefault(); cancelWsRename(); }
+    };
+    input.onblur = () => cancelWsRename();
+  }
+
+  async function commitWsRename() {
+    if (!wsRenameDraft) return;
+    const { workspaceId, value } = wsRenameDraft;
+    wsRenameDraft = null;
+    const title = String(value || '').trim().replace(/\s+/g, ' ');
+    const w = workspaces.find((x) => x.workspaceId === workspaceId);
+    if (!title) {
+      renderSessions();
+      showChatError(t('workspace.rename.empty'));
+      return;
+    }
+    if (w && (w.title || '') === title) { renderSessions(); return; }
+    const r = await api.chatRenameWorkspace(workspaceId, title);
+    if (!r.ok) {
+      renderSessions();
+      showChatError(r.code === 'workspace-name-conflict' ? t('workspace.nameConflict')
+        : r.code === 'title-invalid' ? t('workspace.rename.empty')
+          : t('workspace.rename.failed', { error: r.error }));
+      return;
+    }
+    await loadWorkspaces();
+  }
+
+  async function deleteWorkspace(workspaceId) {
+    const w = workspaces.find((x) => x.workspaceId === workspaceId);
+    const title = (w && (w.title || w.path)) || workspaceId;
+    const ok = await window.__modal.confirm(
+      t('workspace.delete.confirm', { title }),
+      t('workspace.action.delete'),
+      { okText: t('workspace.delete.okText'), danger: true },
+    );
+    if (!ok) return;
+    const r = await api.chatDeleteWorkspace(workspaceId);
+    if (!r.ok) {
+      showChatError(r.code === 'workspace-name-conflict' ? t('workspace.nameConflict')
+        : t('workspace.delete.failed', { error: r.error }));
+      return;
+    }
+    if (currentWorkspaceId === workspaceId) currentWorkspaceId = null;
+    await loadWorkspaces();
+    showChatNotice(t('workspace.delete.done', { title }));
+  }
+
+  // ---------------- 拖拽排序（workspace.insertBefore / insertSessionBefore）----------------
+  function clearDrag() {
+    dragItem = null;
+    sessionsEl.querySelectorAll('.dragging').forEach((el) => el.classList.remove('dragging'));
+    sessionsEl.querySelectorAll('.drop-before').forEach((el) => el.classList.remove('drop-before'));
+    sessionsEl.querySelectorAll('.drop-into').forEach((el) => el.classList.remove('drop-into'));
+  }
+
+  function markDrop(el, cls) {
+    sessionsEl.querySelectorAll('.drop-before, .drop-into').forEach((x) => {
+      if (x !== el) x.classList.remove('drop-before', 'drop-into');
+    });
+    el.classList.add(cls);
+  }
+
+  function wireSidebarDrag() {
+    // 工作区：拖分组头到另一个分组头之前；拖到侧栏空白处 = 追加到末尾
+    sessionsEl.querySelectorAll('.ws-group-head[draggable="true"]').forEach((head) => {
+      head.addEventListener('dragstart', (e) => {
+        if (e.target.closest('button')) { e.preventDefault(); return; }
+        dragItem = { kind: 'workspace', id: head.dataset.ws };
+        head.closest('.ws-group').classList.add('dragging');
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = 'move';
+          try { e.dataTransfer.setData('text/plain', head.dataset.ws); } catch { /* 某些平台限制 MIME */ }
+        }
+      });
+      head.addEventListener('dragover', (e) => {
+        if (!dragItem || dragItem.kind !== 'workspace' || dragItem.id === head.dataset.ws) return;
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+        markDrop(head, 'drop-before');
+      });
+      head.addEventListener('drop', (e) => {
+        if (!dragItem || dragItem.kind !== 'workspace' || dragItem.id === head.dataset.ws) return;
+        e.preventDefault();
+        const moved = dragItem.id;
+        const before = head.dataset.ws;
+        clearDrag();
+        moveWorkspace(moved, before);
+      });
+    });
+
+    // 会话：拖行到另一行之前；拖到分组体空白处 = 追加到该工作区末尾
+    sessionsEl.querySelectorAll('.chat-session[draggable="true"]').forEach((row) => {
+      row.addEventListener('dragstart', (e) => {
+        if (e.target.closest('button, input')) { e.preventDefault(); return; }
+        const g = row.closest('.ws-group');
+        dragItem = { kind: 'session', id: row.dataset.id, workspaceId: g ? g.dataset.key : null };
+        row.classList.add('dragging');
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = 'move';
+          try { e.dataTransfer.setData('text/plain', row.dataset.id); } catch { /* 某些平台限制 MIME */ }
+        }
+      });
+      row.addEventListener('dragover', (e) => {
+        if (!dragItem || dragItem.kind !== 'session' || dragItem.id === row.dataset.id) return;
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+        markDrop(row, 'drop-before');
+      });
+      row.addEventListener('drop', (e) => {
+        if (!dragItem || dragItem.kind !== 'session' || dragItem.id === row.dataset.id) return;
+        e.preventDefault();
+        const g = row.closest('.ws-group');
+        const destWs = g ? g.dataset.key : null;
+        const moved = dragItem.id;
+        const before = row.dataset.id;
+        clearDrag();
+        moveSession(destWs, moved, before);
+      });
+    });
+
+    sessionsEl.querySelectorAll('.ws-group-body').forEach((body) => {
+      body.addEventListener('dragover', (e) => {
+        if (!dragItem || dragItem.kind !== 'session' || e.target !== body) return;
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+        markDrop(body, 'drop-into');
+      });
+      body.addEventListener('drop', (e) => {
+        if (!dragItem || dragItem.kind !== 'session' || e.target !== body) return;
+        e.preventDefault();
+        const destWs = body.dataset.ws;
+        const moved = dragItem.id;
+        clearDrag();
+        moveSession(destWs, moved, undefined);
+      });
+    });
+
+    // 侧栏空白处：工作区追加到末尾
+    sessionsEl.addEventListener('dragover', (e) => {
+      if (dragItem && dragItem.kind === 'workspace' && e.target === sessionsEl) {
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      }
+    });
+    sessionsEl.addEventListener('drop', (e) => {
+      if (dragItem && dragItem.kind === 'workspace' && e.target === sessionsEl) {
+        e.preventDefault();
+        const moved = dragItem.id;
+        clearDrag();
+        moveWorkspace(moved, undefined);
+      }
+    });
+    sessionsEl.addEventListener('dragend', clearDrag);
+  }
+
+  async function moveWorkspace(workspaceId, beforeWorkspaceId) {
+    const r = await api.chatMoveWorkspace(workspaceId, beforeWorkspaceId);
+    if (!r.ok) { showChatError(t('workspace.move.failed', { error: r.error })); return; }
+    await loadWorkspaces();
+  }
+
+  async function moveSession(workspaceId, sessionId, beforeSessionId) {
+    // 未分组不是真实工作区，不能作为放置目标；无目标工作区 likewise
+    if (!workspaceId || workspaceId === '__ungrouped__') return;
+    const r = await api.chatMoveSession(workspaceId, sessionId, beforeSessionId || undefined);
+    if (!r.ok) { showChatError(t('workspace.move.failed', { error: r.error })); return; }
+    await loadWorkspaces();
   }
 
   // ---------------- 会话全文搜索（session.search）----------------
@@ -1132,29 +1372,6 @@
     messagesEl.querySelectorAll('.typing').forEach((el) => el.remove());
   }
 
-  function renderAssistantContent(container, content, meta) {
-    container.innerHTML = '';
-    for (const block of content || []) {
-      if (block.type === 'reasoning' && block.text) {
-        const d = document.createElement('details');
-        d.className = 'msg-reasoning';
-        d.innerHTML = `<summary>🧠 思考过程</summary><div></div>`;
-        d.querySelector('div').textContent = block.text;
-        container.appendChild(d);
-      } else if (block.type === 'text' && block.text) {
-        const p = document.createElement('div');
-        p.textContent = block.text;
-        container.appendChild(p);
-      }
-    }
-    if (meta) {
-      const m = document.createElement('div');
-      m.className = 'msg-meta';
-      m.textContent = meta;
-      container.appendChild(m);
-    }
-  }
-
   function scrollBottom(force) {
     if (force || messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 160) {
       messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -1220,6 +1437,7 @@
         const model = ev.data?.provenance?.model || '';
         const usage = ev.data?.usage ? ` · ${ev.data.usage.inputTokens}↑ ${ev.data.usage.outputTokens}↓ tokens` : '';
         renderAssistantContent(div, ev.data?.content, model ? `${model}${usage}` : '');
+        attachMsgActions(div, currentSessionId, assistantMsgId(ev.data));
       } else if (ev.type === 'tool/call') {
         renderToolCall(currentSessionId, ev);
       } else if (ev.type === 'tool/result') {
@@ -1308,6 +1526,136 @@
     }
   }
 
+  // ---------------- 消息操作条：复制 + 赞 / 踩（messageFeedback）----------------
+  // 反馈按会话缓存：messageId -> { rating, version, note }。version 是引擎的 CAS 令牌，
+  // put/delete 都要带上；冲突时以服务端返回的权威 current 回填（同官方客户端，不自动重试）。
+  const feedbackStore = new Map();  // sessionId -> Map<messageId, item>
+  let feedbackAvailable = true;     // messageFeedback 未组合时置 false，只留复制按钮
+
+  function fbMap(sid) {
+    if (!feedbackStore.has(sid)) feedbackStore.set(sid, new Map());
+    return feedbackStore.get(sid);
+  }
+
+  async function loadFeedback(sid) {
+    if (!sid) return;
+    const r = await api.feedbackList(sid);
+    if (!r.ok) {
+      // session-not-found = 这个会话还没有任何反馈（正常）；其他失败按"能力未组合"处理
+      feedbackAvailable = r.code === 'session-not-found';
+      return;
+    }
+    feedbackAvailable = true;
+    const m = fbMap(sid);
+    m.clear();
+    for (const it of (r.items || [])) m.set(String(it.messageId), it);
+  }
+
+  /** 只认真实的消息 id：seq 兜底不是合法 MessageId，拿去 put 会被引擎判 target-not-found。 */
+  function assistantMsgId(data) {
+    const id = data && (data.id || data.messageId);
+    return (typeof id === 'string' || typeof id === 'number') && id !== '' ? String(id) : null;
+  }
+
+  function paintFeedbackState(bar, sid, mid) {
+    if (!bar) return;
+    const item = fbMap(sid).get(String(mid));
+    const like = bar.querySelector('.msg-fb-like');
+    const dis = bar.querySelector('.msg-fb-dislike');
+    if (like) like.classList.toggle('active', !!item && item.rating === 'positive');
+    if (dis) dis.classList.toggle('active', !!item && item.rating === 'negative');
+  }
+
+  function attachMsgActions(el, sessionId, messageId) {
+    if (!el || el.querySelector(':scope > .msg-actions')) return;
+    const bar = document.createElement('div');
+    bar.className = 'msg-actions';
+
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'msg-act';
+    copyBtn.textContent = t('md.copy');
+    copyBtn.title = t('md.copy');
+    copyBtn.onclick = async () => {
+      // 只复制正文（直接子 .msg-md），不含思考过程与操作条自身
+      const text = [...el.querySelectorAll(':scope > .msg-md')].map((n) => n.textContent).join('\n\n').trim();
+      try {
+        await navigator.clipboard.writeText(text || el.textContent);
+        copyBtn.textContent = t('md.copied');
+      } catch {
+        copyBtn.textContent = t('md.copyFailed');
+      }
+      setTimeout(() => { copyBtn.textContent = t('md.copy'); }, 1500);
+    };
+    bar.appendChild(copyBtn);
+
+    if (feedbackAvailable && messageId) {
+      const likeBtn = document.createElement('button');
+      likeBtn.type = 'button';
+      likeBtn.className = 'msg-act msg-fb-like';
+      likeBtn.textContent = '👍';
+      likeBtn.title = t('feedback.like');
+      likeBtn.onclick = () => toggleFeedback(el, sessionId, messageId, 'positive');
+      const disBtn = document.createElement('button');
+      disBtn.type = 'button';
+      disBtn.className = 'msg-act msg-fb-dislike';
+      disBtn.textContent = '👎';
+      disBtn.title = t('feedback.dislike');
+      disBtn.onclick = () => toggleFeedback(el, sessionId, messageId, 'negative');
+      bar.appendChild(likeBtn);
+      bar.appendChild(disBtn);
+      paintFeedbackState(bar, sessionId, messageId);
+    }
+    el.appendChild(bar);
+  }
+
+  async function toggleFeedback(el, sid, mid, rating) {
+    const bar = el.querySelector(':scope > .msg-actions');
+    const cur = fbMap(sid).get(String(mid));
+    // 再次点击当前评价 = 撤销
+    if (cur && cur.rating === rating) {
+      const r = await api.feedbackDelete(sid, mid, cur.version);
+      if (r.ok) {
+        fbMap(sid).delete(String(mid));
+        paintFeedbackState(bar, sid, mid);
+        showChatNotice(t('feedback.removed'));
+        return;
+      }
+      if (r.code === 'version-conflict') {
+        reconcileFeedback(sid, mid, r.current);
+        paintFeedbackState(bar, sid, mid);
+        showChatNotice(t('feedback.conflict'));
+        return;
+      }
+      showChatError(t('feedback.failed', { error: r.code || r.error || '' }));
+      return;
+    }
+    const r = await api.feedbackPut(sid, mid, rating, undefined, cur ? cur.version : null);
+    if (r.ok) {
+      fbMap(sid).set(String(mid), r.item);
+      paintFeedbackState(bar, sid, mid);
+      showChatNotice(rating === 'positive' ? t('feedback.liked') : t('feedback.disliked'));
+      return;
+    }
+    if (r.code === 'version-conflict') {
+      reconcileFeedback(sid, mid, r.current);
+      paintFeedbackState(bar, sid, mid);
+      showChatNotice(t('feedback.conflict'));
+      return;
+    }
+    if (r.code === 'target-not-found' || r.code === 'session-not-found') {
+      showChatError(t('feedback.unavailable'));
+      return;
+    }
+    showChatError(t('feedback.failed', { error: r.code || r.error || '' }));
+  }
+
+  function reconcileFeedback(sid, mid, current) {
+    const m = fbMap(sid);
+    if (current) m.set(String(mid), current);
+    else m.delete(String(mid));
+  }
+
   // 从缓冲重建进行中的流（切换会话回来时）
   function renderLiveBuffer(sid) {
     const b = buf(sid);
@@ -1362,7 +1710,10 @@
     usageState = null;
     renderSessions();
     const b = buf(sessionId);
-    const r = await api.chatHistory(sessionId);
+    const histP = api.chatHistory(sessionId);
+    const fbP = loadFeedback(sessionId);   // 与历史并发拉取，渲染操作条前必须先就位
+    const r = await histP;
+    await fbP;
     if (r.ok) {
       renderHistory(r.events);
       renderLiveBuffer(sessionId);
@@ -1721,6 +2072,244 @@ class CommandPanel {
   }
 }
 
+// =====================================================================
+// @ 引用面板：输入 @ 时在输入框上方弹出「文件 / 会话」候选（typert Remote）
+//  - 语法照抄引擎 dsh-file-reference/grammar：@path 与 @"path with spaces"
+//  - 文件排前、会话排后；引号内（@"）只补路径不查会话
+//  - 目录选中后保持可编辑并继续下钻；文件/会话选中插入原子引用文本
+//  - 桌面端输入框是纯 textarea，故插入的是 mention 纯文本（引擎按同一语法解析）
+// =====================================================================
+function activeAtToken(line, cursorCol) {
+  const beforeCursor = line.slice(0, cursorCol);
+  const quoted = /(?:^|\s)(@"([^"]*))$/u.exec(beforeCursor);
+  if (quoted && quoted[1] !== undefined && quoted[2] !== undefined) {
+    return { prefix: quoted[1], query: quoted[2], quoted: true };
+  }
+  const plain = /(?:^|\s)(@([^\s]*))$/u.exec(beforeCursor);
+  if (!plain || plain[1] === undefined || plain[2] === undefined) return undefined;
+  return { prefix: plain[1], query: plain[2], quoted: false };
+}
+
+function formatFileMention(candidate, preserveQuote) {
+  const path = candidate.kind === 'directory' ? `${candidate.path}/` : candidate.path;
+  if (/[\u0000-\u001f\u007f-\u009f"]/u.test(path)) return undefined;
+  const quoted = preserveQuote || /\s/u.test(path);
+  if (!quoted) return `@${path}`;
+  if (candidate.kind === 'directory') return `@"${path}`;
+  return `@"${path}"`;
+}
+
+/** textarea 是多行的：定位光标所在行与列，再交给 activeAtToken，并换算出 token 的绝对起点。 */
+function atTokenAtCursor(el) {
+  const value = el.value;
+  const cursor = typeof el.selectionStart === 'number' ? el.selectionStart : value.length;
+  const before = value.slice(0, cursor);
+  const lineStart = before.lastIndexOf('\n') + 1;
+  let lineEnd = value.indexOf('\n', cursor);
+  if (lineEnd === -1) lineEnd = value.length;
+  const line = value.slice(lineStart, lineEnd);
+  const tok = activeAtToken(line, cursor - lineStart);
+  if (!tok) return null;
+  return { query: tok.query, quoted: tok.quoted, prefix: tok.prefix, tokenStart: cursor - tok.prefix.length, cursor };
+}
+
+class ReferencePanel {
+  constructor(inputEl, api, getSessionId) {
+    this.inputEl = inputEl;
+    this.api = api;
+    this.getSessionId = getSessionId;
+    this.isOpen = false;
+    this.items = [];
+    this.selectedIndex = -1;
+    this.token = null;
+    this.fetchSeq = 0;
+    this.debounce = null;
+    this.panel = null;
+    this._onDocMousedown = (e) => {
+      if (this.isOpen && !this.panel.contains(e.target) && e.target !== this.inputEl && !this.inputEl.contains(e.target)) {
+        this.close();
+      }
+    };
+    this.createPanel();
+  }
+
+  createPanel() {
+    this.panel = document.createElement('div');
+    this.panel.className = 'cmd-panel ref-panel';
+    this.panel.style.display = 'none';
+    this.panel.innerHTML = `
+      <div class="cmd-caret"></div>
+      <div class="cmd-list" role="listbox"></div>
+      <div class="cmd-hint">${esc(t('ref.hint'))}</div>
+    `;
+    document.body.appendChild(this.panel);
+    this.listEl = this.panel.querySelector('.cmd-list');
+    this.listEl.addEventListener('click', (e) => {
+      const itemEl = e.target.closest('.cmd-item');
+      if (!itemEl) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.selectedIndex = parseInt(itemEl.dataset.idx, 10);
+      this.pickSelected();
+    });
+    document.addEventListener('mousedown', this._onDocMousedown);
+  }
+
+  /** 由 input / 光标移动驱动：检测光标处 @ token，有则开/刷新，无则关。 */
+  sync() {
+    const tok = atTokenAtCursor(this.inputEl);
+    if (!tok || !this.getSessionId()) { this.close(); return; }
+    if (!this.isOpen) {
+      this.isOpen = true;
+      this.panel.style.display = 'flex';
+    }
+    this.token = tok;
+    this.positionPanel();
+    this.scheduleFetch(tok.query, tok.quoted);
+  }
+
+  scheduleFetch(query, quoted) {
+    if (this.debounce) clearTimeout(this.debounce);
+    this.debounce = setTimeout(() => this.fetch(query, quoted), 120);
+  }
+
+  async fetch(query, quoted) {
+    const seq = ++this.fetchSeq;
+    const sid = this.getSessionId();
+    // 文件与会话并发；引号内只补路径不查会话。任一域失败各自降级为 []，互不影响。
+    const filesP = this.api.fileRefs(sid, query).then((r) => (r.ok && Array.isArray(r.value) ? r.value : []), () => []);
+    const sessionsP = quoted
+      ? Promise.resolve([])
+      : this.api.sessionRefs(sid, query).then((r) => (r.ok && Array.isArray(r.value) ? r.value : []), () => []);
+    const [files, sess] = await Promise.all([filesP, sessionsP]);
+    if (seq !== this.fetchSeq || !this.isOpen) return; // 过期响应或已关闭，丢弃
+    this.items = [
+      ...files.flatMap((c) => this.fileItem(c, quoted)),
+      ...sess.map((c) => this.sessionItem(c)),
+    ];
+    this.selectedIndex = this.items.length ? 0 : -1;
+    this.renderList();
+  }
+
+  fileItem(c, preserveQuote) {
+    const mention = formatFileMention(c, preserveQuote);
+    if (mention === undefined) return [];
+    const name = String(c.path).slice(String(c.path).lastIndexOf('/') + 1);
+    const dir = c.kind === 'directory';
+    return [{
+      section: t('ref.fileSection'), glyph: dir ? '📁' : '📄',
+      name: dir ? `${name}/` : name, desc: c.path,
+      kind: 'file', isDir: dir, mention,
+    }];
+  }
+
+  sessionItem(c) {
+    const parts = [];
+    if (c.label !== c.sessionId) parts.push(c.sessionId);
+    if (c.cwd) parts.push(c.cwd);
+    return {
+      section: t('ref.sessionSection'), glyph: '💬',
+      name: c.label || c.sessionId, desc: parts.join(' · '),
+      kind: 'session', mention: c.mention,
+    };
+  }
+
+  renderList() {
+    if (!this.listEl) return;
+    if (this.items.length === 0) {
+      this.listEl.innerHTML = `<div class="cmd-empty">${esc(t('ref.empty'))}</div>`;
+      return;
+    }
+    let html = '';
+    let lastSection = null;
+    this.items.forEach((item, idx) => {
+      if (item.section !== lastSection) {
+        html += `<div class="ref-section">${esc(item.section)}</div>`;
+        lastSection = item.section;
+      }
+      html += `<div class="cmd-item ${idx === this.selectedIndex ? 'selected' : ''}" role="option" data-idx="${idx}">
+        <span class="cmd-type">${item.glyph}</span>
+        <span class="cmd-name">${esc(item.name)}</span>
+        ${item.desc ? `<span class="cmd-desc">${esc(item.desc)}</span>` : ''}
+      </div>`;
+    });
+    this.listEl.innerHTML = html;
+    const sel = this.listEl.querySelector('.cmd-item.selected');
+    if (sel && this.listEl.scrollHeight > this.listEl.clientHeight) sel.scrollIntoView({ block: 'nearest' });
+  }
+
+  positionPanel() {
+    if (!this.isOpen) return;
+    const rect = this.inputEl.getBoundingClientRect();
+    const maxAbove = rect.top - 12;
+    this.panel.style.left = rect.left + 'px';
+    this.panel.style.width = Math.min(rect.width, 520) + 'px';
+    this.panel.style.top = 'auto';
+    this.panel.style.bottom = Math.max(6, window.innerHeight - rect.top + 6) + 'px';
+    this.panel.style.maxHeight = '';
+    const h = this.panel.scrollHeight;
+    if (h > maxAbove && maxAbove > 90) {
+      this.panel.style.top = '10px';
+      this.panel.style.bottom = 'auto';
+      this.panel.style.maxHeight = maxAbove + 'px';
+    }
+  }
+
+  move(delta) {
+    if (this.items.length === 0) return;
+    this.selectedIndex = Math.max(0, Math.min(this.selectedIndex + delta, this.items.length - 1));
+    this.renderList();
+  }
+
+  /** 主输入框 keydown 委派：消费了导航/补全键返回 true，否则 false（让主逻辑继续，如回车发送）。 */
+  handleKey(e) {
+    if (!this.isOpen) return false;
+    switch (e.key) {
+      case 'ArrowDown': e.preventDefault(); this.move(1); return true;
+      case 'ArrowUp': e.preventDefault(); this.move(-1); return true;
+      case 'Tab':
+        if (this.selectedIndex >= 0) { e.preventDefault(); this.pickSelected(); return true; }
+        return false;
+      case 'Enter':
+        if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return false;
+        if (this.selectedIndex >= 0) { e.preventDefault(); this.pickSelected(); return true; }
+        this.close(); // 无候选：关面板，让主逻辑发送这条消息
+        return false;
+      case 'Escape': e.preventDefault(); this.close(); return true;
+      default: return false;
+    }
+  }
+
+  pickSelected() {
+    const item = this.items[this.selectedIndex];
+    if (!item || !this.token) { this.close(); return; }
+    const el = this.inputEl;
+    const { tokenStart, cursor } = this.token;
+    const value = el.value;
+    el.value = value.slice(0, tokenStart) + item.mention + value.slice(cursor);
+    const caret = tokenStart + item.mention.length;
+    el.setSelectionRange(caret, caret);
+    if (typeof autoGrow === 'function') autoGrow();
+    if (item.kind === 'file' && item.isDir) {
+      this.sync(); // 目录：保持打开，按新 token 继续下钻
+    } else {
+      this.close();
+      el.focus();
+    }
+  }
+
+  close() {
+    if (this.debounce) { clearTimeout(this.debounce); this.debounce = null; }
+    if (!this.isOpen) return;
+    this.isOpen = false;
+    this.panel.style.display = 'none';
+    this.items = [];
+    this.selectedIndex = -1;
+    this.token = null;
+    this.fetchSeq++; // 让在途响应失效
+  }
+}
+
 // 需要 esc 函数（文件顶部已有）
   async function send() {
     const text = inputEl.value.trim();
@@ -1729,6 +2318,7 @@ class CommandPanel {
     const sentFiles = draftFiles.slice();
     inputEl.value = '';
     autoGrow();
+    if (referencePanel) referencePanel.close();
     document.querySelector('.chat-empty')?.remove();
 
     // 斜杠命令检测：以 / 开头的直接走 commands/execute（如 /compact /permission 等）
@@ -1929,23 +2519,27 @@ class CommandPanel {
     const hasContent = Array.isArray(content) && content.some(
       (b) => (b.type === 'text' && b.text) || (b.type === 'reasoning' && b.text) || b.type === 'image'
     );
+    const el = streamMsg;
+    let removed = false;
     if (hasContent) {
-      renderAssistantContent(streamMsg, content, model ? `${model}${usage}` : '');
+      renderAssistantContent(el, content, model ? `${model}${usage}` : '');
     } else if (model || usage) {
       // 最终消息无 content（文本只存在于 chunk 流）→ 保留已流式渲染的正文，仅补 meta
-      const hasText = streamMsg.textContent.trim().length > 0;
+      const hasText = el.textContent.trim().length > 0;
       if (!hasText) {
-        streamMsg.remove();
-        streamMsg = null;
+        el.remove();
+        removed = true;
       } else {
         const m = document.createElement('div');
         m.className = 'msg-meta';
         m.textContent = `${model}${usage}`;
-        streamMsg.appendChild(m);
+        el.appendChild(m);
       }
     }
     streamMsg = null;
     domBlocks = new Map();
+    // 只有定稿并保留下来的 assistant 消息才挂操作条；被当作空消息移除的不挂
+    if (!removed) attachMsgActions(el, currentSessionId, assistantMsgId(data));
   }
 
   function handleSessionEvent(p) {
@@ -2791,10 +3385,24 @@ class CommandPanel {
   }
 
   let commandPanel = null;
+  let referencePanel = null;
 
   function initCommandPanel() {
     if (commandPanel) return;
     commandPanel = new CommandPanel(inputEl, api, () => currentSessionId);
+  }
+
+  function initReferencePanel() {
+    if (referencePanel) return;
+    referencePanel = new ReferencePanel(inputEl, api, () => currentSessionId);
+  }
+
+  // 输入 / 光标移动后同步 @ 面板：无会话或命令面板打开时不弹（/ 与 @ 互斥）
+  function syncReferencePanel() {
+    if (!currentSessionId) { if (referencePanel) referencePanel.close(); return; }
+    if (commandPanel && commandPanel.isOpen) return;
+    initReferencePanel();
+    referencePanel.sync();
   }
 
   inputEl.addEventListener('keydown', (e) => {
@@ -2807,13 +3415,20 @@ class CommandPanel {
     }
     // 命令面板打开时，回车/方向键等由面板接管，不再走发送
     if (commandPanel && commandPanel.isOpen) return;
+    // @ 引用面板打开时：导航/补全键交给面板；面板未消费（如无候选的回车）继续走发送
+    if (referencePanel && referencePanel.isOpen && referencePanel.handleKey(e)) return;
     // Enter 发送；Shift/Alt+Enter 换行（不拦截，走默认换行）
     if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
       send();
     }
   });
-  inputEl.addEventListener('input', autoGrow);
+  inputEl.addEventListener('input', () => { autoGrow(); syncReferencePanel(); });
+  // 光标移动（不改变文本）也要重判 @ token：点进/点出引用、方向键移动都算
+  inputEl.addEventListener('keyup', (e) => {
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) syncReferencePanel();
+  });
+  inputEl.addEventListener('click', syncReferencePanel);
   inputEl.addEventListener('paste', async (e) => {
     const items = e.clipboardData?.items;
     if (!items) return;

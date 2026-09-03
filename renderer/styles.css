@@ -543,6 +543,14 @@ nav { display: flex; flex-direction: column; gap: 6px; flex: 1; }
   background: rgba(0, 212, 170, 0.08);
 }
 
+/* 删除预设是破坏性操作：hover 走警示色，与复制 / 打开区分 */
+.preset-remove:hover:not(:disabled) {
+  color: var(--warn);
+  border-color: rgba(255, 108, 51, 0.5);
+  box-shadow: 0 0 14px rgba(255, 108, 51, 0.18);
+  background: rgba(255, 108, 51, 0.08);
+}
+
 button:disabled { opacity: 0.35; cursor: not-allowed; }
 
 /* ---------- 对话界面（全透明，仅边框，与星空背景完全融合） ---------- */
@@ -1115,6 +1123,54 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
 .ws-group-add:hover { opacity: 1; background: rgba(0, 212, 170, 0.12); }
 .ws-group-empty { padding: 6px 12px; font-size: 11.5px; color: var(--text-dim); }
 .ws-group-body { display: flex; flex-direction: column; gap: 2px; }
+
+/* 工作区「⋯」菜单按钮：hover 分组头时显现，与行内 .cs-rename 同一套交互 */
+.ws-group-more {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s var(--ease-light), background 0.2s var(--ease-light), color 0.2s var(--ease-light);
+}
+.ws-group-head:hover .ws-group-more { opacity: 0.75; }
+.ws-group-more:hover { opacity: 1; background: rgba(0, 212, 170, 0.12); color: var(--accent); }
+.ws-group-head[draggable="true"] { cursor: grab; }
+.ws-group-head[draggable="true"]:active { cursor: grabbing; }
+
+/* 工作区就地改名：输入框顶替标题；改名时收起 add / more，避免输入中误点 */
+.ws-title-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text);
+  background: rgba(4, 7, 15, 0.6);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 1px 6px;
+  outline: none;
+}
+.ws-group.renaming .ws-group-add,
+.ws-group.renaming .ws-group-more { display: none; }
+
+/* 拖拽排序：源半透明，落位点画插入线 / 追加轮廓 */
+.ws-group.dragging,
+.chat-session.dragging { opacity: 0.4; }
+.ws-group-head.drop-before,
+.chat-session.drop-before { box-shadow: 0 -2px 0 0 var(--accent); }
+.ws-group-body.drop-into {
+  outline: 1px dashed var(--accent);
+  outline-offset: -2px;
+  border-radius: 8px;
+  background: rgba(0, 212, 170, 0.06);
+}
 
 .chat-session {
   padding: 9px 12px;
@@ -1760,6 +1816,36 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
   opacity: 0.6;
   margin-top: 6px;
   letter-spacing: 0.03em;
+}
+
+/* 消息操作条：复制 + 赞 / 踩。默认低调，hover 消息或聚焦时显现；已选评价常驻可见 */
+.msg-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 8px;
+  opacity: 0;
+  transition: opacity 0.2s var(--ease-light);
+}
+.msg-assistant:hover .msg-actions,
+.msg-actions:focus-within,
+.msg-actions:has(.msg-act.active) { opacity: 1; }
+.msg-act {
+  border: 1px solid var(--border);
+  background: rgba(4, 7, 15, 0.4);
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: color 0.18s var(--ease-light), background 0.18s var(--ease-light), border-color 0.18s var(--ease-light);
+}
+.msg-act:hover { color: var(--text); border-color: var(--border-strong); background: rgba(0, 212, 170, 0.1); }
+.msg-fb-like.active,
+.msg-fb-dislike.active {
+  color: var(--accent);
+  border-color: rgba(0, 212, 170, 0.5);
+  background: rgba(0, 212, 170, 0.16);
 }
 
 .typing {
@@ -3632,6 +3718,20 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
   font-family: var(--font-mono);
 }
 .cmd-search-input:focus { outline: none; }
+
+/* @ 引用面板：分区标题（文件 / 会话）与更宽的路径描述，其余复用 .cmd-* */
+.ref-section {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 6px 12px 3px;
+  background: var(--panel);
+  font-size: 0.72em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.ref-panel .cmd-desc { max-width: 340px; }
 
 /* ============================================================
    v0.5 界面质感升级（UI 全面优化，需求#3）

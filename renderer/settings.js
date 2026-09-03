@@ -7,6 +7,7 @@
   const api = window.api;
   const $ = (s) => document.querySelector(s);
   const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const t = (key, params) => window.__i18n.t(key, params);
 
   const NOTES_KEY = 'dsh-plugin-notes';
   let notes = {};
@@ -22,6 +23,7 @@
       return;
     }
     const presets = r.presets || [];
+    const authorable = r.authorable !== false;
     if (presets.length === 0) {
       list.innerHTML = '<div class="empty">harness 未挂载任何插件</div>';
       return;
@@ -29,6 +31,7 @@
     list.innerHTML = presets
       .map((p) => {
         const note = notes[p.id] || '';
+        const isUser = p.trust === 'user';
         return `<div class="preset-card" data-id="${esc(p.id)}">
           <div class="preset-head">
             <strong class="preset-name">${esc(p.name || p.id)}</strong>
@@ -49,6 +52,8 @@
           </div>
           <div class="preset-actions">
             <button class="mini-btn preset-open" type="button">打开文件</button>
+            <button class="mini-btn preset-copy" type="button"${authorable ? '' : ` disabled title="${esc(t('preset.copy.notAuthorable'))}"`}>${esc(t('preset.copy'))}</button>
+            <button class="mini-btn preset-remove" type="button"${isUser ? '' : ` disabled title="${esc(t('preset.remove.builtin'))}"`}>${esc(t('preset.remove'))}</button>
           </div>
         </div>`;
       })
@@ -73,6 +78,34 @@
         const r = await api.openPresetDoc(id);
         if (!r.ok && !r.opened) (window.__modal ? window.__modal.alert('打开文件失败：' + (r.error || 'unknown'), '提示') : alert('打开文件失败：' + (r.error || 'unknown')));
       });
+      const copyBtn = card.querySelector('.preset-copy');
+      if (copyBtn && !copyBtn.disabled) {
+        copyBtn.addEventListener('click', async () => {
+          const modal = window.__modal;
+          const newId = await modal.prompt(t('preset.copy.title'), t('preset.copy.idLabel'), `${id}-copy`, { okText: t('preset.copy'), rows: 1 });
+          if (newId === null) return;
+          const clean = String(newId).trim();
+          if (!clean) { modal.alert(t('preset.copy.idEmpty'), t('preset.copy.title')); return; }
+          const r = await api.copyPreset(id, clean);
+          if (!r.ok) { modal.alert(t('preset.copy.failed', { error: r.error || 'unknown' }), t('preset.copy.title')); return; }
+          modal.alert(t('preset.copy.done', { id: clean }), t('preset.copy.title'));
+          refreshPresets();
+          refreshDefaultPreset();
+        });
+      }
+      const removeBtn = card.querySelector('.preset-remove');
+      if (removeBtn && !removeBtn.disabled) {
+        removeBtn.addEventListener('click', async () => {
+          const modal = window.__modal;
+          const ok = await modal.confirm(t('preset.remove.confirm', { id }), t('preset.remove'), { okText: t('preset.remove.okText'), danger: true });
+          if (!ok) return;
+          const r = await api.removePreset(id);
+          if (!r.ok) { modal.alert(t('preset.remove.failed', { error: r.error || 'unknown' }), t('preset.remove')); return; }
+          modal.alert(t('preset.remove.done', { id }), t('preset.remove'));
+          refreshPresets();
+          refreshDefaultPreset();
+        });
+      }
       const ta = card.querySelector('.preset-note');
       const saved = card.querySelector('.preset-note-saved');
       let timer = null;

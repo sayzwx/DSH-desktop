@@ -138,6 +138,17 @@ contextBridge.exposeInMainWorld('api', {
   hostDescribe: () => ipcRenderer.invoke('host:describe'),
   hostOpenPath: (path) => ipcRenderer.invoke('host:openPath', { path }),
 
+  // ---- typert Remote：@引用候选（只读）与消息反馈（per-message CAS）----
+  // 引用：agentId=当前会话，query=@ 之后的文本；两域各自独立降级
+  fileRefs: (agentId, query) => ipcRenderer.invoke('chat:fileRefs', { agentId, query }),
+  sessionRefs: (agentId, query) => ipcRenderer.invoke('chat:sessionRefs', { agentId, query }),
+  // 反馈：list 只读；put/delete 带 ifVersion 做乐观并发，version-conflict 时返回权威 current
+  feedbackList: (sessionId) => ipcRenderer.invoke('feedback:list', { sessionId }),
+  feedbackPut: (sessionId, messageId, rating, note, ifVersion) =>
+    ipcRenderer.invoke('feedback:put', { sessionId, messageId, rating, note, ifVersion }),
+  feedbackDelete: (sessionId, messageId, ifVersion) =>
+    ipcRenderer.invoke('feedback:delete', { sessionId, messageId, ifVersion }),
+
   // ---- 应用菜单 / 快捷键 / 系统通知 ----
   // 菜单项与快捷键在主进程，页面跳转这类动作转发给渲染层执行，主进程不操作 DOM
   onMenuAction: (cb) => ipcRenderer.on('app:menu', (_e, action) => cb(action)),
