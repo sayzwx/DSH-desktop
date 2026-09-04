@@ -818,7 +818,10 @@ async function main() {
       check('通知偏好可关闭', notify.afterOff?.enabled, false);
       check('通知偏好可恢复', notify.restored?.enabled, true);
       check('窗口可见时不打扰（notified=false）', notify.fired?.notified, false);
-      check('Ctrl+K 事件让搜索框拿到焦点', notify.focused, true);
+      // Ctrl+K 焦点依赖对话页外壳可见，而外壳在未连引擎时是 display:none（占位页），
+      // 隐藏输入框拿不到焦点 —— 这是断连时的正常表现，只在引擎在线时断言。
+      if (engineUp) check('Ctrl+K 事件让搜索框拿到焦点', notify.focused, true);
+      else console.log('  (引擎未在线，对话外壳隐藏 — 跳过 Ctrl+K 焦点断言)');
     }
 
     // --- RPC 桥：preload 暴露面 ---

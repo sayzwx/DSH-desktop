@@ -671,15 +671,29 @@ function broadcastChat(msg) {
   }
 }
 
+/** 引擎不可达时的人话错误：区分超时与连不上，避免把裸 fetch 异常漏给渲染层。 */
+function engineUnreachableMessage(err) {
+  const name = err && err.name;
+  if (name === 'TimeoutError' || name === 'AbortError') return '引擎无响应（:3080 超时）';
+  return `无法连接引擎（:3080）：${err && err.message ? err.message : String(err)}`;
+}
+
 async function rpcCall(method, payload) {
   const rpcId = `rpc-${++chatRpcCounter}`;
-  const res = await fetch(`http://127.0.0.1:${PORT}/api/${method}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ type: 'client-request', rpcId, method, payload: payload || {} }),
-    signal: AbortSignal.timeout(12000),
-  });
-  const body = await res.json();
+  let res;
+  let body;
+  try {
+    res = await fetch(`http://127.0.0.1:${PORT}/api/${method}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'client-request', rpcId, method, payload: payload || {} }),
+      signal: AbortSignal.timeout(12000),
+    });
+    body = await res.json();
+  } catch (err) {
+    // 引擎未启动 / 端口不通 / 超时：统一成 {ok:false}，不让异常冒到渲染层
+    return { ok: false, error: { message: engineUnreachableMessage(err) } };
+  }
   if (!body || body.type !== 'server-response') {
     return { ok: false, error: { message: `bad envelope: HTTP ${res.status}` } };
   }
@@ -695,13 +709,19 @@ async function rpcCall(method, payload) {
  */
 async function rpcCallTypert(method, args) {
   const rpcId = `rpc-${++chatRpcCounter}`;
-  const res = await fetch(`http://127.0.0.1:${PORT}/api/${method}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ type: 'client-request', rpcId, method, payload: { args } }),
-    signal: AbortSignal.timeout(15000),
-  });
-  const body = await res.json();
+  let res;
+  let body;
+  try {
+    res = await fetch(`http://127.0.0.1:${PORT}/api/${method}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'client-request', rpcId, method, payload: { args } }),
+      signal: AbortSignal.timeout(15000),
+    });
+    body = await res.json();
+  } catch (err) {
+    return { ok: false, error: { message: engineUnreachableMessage(err) } };
+  }
   if (!body || body.type !== 'server-response') {
     return { ok: false, error: { message: `bad envelope: HTTP ${res.status}` } };
   }
@@ -1257,15 +1277,19 @@ ipcMain.handle('chat:selectModel', async (_e, { sessionId, provider, model, reas
   return { ok: true, value: r.value };
 });
 // 切换会话权限预设：走 harness 的 /permission 命令（与 Web UI 同一机制）
+// 注意：commands/execute 的 wire 契约是 (agentId, line, images)，images 是必填的 z.array
+// （EncodedImageAttachment[]），非可选。此前漏传 images 会被 typert 严格网关整条拒绝，
+// 导致所有斜杠命令 / 权限切换 /（/plan off）静默失败——面板关掉却"没效果"。桌面端命令
+// 目前不带图片，固定传 []；将来若要给命令附图，从渲染层透传 images 即可。
 ipcMain.handle('chat:permissionSet', async (_e, { sessionId, preset }) => {
-  const r = await rpcCallTypert('commands/execute', { agentId: sessionId, line: `/permission ${preset}` });
+  const r = await rpcCallTypert('commands/execute', { agentId: sessionId, line: `/permission ${preset}`, images: [] });
   if (!r.ok) return { ok: false, error: r.error?.message || 'commands/execute failed' };
   return { ok: true, command: r.value?.result || null };
 });
 
 // 通用斜杠命令执行：支持 /compact 等任意 harness 命令
-ipcMain.handle('chat:commandsExecute', async (_e, { sessionId, line }) => {
-  const r = await rpcCallTypert('commands/execute', { agentId: sessionId, line });
+ipcMain.handle('chat:commandsExecute', async (_e, { sessionId, line, images }) => {
+  const r = await rpcCallTypert('commands/execute', { agentId: sessionId, line, images: Array.isArray(images) ? images : [] });
   if (!r.ok) return { ok: false, error: r.error?.message || 'commands/execute failed' };
   return { ok: true, command: r.value?.result || null };
 });

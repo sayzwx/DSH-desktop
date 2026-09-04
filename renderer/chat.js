@@ -2138,13 +2138,18 @@ class CommandPanel {
     }
   }
 
-  executeSelected() {
+  async executeSelected() {
     if (this.selectedIndex >= 0 && this.filtered[this.selectedIndex]) {
       const item = this.filtered[this.selectedIndex];
       const line = '/' + item.name;
       this.close();
-      // 执行命令
-      this.api.chatCommandsExecute(this.getSessionId(), line).catch(console.error);
+      // 执行命令；失败必须回显，否则用户看到的是"选了却没效果"
+      try {
+        const r = await this.api.chatCommandsExecute(this.getSessionId(), line);
+        if (!r || !r.ok) showChatError(`命令失败：${(r && r.error) || 'unknown'}`);
+      } catch (e) {
+        showChatError(`命令失败：${e && e.message ? e.message : e}`);
+      }
     }
   }
 
