@@ -305,6 +305,51 @@
     el.restartBanner.hidden = !need;
   }
 
+  // 重启 Harness（stop+start）让新装/改动的插件被 cordis 重新组合加载，比整应用重启轻。
+  async function restartHarnessNow() {
+    try {
+      await api.stopHarness();
+      await api.startHarness();
+      setTimeout(() => loadAll(), 3500);
+    } catch (e) {
+      alertBox('重启 Harness 失败：' + (e && e.message), '重启 Harness');
+    }
+  }
+
+  // 安装/更新/卸载/启停 之后：区分「已直接生效」与「需重启生效」，需重启时确认后自动重启。
+  // 注意：runOp 期间 S.busy=true，loadAll 会早退，故这里直接拉 /dsh-market/installed 的
+  // activation 状态判断，不依赖 loadAll。
+  async function afterMutate(label) {
+    try {
+      const inst = await get('/dsh-market/installed');
+      const act = inst && inst.data && inst.data.activation;
+      if (act) {
+        for (const k of Object.keys(act)) {
+          if (act[k] && act[k].state === 'restart') S.restartNeeded = true;
+        }
+      }
+    } catch { /* 拉取失败则沿用已有 restartNeeded */ }
+    if (S.restartNeeded) {
+      const ok = await confirmBox(
+        `${label}完成，但该插件需要重启 Harness 才会被加载生效。\n是否现在重启 Harness？（不重启则下次启动时生效）`,
+        '需要重启生效',
+        '现在重启',
+      );
+      if (ok) await restartHarnessNow();
+    } else {
+      alertBox(`${label}完成，已直接生效。`, '已生效');
+    }
+  }
+
+  // 引擎就绪后自动补装/自检内置市场：修复"一键安装后商店没自动配置"——不必等用户打开商店页。
+  let autoEnsureFired = false;
+  function autoEnsureMarket() {
+    if (autoEnsureFired) return;
+    autoEnsureFired = true;
+    setTimeout(() => { api.marketEnsure().catch(() => {}); }, 1500);
+  }
+  if (api.onState) api.onState((s) => { if (s === 'running') autoEnsureMarket(); });
+
   function renderTabs() {
     el.tabs.hidden = false;
     el.body.hidden = false;
@@ -595,7 +640,7 @@
       btn && (btn.disabled = true);
       const r = await post('/dsh-market/install', { url });
       handleOpResult(r, '安装');
-      if (r.data && r.data.ok) await waitIdle();
+      if (r.data && r.data.ok) { await waitIdle(); await afterMutate('安装'); }
     });
   }
 
@@ -613,14 +658,14 @@
         return;
       }
       handleOpResult(r, `更新 ${name}`);
-      if (data && data.ok) await waitIdle();
+      if (data && data.ok) { await waitIdle(); await afterMutate('更新'); }
     });
   }
 
   async function doForceUpdate(name) {
     const r = await post('/dsh-market/update', { name, force: true });
     handleOpResult(r, `更新 ${name}（强制）`);
-    if (r.data && r.data.ok) await waitIdle();
+    if (r.data && r.data.ok) { await waitIdle(); await afterMutate('更新'); }
   }
 
   async function uninstallByName(name, btn) {
@@ -631,7 +676,7 @@
       btn && (btn.disabled = true);
       const r = await post('/dsh-market/uninstall', { name });
       const data = handleOpResult(r, `卸载 ${name}`);
-      if (data && data.ok) await waitIdle();
+      if (data && data.ok) { await waitIdle(); await afterMutate('卸载'); }
     });
   }
 
@@ -641,6 +686,7 @@
       const r = await post('/dsh-market/toggle', { name, enabled });
       const data = handleOpResult(r, `${enabled ? '启用' : '停用'} ${name}`);
       if (data && data.restart) S.restartNeeded = true;
+      if (data && data.ok) await afterMutate(enabled ? '启用' : '停用');
     });
   }
 

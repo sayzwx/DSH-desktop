@@ -439,7 +439,10 @@ if ($harnessReady) {
 # 幂等：已安装则跳过；失败不阻塞安装（可下次启动时由应用内补装）。
 $dshCli = Join-Path $harnessDir 'apps\cli\lib\bin.js'
 $nodeExe = Join-Path $Dest 'tools\node\node.exe'
-if ((Test-Path $dshCli) -and (Test-Path $nodeExe)) {
+# 捆绑 node 不在固定路径时回退到已解析的 node（系统/其它位置），否则整段市场安装会被跳过，
+# 导致"一键安装后内置插件商店没自动配置"。
+if (-not (Test-Path $nodeExe)) { $nodeExe = Get-NodeExe }
+if ((Test-Path $dshCli) -and $nodeExe) {
   $marketDir = Join-Path $Dest 'app\extras\dsh-market-bundle'
   $mfstPath = Join-Path $marketDir 'manifest.json'
   $installedFromBundle = $false
