@@ -3832,6 +3832,14 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* 命令参数占位提示（descriptor.input.hint），让用户一眼看出哪些命令需要补参数 */
+.cmd-hint {
+  margin-left: 6px;
+  color: var(--text-dim);
+  font-weight: 400;
+  font-size: 0.85em;
+  opacity: 0.8;
+}
 .cmd-desc {
   color: var(--text-dim);
   font-size: 0.8em;

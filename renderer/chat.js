@@ -2073,8 +2073,8 @@ class CommandPanel {
   filterAndRender() {
     const q = this.searchQuery;
     const all = [
-      ...this.commands.map(c => ({ type: 'command', name: c.name, description: c.description || '', raw: c })),
-      ...this.skills.map(s => ({ type: 'skill', name: s.name, description: s.description || '', raw: s })),
+      ...this.commands.map(c => ({ type: 'command', name: c.name, description: c.description || '', hint: (c.input && c.input.hint) || '', raw: c })),
+      ...this.skills.map(s => ({ type: 'skill', name: s.name, description: s.description || '', hint: '', raw: s })),
     ];
     this.filtered = q
       ? all.filter(item => item.name.toLowerCase().includes(q) || (item.description && item.description.toLowerCase().includes(q)))
@@ -2092,7 +2092,7 @@ class CommandPanel {
     this.listEl.innerHTML = this.filtered.map((item, idx) => `
       <div class="cmd-item ${idx === this.selectedIndex ? 'selected' : ''}" role="option" data-idx="${idx}" data-type="${item.type}" data-name="${esc(item.name)}">
         <span class="cmd-type">${item.type === 'command' ? '⚡' : '🛠'}</span>
-        <span class="cmd-name">${esc(item.name)}</span>
+        <span class="cmd-name">${esc(item.name)}${item.hint ? `<span class="cmd-hint">${esc(item.hint)}</span>` : ''}</span>
         ${item.description ? `<span class="cmd-desc">${esc(item.description)}</span>` : ''}
       </div>
     `).join('');
@@ -2141,6 +2141,17 @@ class CommandPanel {
   async executeSelected() {
     if (this.selectedIndex >= 0 && this.filtered[this.selectedIndex]) {
       const item = this.filtered[this.selectedIndex];
+      const desc = item.raw || {};
+      // 需要参数的命令（descriptor 带 input.hint，如 /goal <objective>、/permission <preset>）：
+      // 选中只把 "/name " 填进输入框让用户补参数，绝不裸执行（裸执行 /goal 只会回 "No goal is set"）。
+      // 只有无 input 的命令（如 /export）才直接执行。
+      if (desc.input) {
+        this.inputEl.value = `/${item.name} `;
+        this.close();
+        this.inputEl.focus();
+        if (typeof autoGrow === 'function') autoGrow();
+        return;
+      }
       const line = '/' + item.name;
       this.close();
       // 执行命令；失败必须回显，否则用户看到的是"选了却没效果"
@@ -2414,16 +2425,10 @@ class ReferencePanel {
 
     // 斜杠命令检测：以 / 开头的直接走 commands/execute（如 /compact /permission 等）
     if (text.startsWith('/')) {
-      pendingUserEl = makeUserMsg(text);
-      scrollBottom(true);
+      // 不在本地画用户气泡：引擎会推 command/run（用户样式回显）+ command/done（结果）。
+      // 本地再画一个会和 command/run 的回显叠加，同一条 /goal 出现两个框。
       const r = await api.chatCommandsExecute(currentSessionId, text);
-      if (r.ok) {
-        // 命令执行成功，结果会通过 mux 推送回来（command/run -> command/done）
-        // 这里不清空草稿，因为可能有图片/文件附件（虽然命令通常不带附件）
-      } else {
-        if (pendingUserEl) pendingUserEl.textContent = `⚠ 命令失败: ${r.error}`;
-      }
-      pendingUserEl = null;
+      if (!r.ok) showChatError(`命令失败：${r.error}`);
       return;
     }
 
