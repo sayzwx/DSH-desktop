@@ -2375,6 +2375,24 @@ function sha256File(p) {
     return require('node:crypto').createHash('sha256').update(buf).digest('hex').toLowerCase();
   } catch { return ''; }
 }
+// dsh plugin add 会在 profile 目录里裸调 pnpm（安装/链接插件依赖）。捆绑 node 目录若不在
+// PATH 上（也没有 pnpm shim），pnpm 解析失败 → 'pnpm 不是内部或外部命令' → 市场永远装不上。
+// 这里补齐：① 确保 node 目录里有 pnpm.cmd shim（转发 corepack，同 setup.ps1 的做法）；
+//          ② spawn 环境把该目录前置到 PATH，并关掉 corepack 首次下载的交互确认（非交互场景会卡死）。
+function marketInstallEnv(nodeExe) {
+  const nodeDir = path.dirname(nodeExe);
+  try {
+    const shim = path.join(nodeDir, 'pnpm.cmd');
+    if (!fs.existsSync(shim) && fs.existsSync(path.join(nodeDir, 'corepack.cmd'))) {
+      fs.writeFileSync(shim, '@echo off\r\n"%~dp0corepack.cmd" pnpm %*\r\n', 'utf8');
+    }
+  } catch { /* 只读目录等场景忽略：PATH 上若已有 pnpm 则不受影响 */ }
+  const env = { ...process.env };
+  env.PATH = nodeDir + path.delimiter + (env.PATH || '');
+  env.COREPACK_ENABLE_DOWNLOAD_PROMPT = '0';
+  return env;
+}
+
 ipcMain.handle('market:ensure', async () => {
   const st = await marketStatusOk();
   if (st.ok) {
@@ -2416,7 +2434,7 @@ ipcMain.handle('market:ensure', async () => {
     }
   }
   pushLog('stdout', `[市场] 未检测到 dshmarket 插件，自动安装：${tgzForLog}`);
-  const p = spawn(nodeExe, installArgs, { cwd: harness.dir, windowsHide: true, env: { ...process.env } });
+  const p = spawn(nodeExe, installArgs, { cwd: harness.dir, windowsHide: true, env: marketInstallEnv(nodeExe) });
   p.stdout.on('data', (d) => pushLog('stdout', d.toString()));
   p.stderr.on('data', (d) => pushLog('stderr', d.toString()));
   return new Promise((resolve) => {

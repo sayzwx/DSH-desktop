@@ -349,13 +349,13 @@
         e.stopPropagation();
         const key = el.closest('.ws-group').dataset.key;
         const rect = el.getBoundingClientRect();
-        openWorkspaceMenu(rect.left, rect.bottom + 4, key);
+        openWorkspaceContextMenu(rect.left, rect.bottom + 4, key);
       };
     });
     sessionsEl.querySelectorAll('.ws-group-head[draggable="true"]').forEach((el) => {
       el.oncontextmenu = (e) => {
         e.preventDefault();
-        openWorkspaceMenu(e.clientX, e.clientY, el.dataset.ws);
+        openWorkspaceContextMenu(e.clientX, e.clientY, el.dataset.ws);
       };
     });
     wireSidebarDrag();
@@ -531,7 +531,8 @@
   }
 
   // ---------------- 工作区管理（重命名 / 删除 / 右键菜单）----------------
-  function openWorkspaceMenu(x, y, workspaceId) {
+  // 注意：不能叫 openWorkspaceMenu —— 工具栏「全部▾」下拉已占用该名字，同名声明会把下拉覆盖成死按钮。
+  function openWorkspaceContextMenu(x, y, workspaceId) {
     const w = workspaces.find((v) => v.workspaceId === workspaceId);
     if (!w) return;
     const canOpen = !hostCaps || hostCaps.canOpenPath !== false;

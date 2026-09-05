@@ -154,6 +154,18 @@ async function main() {
       diagBackup: !!document.getElementById('diagBackupBtn'),
       diagDevtools: !!document.getElementById('diagDevtoolsBtn'),
     }))()`), { notifyEnabled: true, notifyOnlyHidden: true, diagGrid: true, diagRefresh: true, diagBackup: true, diagDevtools: true });
+    // 回归：工具栏「全部▾」工作区下拉曾被同名右键菜单函数声明覆盖成死按钮（点击无效果）。
+    // 空引擎下 rows>=1 仍成立（至少有「添加工作区…」入口）。
+    check('点击工具栏工作区按钮弹出下拉（回归）', await evalJs(`(() => {
+      const btn = document.getElementById('ctWsBtn');
+      const panel = document.getElementById('ctWsPanel');
+      if (!btn || !panel) return false;
+      btn.click();
+      const opened = !panel.hidden;
+      const rows = panel.querySelectorAll('.ct-wi').length;
+      document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      return opened && rows >= 1;
+    })()`), true);
 
     // --- markdown 走真实模块 ---
     check(
