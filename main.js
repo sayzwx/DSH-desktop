@@ -2896,11 +2896,37 @@ function buildApplicationMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+// 应用启动即自动拉起 Harness（2026-09-29 用户要求：启动应用端就自动启动，不要每次手动点）。
+// startHarness 本身幂等：:3080 已有实例就接管（adopted）；本机没有引擎走自动获取（installing）；
+// 全程只写日志、不弹窗不打扰，失败时用户仍可手动点「启动 Harness」重试。
+function autoStartHarness() {
+  // 测试/自动化可显式关闭：scripts/smoke-renderer.cjs 等以开发实例启动，
+  // 端口空闲时不希望「启动流程」顺带触发引擎自动安装（那会让测试变成装机）。
+  if (process.env.DSH_NO_AUTOSTART === '1') {
+    pushLog('stdout', '[应用启动：DSH_NO_AUTOSTART=1，跳过自动启动]');
+    return;
+  }
+  startHarness()
+    .then((r) => {
+      if (r && r.ok) {
+        pushLog('stdout', r.adopted
+          ? '[应用启动：检测到 :3080 已有服务在运行，已接管（无需启动）]'
+          : r.installing
+            ? '[应用启动：未检测到本机引擎，已开始自动获取…]'
+            : '[应用启动：已自动启动 Harness]');
+      } else {
+        pushLog('stderr', `[应用启动：自动启动未执行：${(r && r.error) || 'unknown'}]`);
+      }
+    })
+    .catch((e) => pushLog('stderr', `[应用启动：自动启动失败：${e && e.message ? e.message : e}]`));
+}
+
 app.whenReady().then(() => {
   buildApplicationMenu();
   createWindow();
   createTray();
   ensureShortcut();
+  autoStartHarness();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
     else showMainWindow();

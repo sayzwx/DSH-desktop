@@ -10,6 +10,7 @@ const metaInfo = $('#metaInfo');
 const startBtn = $('#startBtn');
 const stopBtn = $('#stopBtn');
 const openWebBtn = $('#openWebBtn');
+const consoleOpenWebBtn = $('#consoleOpenWebBtn');
 const logPreview = $('#logPreview');
 const logView = $('#logView');
 const followLog = $('#followLog');
@@ -95,6 +96,7 @@ function setState(s) {
   startBtn.disabled = running || busy;
   stopBtn.disabled = !running;
   openWebBtn.disabled = !running;
+  if (consoleOpenWebBtn) consoleOpenWebBtn.disabled = !running;
   if (running) {
     runStartTime = Date.now();
     startTPlusClock();
@@ -372,6 +374,8 @@ stopBtn.addEventListener('click', async () => {
 });
 
 openWebBtn.addEventListener('click', () => api.openWeb());
+// 控制台「发射控制」卡里的「打开 Web 端」：与侧栏底部那颗等价，只是更顺手（2026-09-29 用户要求）
+if (consoleOpenWebBtn) consoleOpenWebBtn.addEventListener('click', () => api.openWeb());
 clearLogBtn.addEventListener('click', () => {
   logLines = [];
   logView.textContent = '';
@@ -443,8 +447,9 @@ apiKey.addEventListener('change', async () => {
   const logs = await api.getLogs();
   if (logs.length) appendLogs(logs);
   logView.scrollTop = logView.scrollHeight;
-  // 默认定位到最近对话内容（而非仪表盘）
-  document.querySelector('.nav-btn[data-page="chat"]')?.click();
+  // 启动后停在「控制台」（2026-09-29 用户要求：不要一打开就跳到对话/网页端）。
+  // 引擎由主进程在应用启动时自动拉起，状态与日志都会实时出现在本页；
+  // 需要网页版 Harness 时用本页「发射控制」里的「打开 Web 端」按钮。
 })();
 
 api.onState((s) => {

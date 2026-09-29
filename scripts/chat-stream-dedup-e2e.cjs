@@ -98,7 +98,7 @@ async function main() {
   ], {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, DSH_DEV_INSTANCE: 'dedup-e2e' },
+    env: { ...process.env, DSH_DEV_INSTANCE: 'dedup-e2e', DSH_NO_AUTOSTART: '1' },
   });
 
   const failures = [];

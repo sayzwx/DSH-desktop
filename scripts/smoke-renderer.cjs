@@ -85,7 +85,7 @@ async function main() {
     // 收住输出：启动期崩溃的原因（GPU / 单实例锁 / 模块加载失败）只在 stderr 里，
     // 丢掉它就等于丢掉排查线索（踩过：只报"CDP 未就绪"，查了十几分钟）。
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, DSH_DEV_INSTANCE: 'smoke' },
+    env: { ...process.env, DSH_DEV_INSTANCE: 'smoke', DSH_NO_AUTOSTART: '1' },
   });
 
   const failures = [];
@@ -832,6 +832,11 @@ async function main() {
 
     // --- 轨道 G：菜单动作转发 / 系统通知 ---
     check('onMenuAction 已暴露', await evalJs(`typeof window.api?.onMenuAction`), 'function');
+    // 通知抑制的判据是主进程的 mainWindow.isFocused()。用户 正式版 往往同时开着，
+    // 它的窗口会抢走系统焦点 → 冒烟窗口 isFocused()=false → 通知真发出去 → 断言必挂。
+    // 断言前先把本测试窗口拉到前台（CDP Page.bringToFront），让「窗口可见时不打扰」只测逻辑本身。
+    await send('Page.enable').catch(() => {});
+    await send('Page.bringToFront').catch(() => {});
     const notify = await evalJs(`(async () => {
       const before = await window.api.getNotifyPrefs();
       await window.api.setNotifyPrefs({ enabled: false });
