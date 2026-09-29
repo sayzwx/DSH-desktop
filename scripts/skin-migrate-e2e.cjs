@@ -40,6 +40,33 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const STORE = path.join(DSH_HOME, 'desktop-themes.json');
 const storeExisted = fs.existsSync(STORE);
 const storeBackup = storeExisted ? fs.readFileSync(STORE, 'utf8') : null;
+const TEST_STARTED = Date.now();
+
+/**
+ * 还原主题库原貌。
+ * 🔴 必须能在**看门狗超时**那条路径上也执行 —— 早期版本直接 app.exit(3) 会绕过 finally，
+ *    实测往用户主题库里留下了两条测试主题（`origin.plugin` = 被测皮肤）。所以：
+ *    · 先按 origin.plugin + createdAt 删掉本次跑期间新建的（兜住 beforeIds 判定不到的残留）
+ *    · 再整体还原成开跑前的内容
+ */
+function restoreStore() {
+  try {
+    if (fs.existsSync(STORE)) {
+      const j = JSON.parse(fs.readFileSync(STORE, 'utf8'));
+      const kept = (j.themes || []).filter((t) => {
+        const plugin = (t.origin && t.origin.plugin) || '';
+        const created = Date.parse(t.createdAt || '') || 0;
+        return !(plugin === SKIN_ID && created >= TEST_STARTED - 5000);
+      });
+      if (kept.length !== (j.themes || []).length) {
+        j.themes = kept;
+        fs.writeFileSync(STORE, JSON.stringify(j, null, 2), 'utf8');
+      }
+    }
+    if (storeExisted) fs.writeFileSync(STORE, storeBackup, 'utf8');
+    else if (fs.existsSync(STORE)) fs.unlinkSync(STORE);
+  } catch { /* 还原失败也不能让测试挂掉 */ }
+}
 
 // ---------- 真实主题 IPC（引擎 RPC 用桩；本测试不启动引擎）----------
 registerThemeIpc({
@@ -65,10 +92,14 @@ for (const ch of channels) {
 const PROBE = `(() => {
   const body = document.getElementById('tsBody') || document.body;
   const txt = body.innerText || '';
+  const refine = body.querySelector('.ts-refine');
+  const refineAll = body.querySelector('.ts-refine-all');
   return {
     hasSkinBadge: txt.includes('skin 型'),
     hasPreview: !!body.querySelector('.ts-skin-fig img'),
-    hasRefineBtn: !!body.querySelector('.ts-refine'),
+    refineLabel: refine ? refine.textContent.trim() : '',
+    refineTitle: refine ? (refine.getAttribute('title') || '') : '',
+    refineAllLabel: refineAll ? refineAll.textContent.trim() : '',
     cardName: (body.querySelector('.ts-card-name') || {}).textContent || '',
   };
 })()`;
@@ -76,6 +107,7 @@ const PROBE = `(() => {
 (async () => {
   const report = { ok: false, failures, steps, consoleErrors: [] };
   const watchdog = setTimeout(() => {
+    restoreStore();   // 看门狗也要清场，否则会在用户主题库留测试主题（踩过）
     try { fs.writeFileSync(RESULT, JSON.stringify({ ...report, error: 'watchdog' }, null, 2)); } catch (e) {}
     app.exit(3);
   }, 150000);
@@ -154,7 +186,11 @@ const PROBE = `(() => {
     steps.push({ step: '4 · 界面渲染', detail: probe });
     check('界面标出「skin 型」徽标', probe.hasSkinBadge, true);
     check('界面渲染出预览图', probe.hasPreview, true);
-    check('skin 型不提供「模型精修」入口（如实不给做不到的事）', probe.hasRefineBtn, false);
+    // skin 型给的是「全文承接」（模型读整包结构摘要后用桌面端类名重写，可引用皮肤自带的图），
+    // 与 token 型的「模型精修」区分开：一个是重构表达，一个是补译规则。
+    check('skin 型提供「模型全文承接」入口', probe.refineLabel, '模型全文承接…');
+    check('该入口的说明提到读整包 + 可用自带资源', /整包|结构摘要/.test(probe.refineTitle) && /图片资源/.test(probe.refineTitle), true);
+    check('批量入口文案也是「全文承接」', /全文承接/.test(probe.refineAllLabel), true);
 
     // ---------- 5. 清理：删掉本测试写入的主题，还原主题库原貌 ----------
     const added = ids.filter((x) => !beforeIds.has(x));
@@ -172,11 +208,7 @@ const PROBE = `(() => {
     failures.push(`测试自身失败: ${err && err.message ? err.message : err}`);
   } finally {
     clearTimeout(watchdog);
-    // 无论成败都还原主题库原貌（兜底：上面按 id 删，这里再兜一层）
-    try {
-      if (storeExisted) fs.writeFileSync(STORE, storeBackup, 'utf8');
-      else if (fs.existsSync(STORE)) fs.unlinkSync(STORE);
-    } catch { /* ignore */ }
+    restoreStore();
   }
 
   try { fs.writeFileSync(RESULT, JSON.stringify(report, null, 2)); } catch (e) {}

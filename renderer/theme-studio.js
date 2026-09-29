@@ -148,9 +148,12 @@
       for (const tone of (sch.tones && sch.tones.length ? sch.tones : ['light', 'dark'])) {
         const key = `${sch.id}:${tone}`;
         const isDone = done.has(key);
-        // skin 型不提供「模型精修」：它的样式是一整段 WebUI 专属选择器的 CSS（可达数十万字符），
-        // 逐条翻译既不可靠也不是一次模型调用能覆盖的 —— 如实不给这个入口，取舍写在 notes 里。
-        const refineBtn = isSkin ? '' : `<button type="button" class="mini-btn ts-refine" data-plugin="${esc(p.id)}" data-scheme="${esc(sch.id)}" data-tone="${tone}" title="用模型解析源码后补译未映射规则、派生强调色、并给出行为层结论（会产生模型费用）">模型精修…</button>`;
+        // skin 型给的是「全文承接」：模型读整包结构摘要（配色分布 / 形状语言 / 资源表 /
+        // 规则样本）后用桌面端自己的类名与变量重新表达，并能引用皮肤自带的图片资源。
+        // token 型仍是「模型精修」：只补译免费路径没翻译动的选择器。
+        const refineBtn = isSkin
+          ? `<button type="button" class="mini-btn ts-refine" data-plugin="${esc(p.id)}" data-scheme="${esc(sch.id)}" data-tone="${tone}" title="让模型通读整个皮肤包（自动压缩成结构摘要）后，用桌面端的类名与变量重新表达它的配色/形状/纹理，并可引用皮肤自带的图片资源。会产生模型费用。">模型全文承接…</button>`
+          : `<button type="button" class="mini-btn ts-refine" data-plugin="${esc(p.id)}" data-scheme="${esc(sch.id)}" data-tone="${tone}" title="用模型解析源码后补译未映射规则、派生强调色、并给出行为层结论（会产生模型费用）">模型精修…</button>`;
         rows.push(`<div class="ts-row">
           <span class="ts-row-label">${esc(sch.label)} <span class="ts-tone ts-tone-${tone}">${tone === 'light' ? '浅色' : '深色'}</span></span>
           <span class="meta ts-row-meta">${isSkin
@@ -212,7 +215,9 @@
       <div class="ts-rows">${rows.join('')}</div>
       <div class="ts-card-foot">
         <button type="button" class="primary-btn ts-install-all" data-plugin="${esc(p.id)}">全部免费安装（${p.schemes.length * 2} 个）</button>
-        ${isSkin ? '' : `<button type="button" class="mini-btn ts-refine-all" data-plugin="${esc(p.id)}">全部模型精修（${p.schemes.length * 2} 次调用）</button>`}
+        ${isSkin
+          ? `<button type="button" class="mini-btn ts-refine-all" data-plugin="${esc(p.id)}">全部档位全文承接（${p.schemes.length * 2} 次调用）</button>`
+          : `<button type="button" class="mini-btn ts-refine-all" data-plugin="${esc(p.id)}">全部模型精修（${p.schemes.length * 2} 次调用）</button>`}
         <button type="button" class="mini-btn ts-reveal" data-plugin="${esc(p.id)}">定位主题包目录</button>
       </div>
       <div class="ts-preview" id="tsPreview-${esc(p.id)}"></div>
