@@ -38,8 +38,10 @@ function renderWindows(list) {
   }
   winIndicator.hidden = false;
   const shown = visible.length > 0 ? `${visible.length} 可见` : '';
+  // 侧栏仅 64px：正文只放数字，细节全在 title（含"几可见 / 哪些是辅助窗口"）
+  winIndicatorText.textContent = `${total}${shown && visible.length !== total ? '·' + visible.length : ''}`;
   const total = wins.length;
-  winIndicatorText.textContent = `${total} 窗口${shown ? ` · ${shown}` : ''}`;
+  winIndicatorText.textContent = `${total}`;
   const lines = wins.map((w) => `  · [${w.kind === 'main' ? '主' : '辅'}] ${w.title || w.label}${w.visible ? '（可见）' : '（窗口已隐藏，服务后台运行中）'}`);
   winIndicator.title = `当前应用窗口（${total}）：\n${lines.join('\n')}\n\n点击打开主窗口`;
 }
@@ -93,6 +95,8 @@ function setState(s) {
   sbDot.className = 'sb-dot ' + (running ? 'running' : busy ? 'starting' : 'stopped');
   sbStatus.textContent =
     s === 'running' ? '与 Harness 通讯正常' : s === 'starting' ? '正在建立通讯…' : s === 'installing' ? '正在获取 Harness 引擎…' : s === 'stopping' ? '正在中断通讯…' : '系统待命 · 等待指令';
+  // 侧栏里的状态胶囊放不下整句（64px 宽），CSS 里只留指示灯；完整文案进 title
+  if (statusPill) statusPill.title = statusText.textContent;
   startBtn.disabled = running || busy;
   stopBtn.disabled = !running;
   openWebBtn.disabled = !running;
@@ -364,6 +368,8 @@ function setTheme(name) {
   // 让窗口边框（Windows 标题栏）跟着主题走：深色主题配深色标题栏，浅色配浅色。
   // 之前标题栏跟系统走 —— 应用里切到浅色它还是白的、切到深色还是黑的，看起来"顶框独立"。
   syncNativeTheme(theme, web);
+  // canvas 画的图（仪表盘用量图）颜色不会随 CSS 变量变，必须重绘一次
+  window.dispatchEvent(new CustomEvent('dsh:theme-changed', { detail: { theme, id: name } }));
   return theme;
 }
 

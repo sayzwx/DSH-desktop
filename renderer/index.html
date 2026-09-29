@@ -59,9 +59,10 @@
       </button>
     </nav>
     <div class="sidebar-footer">
-      <div class="status-pill" id="statusPill"><span class="dot"></span><span id="statusText">未运行</span></div>
-      <div class="win-indicator" id="winIndicator" hidden title="已打开/后台的应用窗口（含辅助窗口）"><span class="wi-icon">🪟</span><span id="winIndicatorText">0 窗口</span></div>
-      <button class="mini-btn" id="openWebBtn" disabled>打开 Web UI (:3080)</button>
+      <div class="status-pill" id="statusPill" title="引擎状态"><span class="dot"></span><span id="statusText">未运行</span></div>
+      <div class="win-indicator" id="winIndicator" hidden title="已打开/后台的应用窗口（含辅助窗口）"><span class="wi-icon">🪟</span><span id="winIndicatorText">0</span></div>
+      <!-- 侧栏只有 64px 宽：长文案会被挤爆裁切，这里用短标签 + title（控制台里有完整的「打开 Web 端」按钮） -->
+      <button class="mini-btn" id="openWebBtn" disabled title="打开 Web UI（浏览器里的 Harness 界面）">Web 端</button>
     </div>
   </aside>
 

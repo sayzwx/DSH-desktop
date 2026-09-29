@@ -200,15 +200,18 @@
   --violet: #6b5ce7;
   --gold: #b7791f;
   --starlight: #0f1115;
-  --dust: #81858c;
+  /* 浅色下次级文字比官方 #81858c 再深一档：本项目灰底胶囊多，
+     官方灰压在白卡上够用、压在这些胶囊上只有 ~3.4:1（2026-09-29 反馈「字体看不清」） */
+  --dust: #6b7280;
   --orange: #d97706;
 
   --bg: var(--void);
-  --panel: rgba(255, 255, 255, 0.88);
-  --panel-hover: rgba(255, 255, 255, 0.97);
-  --float: rgba(245, 246, 247, 0.9);
-  --border: rgba(0, 0, 0, 0.1);
-  --border-strong: rgba(0, 0, 0, 0.2);
+  /* 卡片底色用官方浅色档的卡片灰：白卡压白底等于看不见（2026-09-29 用户反馈） */
+  --panel: #f5f6f7;
+  --panel-hover: #ffffff;
+  --float: #eceef1;
+  --border: rgba(0, 0, 0, 0.12);
+  --border-strong: rgba(0, 0, 0, 0.22);
   --text: var(--starlight);
   --text-dim: var(--dust);
   --accent: var(--cyan);
@@ -224,7 +227,7 @@
   --deep: #f2f3f5;
   --deep-2: #eceef1;
   --deep-3: #ffffff;
-  --chrome: #f9fafb;
+  --chrome: #eef0f3;
   --placeholder: rgba(15, 17, 21, 0.35);
   --shadow: rgba(0, 0, 0, 0.16);
   --shadow-card: rgba(15, 23, 42, 0.16);
@@ -524,11 +527,6 @@
    这里用官方浅色文字色做一层真正的暗化，让浮层从页面里浮出来；深色主题不受影响。 */
 :root[data-theme="light"] .modal-overlay {
   background: rgba(15, 17, 21, 0.34);
-}
-
-/* 浅色下 --float（徽章 / 输入框 / 胶囊按钮的底色）与白卡几乎同色，这里压深一档。 */
-:root[data-theme="light"] {
-  --float: rgba(231, 234, 238, 0.95);
 }
 
 :root[data-theme="light"] #bgvideo,
@@ -4661,6 +4659,53 @@ input[type="text"]:focus, input[type="password"]:focus, input:not([type]):focus,
 .settings-module-body #updateStatus
 { white-space: pre-line; }
 
+
+/* ---------- 侧栏底部：64px 宽下的紧凑排版 ----------
+   实测：.status-pill 容器 43px / 内容 96px（"通讯已建立"），#openWebBtn 43px / 131px
+   （"打开 Web UI (:3080)"）—— 右侧全被裁掉，看起来像坏掉的方块。
+   侧栏只保留指示灯与数字，完整文案进 title；完整按钮在控制台页。 */
+.sidebar-footer { overflow: hidden; }
+.sidebar-footer .status-pill { justify-content: center; padding: 9px 0; max-width: 100%; }
+.sidebar-footer .status-pill #statusText { display: none; }
+.sidebar-footer .win-indicator { justify-content: center; max-width: 100%; }
+.sidebar-footer .win-indicator #winIndicatorText { font-size: 9.5px; letter-spacing: 0; }
+.sidebar-footer #openWebBtn {
+  width: 100%; max-width: 100%; padding: 7px 2px;
+  font-size: 10px; line-height: 1.25; white-space: normal; text-align: center;
+}
+
+/* ---------- 浅色专属：按钮的可读性 ----------
+   主/危险按钮原本是「半透明色底 + 同色系文字」的发光风格（为深色底设计）：
+   浅色下 accent 20% 叠白 = 淡蓝底，再压 #4176e6 蓝字只有约 2.4:1，看起来像白字浮在淡蓝上。
+   浅色下改成官方做法 —— 实底 + 白字；危险按钮保留浅底但把文字压深。 */
+:root[data-theme="light"] .primary-btn {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+:root[data-theme="light"] .primary-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 86%, #000);
+  color: var(--on-accent);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+:root[data-theme="light"] .primary-btn::before { display: none; }  /* 扫光在白底上没有意义 */
+:root[data-theme="light"] .primary-btn:disabled {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: color-mix(in srgb, var(--text) 42%, transparent);
+  border-color: var(--border);
+}
+:root[data-theme="light"] .danger-btn {
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: color-mix(in srgb, var(--warn) 82%, #000);
+  border-color: color-mix(in srgb, var(--warn) 42%, transparent);
+}
+:root[data-theme="light"] .danger-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--warn) 20%, transparent);
+}
+/* :not(.primary-btn)：有些按钮同时带 mini-btn primary-btn（保存 / 启用 UA 代理 等），
+   不加这个限定会把主按钮的白字覆盖成深色（实测出现过） */
+:root[data-theme="light"] .mini-btn:not(.primary-btn) { color: var(--text); }
+:root[data-theme="light"] .mini-btn:not(.primary-btn):hover:not(:disabled) { border-color: var(--border-strong); }
 
 /* ---------- 主题工作室：skin 型主题的预览与说明 ---------- */
 .ts-skin-note {

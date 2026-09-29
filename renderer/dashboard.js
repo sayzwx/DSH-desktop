@@ -7,7 +7,26 @@
   const $ = (s) => document.querySelector(s);
   const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-  const C = { cyan: '#00d4aa', violet: '#7b61ff', gold: '#ffd700', orange: '#ff6c33', dust: '#6b7b8d' };
+  // 图表配色**一律从当前主题的 CSS 变量取**。
+  // 这里原先硬编码深空主题的色板（文字 #e8f4f8 近白、轴标 #6b7b8d），浅色主题下就是
+  // 白字压在白色卡片上 —— 用户 2026-09-29 反馈「浅色下部分字体颜色有问题」即指此。
+  // canvas 不认 CSS 变量，所以取 :root 上的**计算值**（var() 链在 computed 阶段已展开）。
+  const cssVar = (name, fallback) => {
+    try {
+      const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      return v || fallback;
+    } catch { return fallback; }
+  };
+  const palette = () => ({
+    text: cssVar('--text', '#0f1115'),
+    dim: cssVar('--text-dim', '#81858c'),
+    accent: cssVar('--accent', '#4176e6'),
+    accent2: cssVar('--accent-2', '#6b5ce7'),
+    accent3: cssVar('--accent-3', '#b7791f'),
+    warn: cssVar('--warn', '#d97706'),
+    // 条形底 / 环底：中性半透明灰，两个主题下都是"看得见但不抢眼"的底
+    track: 'rgba(107, 123, 141, 0.18)',
+  });
 
   const fmt = (n) =>
     n >= 1e9 ? (n / 1e9).toFixed(2) + 'B'
@@ -23,45 +42,47 @@
   const RATE = { input: 0.28, cache: 0.07, output: 0.42 };
 
   function donut(canvas, pct) {
+    const P = palette();
     const ctx = canvas.getContext('2d');
     const cx = canvas.width / 2, cy = canvas.height / 2, r = 66, lw = 16;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.lineWidth = lw;
     ctx.lineCap = 'round';
-    ctx.strokeStyle = 'rgba(107, 123, 141, 0.22)';
+    ctx.strokeStyle = P.track;
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.stroke();
     const start = -Math.PI / 2;
     const end = start + Math.PI * 2 * Math.min(1, pct / 100);
     const grad = ctx.createLinearGradient(cx - r, cy, cx + r, cy);
-    grad.addColorStop(0, C.cyan);
-    grad.addColorStop(1, C.violet);
+    grad.addColorStop(0, P.accent);
+    grad.addColorStop(1, P.accent2);
     ctx.strokeStyle = grad;
     ctx.beginPath();
     ctx.arc(cx, cy, r, start, end);
     ctx.stroke();
-    ctx.fillStyle = '#e8f4f8';
+    ctx.fillStyle = P.text;
     ctx.font = '600 26px "Space Grotesk", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(pct.toFixed(1) + '%', cx, cy - 4);
-    ctx.fillStyle = C.dust;
+    ctx.fillStyle = P.dim;
     ctx.font = '11px sans-serif';
     ctx.fillText('缓存命中率', cx, cy + 20);
   }
 
   function hbars(canvas, items, unit) {
+    const P = palette();
     const ctx = canvas.getContext('2d');
     const W = canvas.width, H = canvas.height;
     ctx.clearRect(0, 0, W, H);
     const padL = 74, padR = 64, rowH = 34, top = 16;
     const bw = W - padL - padR;
     const max = Math.max(...items.map((i) => i[1]), 1);
-    const colors = [C.cyan, C.violet, C.gold, C.orange];
+    const colors = [P.accent, P.accent2, P.accent3, P.warn];
     items.forEach(([label, val], i) => {
       const y = top + i * rowH;
-      ctx.fillStyle = C.dust;
+      ctx.fillStyle = P.dim;
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'right';
       ctx.textBaseline = 'middle';
@@ -69,12 +90,12 @@
       const w = Math.max(2, (val / max) * bw);
       const grad = ctx.createLinearGradient(padL, 0, padL + bw, 0);
       grad.addColorStop(0, colors[i % colors.length]);
-      grad.addColorStop(1, C.violet);
-      ctx.fillStyle = 'rgba(107,123,141,0.15)';
+      grad.addColorStop(1, P.accent2);
+      ctx.fillStyle = P.track;
       ctx.fillRect(padL, y + 4, bw, rowH - 8);
       ctx.fillStyle = grad;
       ctx.fillRect(padL, y + 4, w, rowH - 8);
-      ctx.fillStyle = '#e8f4f8';
+      ctx.fillStyle = P.text;
       ctx.textAlign = 'left';
       ctx.fillText(unit(val), padL + w + 8, y + rowH / 2);
     });
@@ -156,6 +177,9 @@
     api.getStatus().then((st) => {
       if (st.state === 'running' || st.webUp) refresh();
     });
+    // 切主题后重绘：canvas 是画上去的像素，颜色不会随 CSS 变量自己变（浅色下不重绘
+    // 就会留着深色主题画的近白文字 → 看起来还是"白字白底"）
+    window.addEventListener('dsh:theme-changed', () => { refresh(); });
   }
 
   init();
