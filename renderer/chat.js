@@ -1277,6 +1277,28 @@
     return null;
   }
 
+  // ---------------- 事件级去重（按 seq） ----------------
+  // renderedIds 只能覆盖"带消息身份"的事件（user/message、assistant/message）。不带 id 的事件
+  // ——turn/end 的回合统计框、permission/preset 等三条权限告警条、tool/call、hook/* ——
+  // 完全没有去重，同一帧投递两次就画两份。引擎契约里 seq 才是唯一的去重键
+  // （官方 Web 客户端 appendLive 就是 `event.seq <= tailSeq → drop`），这里补上这一层。
+  // 实现在 renderer/event-seq.js（只丢弃"确实应用过的 seq"，对乱序到达同样安全）。
+  const seqGuards = new Map(); // sessionId -> { accept, watermark, size }
+
+  function seqGuardFor(sid) {
+    let g = seqGuards.get(sid);
+    if (!g) {
+      g = window.__eventSeq.create();
+      seqGuards.set(sid, g);
+    }
+    return g;
+  }
+
+  /** 首次到达返回 true；重复投递返回 false（调用方必须直接丢弃该帧）。 */
+  function acceptSeq(sid, ev) {
+    return seqGuardFor(sid).accept(ev && ev.seq);
+  }
+
   function emptyState() {
     messagesEl.innerHTML = `<div class="chat-empty">
       <div class="big">✉</div>
@@ -1489,6 +1511,13 @@
   function renderHistory(events) {
     messagesEl.innerHTML = '';
     renderedIds.set(currentSessionId, new Set()); // 整段重绘：重置该会话的去重集合
+    // 历史窗口里的 seq 也要记进水位：之后同 seq 的实时帧（重连补发、重复连接）不会再画第二遍。
+    // chat:history 返回的 HistoryEntry 保留完整事件（主进程 foldChunks 只折叠了 chunk 正文，
+    // 事件对象本身原样带 seq）。
+    for (const h of events || []) {
+      const ev = h && h.event;
+      if (ev) acceptSeq(currentSessionId, ev);
+    }
     // 轨迹台账由整段历史播种（不含流式 chunk），实时事件随后追加
     buf(currentSessionId).eventLog = (events || [])
       .map((h) => h && h.event)
@@ -2642,6 +2671,10 @@ class ReferencePanel {
   function handleSessionEvent(p) {
     const ev = p.event;
     if (!ev) return;
+    // 事件级去重（引擎契约：seq 会话内唯一且单调递增）——重复投递在这里就断掉。
+    // 必须放在最前面：下面每个 case 都会改 DOM 或累积状态（eventLog / blocks / 队列），
+    // 漏掉任何一个分支都会让界面上多出一个框。
+    if (!acceptSeq(p.sessionId, ev)) return;
     const b = buf(p.sessionId);
     const isCur = p.sessionId === currentSessionId;
 
@@ -3099,6 +3132,8 @@ class ReferencePanel {
         b.turn = false;
         b.tool = null;
         renderedIds.set(p.sessionId, new Set());
+        // 注意：seq 水位**故意不重置**。重置等于把"这段 seq 已经画过"的记忆清空，
+        // 之后任何补发/重复投递的旧帧又会被当成新事件画一遍 —— 正好是要修的那个 bug。
         if (p.sessionId === currentSessionId) {
           streamMsg = null;
           domBlocks = new Map();

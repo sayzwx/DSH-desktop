@@ -208,9 +208,109 @@ function copyBtn(text) {
 }
 
 const THEME_KEY = 'dsh-theme';
+// 主题清单：新增或删除**内置**主题时改这里（index.html 的下拉是兜底静态项，运行时会重建）。
+// light / graphite 是两套基础主题（配色对齐官方 webUI），dark 是产品默认皮肤。
+const THEMES = ['light', 'graphite', 'dark', 'custom'];
+const DEFAULT_THEME = 'graphite';
+// 迁移自插件市场的 WebUI 主题（主题工作室产出）也是可选主题，但它们不在上面的常量里：
+// 清单来自 ~/.dsh/desktop-themes.json（主进程读），运行时装到 webThemes。
+// 它们的 data-theme 一律是 'webtheme'（承接层所在），具体配色靠 <html> 上的内联变量区分。
+const WEB_SLOT = 'webtheme';
 const customColors = JSON.parse(localStorage.getItem('dsh-custom') || '{"accent":"#00D4AA","bg":"#0A0E1A"}');
 const themeSelect = $('#themeSelect');
 const customColorRow = $('#customColorRow');
+
+/** 已迁移的 WebUI 主题列表（每项：{id,label,tokens,css,notes,origin}）。 */
+let webThemes = [];
+/** 当前注入到 <html> 上的 token 属性名，切换主题时要先清干净，否则会残留上一个主题的色。 */
+let webThemeApplied = [];
+
+// 本地保存的主题名可能指向一个已被删除的主题（例如旧版的紫月 / 极光 / 彗星金，
+// 或已被卸载的 WebUI 迁移主题）：那时 data-theme 谁都匹配不上，整页只剩基础 :root
+// 的深空配色，表现就像「主题坏了」。统一在这里回落到默认主题。
+function isWebTheme(name) {
+  // 迁移主题的 id 形如 `dsh-neo-skin:blue:light`，一定带冒号；内置主题名不带。
+  return typeof name === 'string' && name.includes(':') && webThemes.some((t) => t.id === name);
+}
+function normalizeTheme(name) {
+  if (THEMES.includes(name)) return name;
+  return DEFAULT_THEME;
+}
+
+/** 注入迁移主题的 CSS 用的 <style>（只建一次，切换时改 textContent）。 */
+function webStyleEl() {
+  let el = document.getElementById('webThemeStyle');
+  if (!el) {
+    el = document.createElement('style');
+    el.id = 'webThemeStyle';
+    document.head.appendChild(el);
+  }
+  return el;
+}
+
+/** 清掉上一次迁移主题留下的一切（内联变量 + 注入的 CSS）。 */
+function clearWebTheme() {
+  const root = document.documentElement;
+  for (const p of webThemeApplied) root.style.removeProperty(p);
+  webThemeApplied = [];
+  const el = document.getElementById('webThemeStyle');
+  if (el) el.textContent = '';
+}
+
+/**
+ * 应用一个迁移主题。
+ *
+ * 关键点：变量必须写在 `<html>` 的**内联 style** 上。承接层
+ * `:root[data-theme="webtheme"]` 里的 89 条是"官方浅色档默认值"，
+ * 只有内联声明才盖得过它（内联 style 优先级高于任何选择器）。
+ * 主题包没声明的变量会自然回落到承接层的默认值，不会变空串。
+ */
+function applyWebTheme(theme) {
+  clearWebTheme();
+  if (!theme) return;
+  const root = document.documentElement;
+  let n = 0;
+  for (const [k, v] of Object.entries(theme.tokens || {})) {
+    if (!/^--dsw-[a-z0-9-]+$/.test(k) || typeof v !== 'string' || !v.trim()) continue;
+    root.style.setProperty(k, v.trim());
+    webThemeApplied.push(k);
+    n++;
+  }
+  webStyleEl().textContent = theme.css || '';
+  return n;
+}
+
+/** 重建主题下拉：内置四项 + （有迁移主题时）一个 WebUI 主题分组。 */
+function rebuildThemeOptions() {
+  if (!themeSelect) return;
+  const builtin = [['light', '浅色'], ['graphite', '深色'], ['dark', '深空'], ['custom', '自定义']];
+  let html = builtin.map(([v, l]) => `<option value="${v}">${escHtml(l)}</option>`).join('');
+  if (webThemes.length) {
+    html += '<optgroup label="WebUI 主题（来自插件市场）">'
+      + webThemes.map((t) => `<option value="${escAttr(t.id)}">${escHtml(t.label || t.id)}</option>`).join('')
+      + '</optgroup>';
+  }
+  themeSelect.innerHTML = html;
+}
+
+/** 从主进程拉一次迁移主题清单（主题工作室安装完也要调它刷新）。 */
+async function refreshWebThemes() {
+  if (!api.themeList) return webThemes;
+  try {
+    const r = await api.themeList();
+    webThemes = (r && r.ok && Array.isArray(r.themes)) ? r.themes : [];
+  } catch {
+    webThemes = [];
+  }
+  rebuildThemeOptions();
+  // 当前生效的迁移主题被移除时不能停在 webtheme 空壳上（那会只剩承接层的官方浅色档
+  // 默认值，看起来像"主题坏了"）——直接回落到默认主题。
+  const saved = localStorage.getItem(THEME_KEY);
+  if (saved && saved.includes(':') && !webThemes.some((t) => t.id === saved)) {
+    setTheme(DEFAULT_THEME);
+  }
+  return webThemes;
+}
 
 function applyCustom() {
   const root = document.documentElement;
@@ -225,19 +325,35 @@ function applyCustom() {
 
 function setTheme(name) {
   const root = document.documentElement;
-  root.setAttribute('data-theme', name);
-  localStorage.setItem(THEME_KEY, name);
-  if (themeSelect) themeSelect.value = name;
-  if (customColorRow) customColorRow.hidden = name !== 'custom';
-  // 紫月主题：启用双视频无缝循环背景层；其余主题暂停并隐藏该层
+  const web = isWebTheme(name) ? webThemes.find((t) => t.id === name) : null;
+  const theme = web ? WEB_SLOT : normalizeTheme(name);
+  root.setAttribute('data-theme', theme);
+  // 本地存的是「有效的主题标识」：内置主题名，或迁移主题的完整 id
+  localStorage.setItem(THEME_KEY, web ? web.id : theme);
+  if (themeSelect) themeSelect.value = web ? web.id : theme;
+  if (customColorRow) customColorRow.hidden = theme !== 'custom';
+  // 浅色 / 深色 / 深空之外的迁移主题都不带动态壁纸，切换时需要停掉视频与星域画布
   // （init() 恢复本地保存主题时同样走此分支）
-  if (window.__bgMoon) window.__bgMoon.setThemeActive(name === 'moon');
-  if (name !== 'custom') {
+  if (window.__starfield) window.__starfield.setTheme();
+  // 先清掉上一次的注入（自定义主题用的是内联变量，同样要清）
+  if (theme !== 'custom') {
     ['--accent', '--cyan', '--bg', '--void', '--nebula-navy'].forEach((p) => root.style.removeProperty(p));
-  } else {
-    applyCustom();
   }
+  if (theme === 'custom') {
+    clearWebTheme();
+    applyCustom();
+  } else {
+    applyWebTheme(web); // web 为空时只做 clearWebTheme
+  }
+  return theme;
 }
+
+// 供主题工作室调用：安装完迁移主题后刷新下拉并立刻切过去
+window.__dshThemes = {
+  refresh: refreshWebThemes,
+  list: () => webThemes,
+  apply: (id) => setTheme(id),
+};
 
 // ---------- 事件 ----------
 startBtn.addEventListener('click', async () => {
@@ -316,9 +432,11 @@ apiKey.addEventListener('change', async () => {
 // ---------- 初始化 ----------
 (async function init() {
   if (window.__starfield) window.__starfield.start();
-  const saved = localStorage.getItem(THEME_KEY) || 'dark';
-  if (saved === 'custom') setTheme('custom');
-  else setTheme(saved);
+  // 先取迁移主题清单再恢复主题：否则本地保存的是一个迁移主题 id 时，
+  // isWebTheme 还看不到它，会被 normalizeTheme 静默回落成深色。
+  await refreshWebThemes();
+  const saved = localStorage.getItem(THEME_KEY) || DEFAULT_THEME;
+  setTheme(saved);
   setState('stopped');
   sbTime.textContent = 'T+ --:--:--';
   await refreshStatus();

@@ -1,12 +1,13 @@
 /**
- * settings.js 冒烟测试：用最小 DOM shim 加载真实 settings.js，
+ * 设置页「模型配置」冒烟测试：用最小 DOM shim 加载真实 renderer/settings.js +
+ * renderer/providers.js（提供商那部分已从 settings.js 拆出），
  * 以 live harness 的 llm.providers / llm.models 数据驱动，断言：
  *  1) 提供商下拉框包含全部提供商（含分组与模型数）
  *  2) 未启用提供商渲染密钥编辑器（ref 派生、状态徽章）
  *  3) 保存密钥 → credentials.set + settings.mutate 顺序调用
  *  4) 测试连接 → llm.discoverModels 携带输入框密钥
  *  5) 已启用且有模型的提供商不出现密钥编辑器
- * 用法: node scripts/settings-smoke.cjs
+ * 用法: node scripts/settings-smoke.cjs   （需要 :3080 有 live harness）
  */
 const fs = require('node:fs');
 const vm = require('node:vm');
@@ -70,7 +71,7 @@ function parseKeyBlocks(html) {
 
 // ---------- 记录型 api stub ----------
 const calls = { setCredential: [], mutate: [], discover: [] };
-const api = {
+const rawApi = {
   getPresets: async () => ({ ok: true, presets: [] }),
   readPreset: async () => ({ ok: false }),
   openPresetDoc: async () => ({ ok: false }),
@@ -120,13 +121,38 @@ const api = {
   getStatus: async () => ({ state: 'running', webUp: true }),
 };
 
+// 桥（preload）会随版本新增方法，这份手写清单必然滞后 —— 上一版就是因为缺 onUpdaterProgress
+// 直接崩在 settings.js 的 bind() 里，整个冒烟测试失效。用 Proxy 兜底：未知方法一律返回
+// { ok: false }，让被测代码走它自己的失败分支，而不是把测试一起带走。
+// （已确认：settings.js / providers.js 里没有 `typeof api.x` 这类特性探测，兜底不会改变判定。）
+const api = new Proxy(rawApi, {
+  get(target, key) {
+    if (key in target) return target[key];
+    if (typeof key === 'symbol') return undefined;
+    return async () => ({ ok: false, error: 'not stubbed: ' + String(key) });
+  },
+});
+
 const sandbox = {
   console,
   setTimeout,
   clearTimeout,
   fetch,
+  // providers.js 的 notifyChanged 会 new CustomEvent 并 window.dispatchEvent
+  CustomEvent: class CustomEvent {
+    constructor(type, init) { this.type = type; Object.assign(this, init || {}); }
+  },
   localStorage: { getItem: () => null, setItem() {} },
-  window: { api, __modal: undefined },
+  window: {
+    api,
+    __modal: undefined,
+    // settings.js / providers.js 都通过 window.__i18n 取文案（i18n.js 暴露的桥）。
+    // 冒烟测试直接回显 key —— 断言看的是结构而不是译文。
+    __i18n: { t: (key) => key },
+    addEventListener() {},
+    removeEventListener() {},
+    dispatchEvent() { return true; },
+  },
   document: {
     querySelector: (s) => el(s),
     querySelectorAll: (s) => s === '.mg-key' ? parseKeyBlocks(blocksCacheFor) : [],
@@ -139,15 +165,35 @@ sandbox.setListHtml = setListHtml;
 const lastListHtml = () => blocksCacheFor;
 
 (async () => {
-  const code = fs.readFileSync(path.join(RENDERER, 'settings.js'), 'utf8');
+  // 模型配置（提供商）那块已经从 settings.js 拆到 providers.js，两个文件都要加载，
+  // 否则下拉框 / 统计 / 密钥编辑器全是空的。
   // 把 renderModelGroups 里的 list.innerHTML = ... 重定向到 setListHtml，
-  // 使 .mg-key 解析能看到最新渲染结果
-  const patched = code.replace(
+  // 使 .mg-key 解析能看到最新渲染结果 —— 这一行现在在 providers.js 里。
+  const patch = (code) => code.replace(
     "list.innerHTML = cards.join('');",
     "setListHtml(cards.join(''));",
   );
-  vm.runInContext(patched, sandbox, { filename: 'settings.js' });
+
+  const settingsCode = fs.readFileSync(path.join(RENDERER, 'settings.js'), 'utf8');
+  const providersCode = fs.readFileSync(path.join(RENDERER, 'providers.js'), 'utf8');
+  if (!patch(providersCode).includes('setListHtml(cards.join(')) {
+    console.error('providers.js 里找不到 list.innerHTML = cards.join(\'\') —— 重定向补丁失效，测试会看到空列表');
+    process.exit(1);
+  }
+
+  vm.runInContext(patch(settingsCode), sandbox, { filename: 'settings.js' });
+  vm.runInContext(patch(providersCode), sandbox, { filename: 'providers.js' });
   await new Promise((r) => setTimeout(r, 300));
+
+  // settings.js 的 init() 是靠 api.getStatus() 回调去刷模型目录的，而 providers.js 的入口
+  // 要等它加载完才存在。真实应用里 getStatus 是 IPC 回调（必然晚于脚本加载），这里显式补一次
+  // 刷新，免得测试依赖微任务时序。刷新是幂等的，多刷一次没有副作用。
+  if (!sandbox.window.__providers) {
+    console.error('providers.js 没有挂上 window.__providers');
+    process.exit(1);
+  }
+  await sandbox.window.__providers.refresh();
+  await new Promise((r) => setTimeout(r, 100));
 
   const failures = [];
   const sel = el('#providerSelect');
@@ -225,10 +271,14 @@ const lastListHtml = () => blocksCacheFor;
   }
 
   // 5) 已启用且有模型的提供商 → 无密钥编辑器
+  //    注意判据要用真正的编辑器控件，不能用宽泛的 `mg-key` 类：
+  //    groupCard() 给「编辑提供商配置」折叠框挂的就是 `mg-edit-box mg-key`，
+  //    任何 pi-ai 分组卡片都会命中 mg-key，早先写的 `includes('mg-key')` 必然误报。
+  const hasKeyEditor = (html) => /mg-key-input|mg-key-save/.test(html);
   provEl.value = 'deepseek-official';
   provEl.fire('change');
   const dsHtml = el('#modelGroupList').innerHTML;
-  if (dsHtml.includes('mg-key')) failures.push('deepseek-official 不应出现密钥编辑器');
+  if (hasKeyEditor(dsHtml)) failures.push('deepseek-official 不应出现密钥编辑器');
   if (!dsHtml.includes('deepseek-v4-flash')) failures.push('deepseek-official 模型未渲染');
 
   // 6) 全部视图恢复
@@ -236,7 +286,7 @@ const lastListHtml = () => blocksCacheFor;
   provEl.fire('change');
   const allHtml = el('#modelGroupList').innerHTML;
   if (!allHtml.includes('opencode-go') || !allHtml.includes('deepseek-official')) failures.push('全部视图恢复失败');
-  if (allHtml.includes('mg-key')) failures.push('全部视图不应出现密钥编辑器（无失败提供商）');
+  if (hasKeyEditor(allHtml)) failures.push('全部视图不应出现密钥编辑器（无失败提供商）');
 
   if (failures.length) {
     console.error('\nFAILURES:\n' + failures.join('\n'));

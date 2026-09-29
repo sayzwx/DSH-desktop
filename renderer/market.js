@@ -45,6 +45,7 @@
     cats: $('#mkCats'),
     count: $('#mkCount'),
     grid: $('#mkGrid'),
+    more: $('#mkMore'),
     instCount: $('#mkInstCount'),
     updateAll: $('#mkUpdateAll'),
     instList: $('#mkInstList'),
@@ -74,13 +75,23 @@
   const alertBox = (msg, title) => (modal() ? modal().alert(msg, title) : window.alert(msg));
   const confirmBox = (msg, title, okText) => (modal() ? modal().confirm(msg, title, okText ? { okText } : undefined) : window.confirm(msg));
 
+  // activation[].state → 徽标文案。inert 特意写成「未生效」而不是「普通依赖」：
+  // 用户看到「普通依赖」不知道意味着什么，看到「未生效」才会去查为什么。
   const STATE_TXT = {
-    live: { cls: 'ok', t: '已加载' },
+    live: { cls: 'ok', t: '已加载生效' },
     restart: { cls: 'warn', t: '重启后生效' },
-    inert: { cls: 'dim', t: '普通依赖' },
-    broken: { cls: 'danger', t: '异常' },
-    missing: { cls: 'danger', t: '缺失' },
+    inert: { cls: 'dim', t: '未生效（普通依赖）' },
+    broken: { cls: 'danger', t: '加载失败' },
+    missing: { cls: 'danger', t: '文件缺失' },
     disabled: { cls: 'dim', t: '已停用' },
+  };
+  const STATE_HINT = {
+    live: '已被引擎加载，正在起作用。',
+    restart: '已写入 profile，但引擎重启后才会加载。',
+    inert: '该包没有声明 dsh.bundle.patch，只会作为普通依赖存在，引擎不会加载它——装了也不会有任何效果。',
+    broken: '加载时报错，点「导出日志」查看原因。',
+    missing: 'profile 里找不到这个包，安装可能未完成。',
+    disabled: '被显式停用（开关处于关闭状态）。',
   };
 
   const CAT_TXT = (code) => {
@@ -294,6 +305,36 @@
     }
   }
 
+  // 把一个插件的 activation 状态翻成用户看得懂的一句话。
+  // state 语义（来自 dshmarket 的 activation[]）：
+  //   live      已热加载，现在就有效果
+  //   restart   已进 profile，但引擎重启后才会加载
+  //   inert     只作为普通依赖装了——没声明 dsh.bundle.patch，引擎不会加载它，装了等于没装
+  const STATE_VERDICT = {
+    live: (n) => `「${n}」已在运行中的引擎里加载，现在就已经生效。`,
+    restart: (n) => `「${n}」已写入 profile，但要在 Harness 重启后才会被加载。`,
+    inert: (n) => `「${n}」只作为普通依赖安装：它没有声明 dsh.bundle.patch，引擎不会加载它，因此不会有任何效果。`,
+    broken: (n) => `「${n}」已安装但加载失败，请点「导出日志」查看原因。`,
+    missing: (n) => `「${n}」在 profile 中缺失，安装可能没有完成。`,
+    disabled: (n) => `「${n}」当前处于停用状态。`,
+  };
+
+  function actOf(name) {
+    if (!name || !S.installed || !S.installed.activation) return null;
+    return S.installed.activation[name] || null;
+  }
+
+  function verdictOf(name) {
+    if (!name) return '';
+    const a = actOf(name);
+    if (!a) return `未在已安装清单里找到「${name}」，请点「刷新」核实是否装成功。`;
+    const f = STATE_VERDICT[a.state];
+    let s = f ? f(name) : `「${name}」当前状态：${a.state}`;
+    const why = a.reasons && a.reasons[0] ? String(a.reasons[0]).split('/')[0].trim() : '';
+    if (why) s += `\n引擎说明：${why}`;
+    return s;
+  }
+
   function computeRestart() {
     let need = false;
     if (S.installed && S.installed.activation) {
@@ -305,39 +346,56 @@
     el.restartBanner.hidden = !need;
   }
 
+  // 等 harness:3080 把 dshmarket 重新加载起来（重启期间该路由会短暂不可用 / 退化成 SPA HTML）
+  async function waitMarketReady(timeoutMs = 60000) {
+    const until = Date.now() + timeoutMs;
+    while (Date.now() < until) {
+      const r = await get('/dsh-market/status');
+      if (r.ok && r.data && typeof r.data === 'object' && r.data.version) return true;
+      await new Promise((res) => setTimeout(res, 1500));
+    }
+    return false;
+  }
+
   // 重启 Harness（stop+start）让新装/改动的插件被 cordis 重新组合加载，比整应用重启轻。
-  async function restartHarnessNow() {
+  // 原来只 setTimeout(loadAll, 3500) 猜时间；现在真等市场就绪，并复核目标插件是否已生效。
+  async function restartHarnessNow(focusName) {
     try {
       await api.stopHarness();
       await api.startHarness();
-      setTimeout(() => loadAll(), 3500);
+      const ready = await waitMarketReady(60000);
+      if (!ready) {
+        alertBox('Harness 已重启，但市场服务在 60 秒内没有就绪。请稍后点「刷新」查看加载状态。', '重启 Harness');
+        return;
+      }
+      await loadAll(false);
+      const v = verdictOf(focusName);
+      alertBox(`Harness 已重启并重新组合插件。${v ? '\n\n' + v : ''}`, '重启完成');
     } catch (e) {
       alertBox('重启 Harness 失败：' + (e && e.message), '重启 Harness');
     }
   }
 
-  // 安装/更新/卸载/启停 之后：区分「已直接生效」与「需重启生效」，需重启时确认后自动重启。
-  // 注意：runOp 期间 S.busy=true，loadAll 会早退，故这里直接拉 /dsh-market/installed 的
-  // activation 状态判断，不依赖 loadAll。
-  async function afterMutate(label) {
+  // 安装/更新/卸载/启停 之后：给出**确切结论**（已生效 / 需重启 / 装了也不会生效），
+  // 需要重启时确认后自动重启，并在重启后复核实际加载状态。
+  // 注意：runOp 期间 S.busy=true，loadAll 会早退，故这里直接拉 /dsh-market/installed，
+  // 不依赖 loadAll。
+  async function afterMutate(label, focusName) {
     try {
       const inst = await get('/dsh-market/installed');
-      const act = inst && inst.data && inst.data.activation;
-      if (act) {
-        for (const k of Object.keys(act)) {
-          if (act[k] && act[k].state === 'restart') S.restartNeeded = true;
-        }
-      }
-    } catch { /* 拉取失败则沿用已有 restartNeeded */ }
+      if (inst.ok && inst.data) S.installed = inst.data;
+    } catch { /* 拉取失败则沿用已有的 restartNeeded 判断 */ }
+    computeRestart();
+    const v = verdictOf(focusName);
     if (S.restartNeeded) {
       const ok = await confirmBox(
-        `${label}完成，但该插件需要重启 Harness 才会被加载生效。\n是否现在重启 Harness？（不重启则下次启动时生效）`,
+        `${label}完成。${v ? '\n\n' + v : '部分插件需要重启 Harness 才会被加载。'}\n\n是否现在重启 Harness？（不重启则下次启动应用时生效）`,
         '需要重启生效',
         '现在重启',
       );
-      if (ok) await restartHarnessNow();
+      if (ok) await restartHarnessNow(focusName);
     } else {
-      alertBox(`${label}完成，已直接生效。`, '已生效');
+      alertBox(`${label}完成。${v ? '\n\n' + v : '已直接生效。'}`, '操作结果');
     }
   }
 
@@ -358,6 +416,18 @@
   }
 
   // ---------------- 发现页 ----------------
+  //
+  // 性能背景（实测基线）：market 目录 4377 条 × 每卡 ~10 节点 = 4.5 万 DOM 节点，
+  // 一次性 innerHTML 会产生单条 3.3 秒的主线程任务（longtask），并且每次搜索按键、
+  // 每次切分类都要整体重建。故这里改成「分批追加」：
+  //   首批只渲染 CHUNK 张 → 底部哨兵进入视野 / 被点击时再追加下一批。
+  // 事件全部改为网格上的一次性委托（见 bindEvents），不再随渲染反复绑 N 个监听。
+  const CHUNK = 48;          // 每批卡片数：约 500 节点，单批 < 15ms
+  let renderToken = 0;       // 渲染代际：过滤条件变化后，旧的续批任务全部作废
+  let listCache = [];        // 当前过滤结果（全量，但只按需渲染）
+  let renderedCount = 0;     // 已渲染到 listCache 的第几项
+  let catsKey = null;        // 分类按钮的构建依据（避免每次重建 23 个按钮）
+
   function filteredEntries() {
     const list = (S.registry && S.registry.plugins) || [];
     const q = S.search.trim().toLowerCase();
@@ -369,57 +439,106 @@
     });
   }
 
-  function renderCats() {
-    let html = `<button type="button" class="mk-cat${S.category === 'all' ? ' active' : ''}" data-cat="all">全部</button>`;
+  // 分类按钮只在「目录变了 / 分类集合变了」时重建；切换分类只改 active 类。
+  function renderCats(force) {
     const cats = (S.registry && S.registry.categories) || {};
+    const key = `${(S.registry && S.registry.count) || 0}:${Object.keys(cats).length}`;
+    if (!force && key === catsKey) return;
+    catsKey = key;
+    let html = `<button type="button" class="mk-cat${S.category === 'all' ? ' active' : ''}" data-cat="all">全部</button>`;
     const counts = {};
-    for (const p of S.registry.plugins || []) counts[p.category] = (counts[p.category] || 0) + 1;
+    for (const p of (S.registry && S.registry.plugins) || []) counts[p.category] = (counts[p.category] || 0) + 1;
     for (const code of Object.keys(cats)) {
-      html += `<button type="button" class="mk-cat${S.category === code ? ' active' : ''}" data-cat="${esc(code)}" title="${esc(cats[code].en)}">${esc(cats[code].zh || cats[code].en || code)}${counts[code] != null ? ' ' + counts[code] : ''}</button>`;
+      const c = cats[code] || {};
+      html += `<button type="button" class="mk-cat${S.category === code ? ' active' : ''}" data-cat="${esc(code)}" title="${esc(c.en || '')}">${esc(c.zh || c.en || code)}${counts[code] != null ? ' ' + counts[code] : ''}</button>`;
     }
     el.cats.innerHTML = html;
-    el.cats.querySelectorAll('.mk-cat').forEach((b) => b.addEventListener('click', () => {
-      S.category = b.dataset.cat;
-      renderCats();
-      renderDiscover();
-    }));
+  }
+
+  function setCategory(code) {
+    if (S.category === code) return;
+    S.category = code;
+    el.cats.querySelectorAll('.mk-cat').forEach((b) => b.classList.toggle('active', b.dataset.cat === code));
+    renderDiscover();
+  }
+
+  function cardHTML(e) {
+    const key = instKey(e);
+    const installed = installedOf(e);
+    const upd = installed ? updateOf(key) : null;
+    const hasUpd = !!(installed && upd && upd.updateAvailable);
+    const stars = e.stars ? `<span class="mk-badge mk-badge-star">★ ${e.stars}</span>` : '';
+    const dl = e.downloads ? `<span class="mk-badge">⬇ ${e.downloads}</span>` : '';
+    return `<div class="mk-card" data-key="${esc(key)}">
+      <div class="mk-card-head">
+        <div class="mk-card-name">${esc(e.name)}</div>
+        <div class="mk-card-owner">@${esc(e.owner)}</div>
+      </div>
+      <div class="mk-card-desc">${esc(descOf(e) || '（无描述）')}</div>
+      <div class="mk-card-tags"><span class="mk-badge">${esc(CAT_TXT(e.category))}</span>${stars}${dl}${hasUpd ? '<span class="mk-badge mk-badge-up">↑ 有新版本</span>' : ''}</div>
+      <div class="mk-card-actions">
+        ${installed
+          ? `<span class="mk-installed-tag">✓ 已安装</span>${hasUpd ? `<button type="button" class="primary-btn mk-btn-upd" data-name="${esc(key)}">更新</button>` : '<button type="button" class="mini-btn mk-btn-ver" disabled>' + esc((upd && upd.version) || '') + '</button>'}`
+          : `<button type="button" class="primary-btn mk-btn-inst" data-url="${esc(e.url)}">安装</button>`}
+      </div>
+    </div>`;
+  }
+
+  function updateMore() {
+    if (!el.more) return;
+    if (renderedCount >= listCache.length) { el.more.hidden = true; return; }
+    el.more.hidden = false;
+    el.more.textContent = `已显示 ${renderedCount} / ${listCache.length} · 向下滚动或点击加载更多`;
+  }
+
+  // 哨兵是否已被推出视野（含 600px 提前量）。
+  // 注意：市场页未激活时是 display:none，此时 getBoundingClientRect() 恒为 0，
+  // 若直接比大小会误判「哨兵一直在视野内」→ 每帧追加一批、把 4000+ 条全刷完，
+  // 反而让切页时要为几万节点做首次布局。故先确认元素有布局盒（offsetParent）。
+  function moreInView() {
+    if (!el.more || el.more.hidden || !el.more.offsetParent) return false;
+    return el.more.getBoundingClientRect().top < window.innerHeight + 600;
+  }
+
+  // 页面刚变可见 / 首屏没填满 / 用户滚得比渲染快时调用：够条件就再补一批
+  function resumeMore() { if (moreInView()) appendChunk(renderToken); }
+
+  function appendChunk(token) {
+    if (token !== renderToken || renderedCount >= listCache.length) return;
+    const end = Math.min(renderedCount + CHUNK, listCache.length);
+    let html = '';
+    for (let i = renderedCount; i < end; i++) html += cardHTML(listCache[i]);
+    renderedCount = end;
+    el.grid.insertAdjacentHTML('beforeend', html);
+    updateMore();
+    requestAnimationFrame(() => { if (token === renderToken) resumeMore(); });
+  }
+
+  // 底部哨兵：进入视野（提前 600px）即续批，无需用户点到按钮
+  let moreObserver = null;
+  function observeMore() {
+    if (!el.more || moreObserver || typeof IntersectionObserver !== 'function') return;
+    moreObserver = new IntersectionObserver((entries) => {
+      if (!moreInView()) return;   // 页面隐藏时 IO 可能报 (0,0) 相交，这里拦掉
+      for (const en of entries) if (en.isIntersecting) { appendChunk(renderToken); return; }
+    }, { root: null, rootMargin: '600px 0px' });
+    moreObserver.observe(el.more);
   }
 
   function renderDiscover() {
     if (!S.registry) return;
     renderCats();
-    const list = filteredEntries();
-    el.count.textContent = `共 ${list.length} 个插件${S.category !== 'all' ? '（' + CAT_TXT(S.category) + '）' : ''}`;
-    if (list.length === 0) {
+    listCache = filteredEntries();
+    renderToken += 1;          // 作废上一轮的续批任务
+    renderedCount = 0;
+    el.count.textContent = `共 ${listCache.length} 个插件${S.category !== 'all' ? '（' + CAT_TXT(S.category) + '）' : ''}`;
+    if (listCache.length === 0) {
       el.grid.innerHTML = '<div class="empty" style="grid-column:1/-1">没有匹配的插件</div>';
+      if (el.more) el.more.hidden = true;
       return;
     }
-    let html = '';
-    for (const e of list) {
-      const key = instKey(e);
-      const installed = installedOf(e);
-      const upd = installed ? updateOf(key) : null;
-      const hasUpd = !!(installed && upd && upd.updateAvailable);
-      const catName = CAT_TXT(e.category);
-      const stars = e.stars ? `<span class="mk-badge mk-badge-star">★ ${e.stars}</span>` : '';
-      const dl = e.downloads ? `<span class="mk-badge">⬇ ${e.downloads}</span>` : '';
-      html += `<div class="mk-card" data-key="${esc(key)}">
-        <div class="mk-card-head">
-          <div class="mk-card-name">${esc(e.name)}</div>
-          <div class="mk-card-owner">@${esc(e.owner)}</div>
-        </div>
-        <div class="mk-card-desc">${esc(descOf(e) || '（无描述）')}</div>
-        <div class="mk-card-tags"><span class="mk-badge">${esc(catName)}</span>${stars}${dl}${hasUpd ? '<span class="mk-badge mk-badge-up">↑ 有新版本</span>' : ''}</div>
-        <div class="mk-card-actions">
-          ${installed
-            ? `<span class="mk-installed-tag">✓ 已安装</span>${hasUpd ? `<button type="button" class="primary-btn mk-btn-upd" data-name="${esc(key)}">更新</button>` : '<button type="button" class="mini-btn mk-btn-ver" disabled>' + esc((upd && upd.version) || '') + '</button>'}`
-            : `<button type="button" class="primary-btn mk-btn-inst" data-url="${esc(e.url)}">安装</button>`}
-        </div>
-      </div>`;
-    }
-    el.grid.innerHTML = html;
-    el.grid.querySelectorAll('.mk-btn-inst').forEach((b) => b.addEventListener('click', () => installByUrl(b.dataset.url, b)));
-    el.grid.querySelectorAll('.mk-btn-upd').forEach((b) => b.addEventListener('click', () => updateByName(b.dataset.name, b)));
+    el.grid.innerHTML = '';    // 清空后由 appendChunk 分批填入
+    appendChunk(renderToken);
   }
 
   // ---------------- 已安装页 ----------------
@@ -439,6 +558,7 @@
       const spec = installed[name];
       const act = (S.installed.activation && S.installed.activation[name]) || null;
       const st = act ? (STATE_TXT[act.state] || { cls: 'dim', t: act.state }) : { cls: 'dim', t: '未知' };
+      const stHint = act ? (STATE_HINT[act.state] || '') : '未在引擎的激活清单里找到它。';
       const u = S.updates && S.updates[name];
       const ver = (u && u.version) || spec;
       const isSelf = name === 'dshmarket' || name === 'dsh-market';
@@ -450,7 +570,7 @@
       html += `<div class="mk-row" data-name="${esc(name)}">
         <div class="mk-row-main">
           <div class="mk-row-name">${esc(name)} ${isSelf ? '<span class="mk-badge mk-badge-self">市场本体</span>' : ''}</div>
-          <div class="mk-row-meta">${esc(spec)} · v${esc(ver || '?')} <span class="mk-state mk-state-${st.cls}">${esc(st.t)}</span>${channelNote}</div>
+          <div class="mk-row-meta">${esc(spec)} · v${esc(ver || '?')} <span class="mk-state mk-state-${st.cls}" title="${esc(stHint)}">${esc(st.t)}</span>${channelNote}</div>
         </div>
         <div class="mk-row-actions">
           ${canToggle ? `<label class="mk-switch" title="${off ? '启用' : '停用'} ${esc(name)}"><input type="checkbox" data-toggle="${esc(name)}" ${off ? '' : 'checked'} /><span></span></label>` : ''}
@@ -460,16 +580,32 @@
       </div>`;
     }
     el.instList.innerHTML = html;
-    el.instList.querySelectorAll('.mk-btn-upd').forEach((b) => b.addEventListener('click', () => updateByName(b.dataset.name, b)));
-    el.instList.querySelectorAll('.mk-btn-rem').forEach((b) => b.addEventListener('click', () => uninstallByName(b.dataset.name, b)));
-    el.instList.querySelectorAll('input[data-toggle]').forEach((cb) => cb.addEventListener('change', () => togglePlugin(cb.dataset.toggle, cb.checked)));
   }
 
   // ---------------- 主题页 ----------------
+  //
+  // 重要事实（已实测核实，2026-09-28）：
+  // 市场里的「主题」是 Harness **Web 客户端**插件，装完后的实际行为是：
+  //   1) 落盘到 ~/.dsh/profiles/web，并写进 profile 的 dsh.profile.bundles → 引擎会加载它
+  //      （install 接口返回 activation.state = "live" / hot = true，即热加载，不需要重启）；
+  //   2) 它通过 "dsh.client.inject: ['@deepseek-ai/dsh-client-ui-theme']" 把自己注入 WebUI，
+  //      webUI 的 HTML 里会出现 <script src="/plugins/<pkg>/client.js">（实测 HTTP 200）；
+  //   3) 但它**默认是关闭的**：client.js 里读 localStorage 的 "<pkg>.enabled"，
+  //      并在 WebUI 的「通用设置」里新注册一行（开关 + 配色选择器）。
+  //      不去打开那个开关，界面上什么都不会变——这是「装了没效果」最常见的原因。
+  //   4) 它覆盖的是 Web 端的 --dsw-alias-* 设计 token。桌面端是独立的 Electron 界面
+  //      （自己的 styles.css + data-theme + --accent 等），两者没有任何样式通道，
+  //      所以这些主题**不会**改变桌面端窗口的外观。
   function renderThemes() {
     if (!S.registry) return;
     const themes = S.registry.plugins.filter((p) => p.category === 'theme');
-    el.themeNote.textContent = `共 ${themes.length} 款社区主题；已安装的主题可直接「启用 / 停用」（同一时间仅一款主题生效）。`;
+    el.themeNote.innerHTML = `社区主题一共 <b>${themes.length}</b> 款。它们是 <b>Harness Web 界面</b>（浏览器里的 WebUI）的皮肤：`
+      + `装完会热加载注入 WebUI，<b>但默认是关闭的</b> —— 需要到 WebUI 的「设置 → 通用」里找到它新增的那一行，`
+      + `打开开关并选配色（如「蓝统治」「做旧报纸」），WebUI 才会变。`
+      + `<br>它们覆盖的是 <b>Web 端</b>的设计 token，和这个桌面端窗口原本没有任何样式通道 —— `
+      + `所以下面提供了<b>桌面端主题迁移</b>：把主题包的配色与结构（圆角 / 边框 / 硬阴影 / 按压反馈）`
+      + `解析并翻译成桌面端主题，迁完就能在「设置 → 星域主题」里直接选。`
+      + `<div class="mk-theme-actions"><button type="button" class="mini-btn" id="mkOpenWeb">打开 WebUI 去开启主题</button></div>`;
     if (themes.length === 0) { el.themeGrid.innerHTML = '<div class="empty">目录中暂无主题</div>'; return; }
     let html = '';
     for (const e of themes) {
@@ -490,8 +626,6 @@
       </div>`;
     }
     el.themeGrid.innerHTML = html;
-    el.themeGrid.querySelectorAll('.mk-btn-inst').forEach((b) => b.addEventListener('click', () => installByUrl(b.dataset.url, b)));
-    el.themeGrid.querySelectorAll('[data-name]').forEach((b) => b.addEventListener('click', () => togglePlugin(b.dataset.name, b.classList.contains('mk-btn-themeon'))));
   }
 
   // ---------------- 备份与恢复页 ----------------
@@ -636,11 +770,20 @@
 
   async function installByUrl(url, btn) {
     if (S.busy) return;
+    // 装之前记下已装清单：装完按差集找出「这次到底装了哪个包」，
+    // 才能给出针对它的生效结论（market 的 install 只回 {ok}，不回包名）。
+    const before = new Set(Object.keys((S.installed && S.installed.installed) || {}));
     await runOp('安装中…', async () => {
       btn && (btn.disabled = true);
       const r = await post('/dsh-market/install', { url });
       handleOpResult(r, '安装');
-      if (r.data && r.data.ok) { await waitIdle(); await afterMutate('安装'); }
+      if (r.data && r.data.ok) {
+        await waitIdle();
+        const fresh = await get('/dsh-market/installed');
+        if (fresh.ok && fresh.data) S.installed = fresh.data;
+        const added = Object.keys((S.installed && S.installed.installed) || {}).filter((k) => !before.has(k));
+        await afterMutate('安装', added[0] || null);
+      }
     });
   }
 
@@ -658,14 +801,14 @@
         return;
       }
       handleOpResult(r, `更新 ${name}`);
-      if (data && data.ok) { await waitIdle(); await afterMutate('更新'); }
+      if (data && data.ok) { await waitIdle(); await afterMutate('更新', name); }
     });
   }
 
   async function doForceUpdate(name) {
     const r = await post('/dsh-market/update', { name, force: true });
     handleOpResult(r, `更新 ${name}（强制）`);
-    if (r.data && r.data.ok) { await waitIdle(); await afterMutate('更新'); }
+    if (r.data && r.data.ok) { await waitIdle(); await afterMutate('更新', name); }
   }
 
   async function uninstallByName(name, btn) {
@@ -676,7 +819,7 @@
       btn && (btn.disabled = true);
       const r = await post('/dsh-market/uninstall', { name });
       const data = handleOpResult(r, `卸载 ${name}`);
-      if (data && data.ok) { await waitIdle(); await afterMutate('卸载'); }
+      if (data && data.ok) { await waitIdle(); await afterMutate('卸载', name); }
     });
   }
 
@@ -686,7 +829,7 @@
       const r = await post('/dsh-market/toggle', { name, enabled });
       const data = handleOpResult(r, `${enabled ? '启用' : '停用'} ${name}`);
       if (data && data.restart) S.restartNeeded = true;
-      if (data && data.ok) await afterMutate(enabled ? '启用' : '停用');
+      if (data && data.ok) await afterMutate(enabled ? '启用' : '停用', name);
     });
   }
 
@@ -738,18 +881,72 @@
   }
 
   // ---------------- 事件绑定 ----------------
+  // 全部走事件委托：网格/列表里有多少张卡都只挂一个监听，
+  // 不再「每次渲染 → querySelectorAll → 逐项 addEventListener」。
   function bindEvents() {
     // 标签页
     $$('.mk-tab').forEach((b) => b.addEventListener('click', () => {
       S.tab = b.dataset.mktab;
       renderTabs();
       if (S.tab === 'backup') renderBackup();
-      if (S.tab === 'discover') renderDiscover();
+      // 主题工作室：桌面端主题迁移（独立模块，首次进入才扫描本机插件）
+      if (S.tab === 'themes' && window.__themeStudio) window.__themeStudio.mount();
+      // 发现页的 DOM 一直在（切页只切 display），无需重建；仅首次兜底
+      if (S.tab === 'discover' && renderedCount === 0) renderDiscover();
     }));
+
+    // 搜索：防抖 160ms。原来每敲一个键都全量重建一次网格（含分类按钮）。
+    let searchTimer = null;
     el.search.addEventListener('input', () => {
       S.search = el.search.value;
-      renderDiscover();
+      clearTimeout(searchTimer);
+      if (!S.search) { searchTimer = null; renderDiscover(); return; }   // 清空立即出全量
+      searchTimer = setTimeout(() => { searchTimer = null; renderDiscover(); }, 160);
     });
+
+    // 分类：委托到容器
+    el.cats.addEventListener('click', (ev) => {
+      const b = ev.target.closest('.mk-cat');
+      if (b) setCategory(b.dataset.cat);
+    });
+
+    // 发现页卡片：安装 / 更新
+    el.grid.addEventListener('click', (ev) => {
+      const inst = ev.target.closest('.mk-btn-inst');
+      if (inst) { installByUrl(inst.dataset.url, inst); return; }
+      const upd = ev.target.closest('.mk-btn-upd');
+      if (upd) updateByName(upd.dataset.name, upd);
+    });
+
+    // 加载更多（哨兵兜底 + 手动点击）
+    observeMore();
+    if (el.more) el.more.addEventListener('click', () => appendChunk(renderToken));
+
+    // 已安装列表：更新 / 卸载 / 启停
+    el.instList.addEventListener('click', (ev) => {
+      const upd = ev.target.closest('.mk-btn-upd');
+      if (upd) { updateByName(upd.dataset.name, upd); return; }
+      const rem = ev.target.closest('.mk-btn-rem');
+      if (rem) uninstallByName(rem.dataset.name, rem);
+    });
+    el.instList.addEventListener('change', (ev) => {
+      const cb = ev.target.closest('input[data-toggle]');
+      if (cb) togglePlugin(cb.dataset.toggle, cb.checked);
+    });
+
+    // 主题列表：安装 / 启用停用
+    el.themeGrid.addEventListener('click', (ev) => {
+      const inst = ev.target.closest('.mk-btn-inst');
+      if (inst) { installByUrl(inst.dataset.url, inst); return; }
+      const b = ev.target.closest('button[data-name]');
+      if (b) togglePlugin(b.dataset.name, b.classList.contains('mk-btn-themeon'));
+    });
+
+    // 主题页说明里的「打开 WebUI」按钮（说明块由 innerHTML 重建，同样走委托）
+    el.themeNote.addEventListener('click', (ev) => {
+      if (ev.target.closest('#mkOpenWeb')) api.openWeb().catch(() => {});
+    });
+
     el.refresh.addEventListener('click', async () => {
       el.meta.textContent = '正在刷新…';
       await loadAll(false);
@@ -848,6 +1045,8 @@
   navMarket && navMarket.addEventListener('click', () => {
     if (el.notReady.hidden === false || S.status === null || S.registry === null) boot();
     else if (S.tab === 'backup') renderBackup();
+    // 页面刚由 display:none 变为可见，布局尚未完成；延两帧再判断首屏是否填满
+    requestAnimationFrame(() => requestAnimationFrame(resumeMore));
   });
 
   bindEvents();

@@ -31,8 +31,12 @@ function getJson(url) {
   });
 }
 
-async function waitForPage(deadlineMs) {
+async function waitForPage(deadlineMs, onDead) {
   for (;;) {
+    // 子进程已经死了就别再白等到超时：那只会得到一句「CDP 未就绪」，
+    // 把真正的原因（GPU 崩溃 / 单实例锁 / 语法错误）埋掉。
+    const dead = onDead ? onDead() : null;
+    if (dead !== null && dead !== undefined) throw new Error(`Electron 已退出（exit code ${dead}）`);
     try {
       const targets = await getJson(`http://127.0.0.1:${PORT}/json/list`);
       const page = targets.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
@@ -68,19 +72,39 @@ async function main() {
     const bin = process.platform === 'win32' ? 'electron.exe' : 'electron';
     electron = path.join(ROOT, 'node_modules', 'electron', 'dist', bin);
   }
-  const child = spawn(electron, [`--remote-debugging-port=${PORT}`, '--remote-allow-origins=*', ROOT], {
+  // 关掉 GPU 相关特性：本机（以及一部分用户机）的 GPU 进程起不来时，Electron 会直接
+  // FATAL 崩溃（"GPU process isn't usable. Goodbye."）。崩了之后 CDP 目标闪现即消失，
+  // 脚本只会一路轮询到超时报「CDP 未就绪」，把真正的原因埋掉。这几个开关与仓库里
+  // 其它 Electron 测试脚本（theme-*-e2e.cjs 等）保持一致。
+  const child = spawn(electron, [
+    `--remote-debugging-port=${PORT}`, '--remote-allow-origins=*',
+    '--disable-gpu', '--disable-software-rasterizer', '--in-process-gpu', '--no-sandbox',
+    ROOT,
+  ], {
     cwd: ROOT,
-    stdio: 'ignore',
+    // 收住输出：启动期崩溃的原因（GPU / 单实例锁 / 模块加载失败）只在 stderr 里，
+    // 丢掉它就等于丢掉排查线索（踩过：只报"CDP 未就绪"，查了十几分钟）。
+    stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, DSH_DEV_INSTANCE: 'smoke' },
   });
 
   const failures = [];
   const consoleErrors = [];
   let exitedEarly = null;
+  const bootLog = [];
+  const capture = (buf) => {
+    for (const line of String(buf).split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      bootLog.push(line);
+      if (bootLog.length > 80) bootLog.shift();
+    }
+  };
+  child.stdout.on('data', capture);
+  child.stderr.on('data', capture);
   child.on('exit', (code) => { exitedEarly = code; });
 
   try {
-    const page = await waitForPage(Date.now() + BOOT_WAIT_MS);
+    const page = await waitForPage(Date.now() + BOOT_WAIT_MS, () => exitedEarly);
     if (exitedEarly !== null) {
       throw new Error(`Electron 提前退出（code ${exitedEarly}）——很可能是单实例锁被正式版占用，DSH_DEV_INSTANCE 未生效`);
     }
@@ -910,7 +934,12 @@ async function main() {
 
     ws.close();
   } catch (err) {
-    failures.push(`冒烟测试自身失败: ${err.message}`);
+    // 失败时把启动输出（滤掉 GPU 噪声）一并报出来，否则「CDP 未就绪」等于没说。
+    const tail = bootLog
+      .filter((l) => !/ERROR:(gpu|raster)|Failed to create|ContextResult|DevTools listening/.test(l))
+      .slice(-8);
+    failures.push(`冒烟测试自身失败: ${err.message}`
+      + (tail.length ? `\n    启动输出（已滤掉 GPU 噪声）:\n    ${tail.join('\n    ')}` : ''));
   } finally {
     killTree(child.pid);
   }

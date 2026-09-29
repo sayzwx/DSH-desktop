@@ -23,6 +23,8 @@ __pycache__/
 
 # 实测/临时产物
 scripts/.scratch/
+# 离线探针跑出来的结果快照（生成物，每次跑都会重写，不入库）
+scripts/*.result.json
 
 # 分发安装包构建产物
 dist/

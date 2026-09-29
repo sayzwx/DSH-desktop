@@ -89,16 +89,11 @@ New-Item -ItemType Directory -Path $resApp -Force | Out-Null
 robocopy $root $resApp /E /XD "$root\.git" "$root\.workbuddy" "$root\DSH" "$root\dist" "$root\node_modules\electron" "$root\wallpaper-engine" /XF "*.mp4" /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
 if ($LASTEXITCODE -ge 8) { throw 'robocopy app failed' }
 # 动态星空背景（renderer\bg-animated.mp4，~45MB）若存在则放回应用资源（可选动画背景，
-# 体积敏感可自行从仓库删掉该文件后再打包——删除后 UI 自动回落静态星空背景）
+# 体积敏感可自行从仓库删掉该文件后再打包——删除后 UI 自动回落静态星空背景）。
+# 只有深空与自定义两套主题会用到它，浅色 / 深色两套基础主题不加载背景视频。
 $bgAni = Join-Path $root 'renderer\bg-animated.mp4'
 if (Test-Path $bgAni) {
   Copy-Item $bgAni (Join-Path $resApp 'renderer\bg-animated.mp4') -Force
-}
-# 紫月主题背景（renderer\bg-moon-loop.mp4，无缝循环视频）一并放回，否则 紫月 主题会因
-# 缺少视频文件而显示空白。
-$bgMoon = Join-Path $root 'renderer\bg-moon-loop.mp4'
-if (Test-Path $bgMoon) {
-  Copy-Item $bgMoon (Join-Path $resApp 'renderer\bg-moon-loop.mp4') -Force
 }
 
 $cfg = Join-Path $stage 'config'

@@ -4,6 +4,9 @@ const { spawn, spawnSync, execFile } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const { probeModelCapabilities, ENGINE_LEVELS, WIRE_CANDIDATES } = require('./lib/model-probe.js');
+const { registerThemeIpc } = require('./lib/theme-ipc.js');
+const { downloadToFile, pickWritableDir, isPeFile } = require('./lib/download.js');
 
 // 分发安装布局：app（含 DSH.exe）与 harness、tools/node 同级（默认 %LOCALAPPDATA%\DSH\{app,harness,tools}）。
 // harness 引擎不再写死某个路径：点击启动时自动探测本机已有安装（可用 DSH_HARNESS_DIR 显式指定源码目录），
@@ -882,7 +885,14 @@ function notifyTurnEnd(title) {
 function openStream(kind) {
   if (harnessState !== 'running') return;
   const existing = kind === 'mux' ? chatWs : chatWsHost;
-  if (existing && existing.readyState === 1) return; // OPEN
+  // 🔴 CONNECTING(0) 必须和 OPEN(1) 一样算「已经有了」。
+  // openChatStreams() 会被两条独立路径触发：主进程自己的 setState('running')
+  // （harness:status 轮询探测到 :3080 在线 / startHarness 就绪）与渲染层的 chat:connect
+  // （onState / getStatus 拿到 running 后调）。两者相隔只有一次 IPC 往返，而到 127.0.0.1
+  // 的 WebSocket 握手至少跨一个宏任务，于是第二次调用看到的是一条**握手中**的连接。
+  // 旧判据只挡 readyState===1，第二次就会再建一条；两条都 OPEN 之后引擎每帧投递两遍，
+  // 界面上每条消息、每条告警条、每个回合统计框都正好显示两份（用户长期反馈的重复 bug）。
+  if (existing && (existing.readyState === 0 || existing.readyState === 1)) return;
   let WS;
   try {
     WS = require('ws');
@@ -898,9 +908,19 @@ function openStream(kind) {
     scheduleChatReconnect();
     return;
   }
+  socket.dshStreamKind = kind;
   if (kind === 'mux') chatWs = socket;
   else chatWsHost = socket;
   chatStreams.add(socket);
+  // 兜底不变量：同一个 kind 只允许存在一条活连接。上面那个判据已经能挡住正常时序，
+  // 这里再收一次，任何异常时序（半死连接、close 事件还没派发）都不会留下第二条投递源。
+  for (const other of [...chatStreams]) {
+    if (other === socket || other.dshStreamKind !== kind) continue;
+    if (other.readyState === 0 || other.readyState === 1) {
+      pushLog('stderr', `[chat] ${kind} 事件流出现重复连接，已切断旧连接（否则界面会重复显示每条消息）`);
+      try { other.terminate(); } catch { /* ignore */ }
+    }
+  }
   socket.on('message', (data) => {
     try {
       broadcastChat({ stream: kind, ...JSON.parse(data.toString()) });
@@ -929,7 +949,9 @@ function closeChatStreams() {
     chatReconnectTimer = null;
   }
   for (const socket of chatStreams) {
-    try { socket.close(); } catch { /* ignore */ }
+    // terminate 而不是 close：close 在 CONNECTING 状态下只是"请求关闭"，握手仍可能完成
+    // 并开始投递帧；本地回环 socket 不需要优雅挥手，直接切掉才是确定的。
+    try { socket.terminate(); } catch { /* 已关闭 / 不支持 terminate，退化为 close */ try { socket.close(); } catch { /* ignore */ } }
   }
   chatStreams.clear();
   chatWs = null;
@@ -1112,7 +1134,11 @@ ipcMain.handle('stats:usage', async () => {
 // ---------- 对话 IPC ----------
 ipcMain.handle('chat:connect', async () => {
   openChatStreams();
-  return { ok: true, connected: !!chatWs || !!chatWsHost };
+  // streams = 活连接数（握手中也算）。稳态恒为 2（mux + host）：同一事件流只允许一条连接，
+  // 否则引擎每帧投递两遍、界面上每条消息显示两份。这个计数就是为了让那条不变量可被外部断言
+  // （见 scripts/chat-stream-dedup-e2e.cjs），不是给界面用的。
+  const live = [...chatStreams].filter((s) => s.readyState === 0 || s.readyState === 1).length;
+  return { ok: true, connected: !!chatWs || !!chatWsHost, streams: live };
 });
 ipcMain.handle('chat:disconnect', () => {
   closeChatStreams();
@@ -1486,14 +1512,93 @@ ipcMain.handle('settings:mutate', async (_e, { ns, ops, expectedRevision }) => {
   if (!r.ok) return { ok: false, error: r.error?.message || 'settings.mutate failed' };
   return { ok: true, ...r.value };
 });
-ipcMain.handle('llm:discoverModels', async (_e, { settingsNs, provider, apiKey }) => {
+ipcMain.handle('llm:discoverModels', async (_e, { settingsNs, provider, apiKey, api, baseURL }) => {
   const payload = { settingsNs, provider };
   if (typeof apiKey === 'string' && apiKey.length > 0) payload.apiKey = apiKey;
+  // 草稿探测：路由还没写进 settings 时 engine 读不到它的 api/baseURL，
+  // 这两个字段让「添加自定义提供商」能在保存之前就问出端点提供哪些模型。
+  // 已有 profile 的路由照旧从配置里取值，这两个字段只是覆盖。
+  if (typeof api === 'string' && api.length > 0) payload.api = api;
+  if (typeof baseURL === 'string' && baseURL.length > 0) payload.baseURL = baseURL;
   const r = await rpcCall('llm.discoverModels', payload);
   if (!r.ok) return { ok: false, error: r.error?.message || 'llm.discoverModels failed' };
   return { ok: true, models: r.value?.models || [] };
 });
 
+// 从 ~/.dsh/.credentials.yaml 读一个凭据引用对应的明文。
+// 只在本进程内部用于出站探测请求：配置界面按设计只持有被抹密的描述符，明文绝不跨 IPC 回渲染进程。
+// 读不到（没配过、文件不存在、格式不认识）就返回 undefined，探测会以未认证姿态进行，由界面提示。
+function readCredentialPlaintext(ref) {
+  if (typeof ref !== 'string' || !/^[A-Za-z0-9_]{1,64}$/.test(ref)) return undefined;
+  try {
+    const file = path.join(DSH_HOME, '.credentials.yaml');
+    if (!fs.existsSync(file)) return undefined;
+    for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+      const m = /^\s*([A-Za-z0-9_]{1,64})\s*:\s*(.+?)\s*$/.exec(line);
+      if (!m || m[1] !== ref) continue;
+      let v = m[2];
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+      return v.length > 0 ? v : undefined;
+    }
+  } catch { /* 读不到就当没有：调用方会以未认证姿态探测 */ }
+  return undefined;
+}
+
+// 模型能力探测：上下文窗口 / 输出上限 / 可用思考档位。
+// llm-pi-ai 把这三样写死在路由配置里，而厂商会上下线模型、调整档位、放宽窗口，
+// 所以必须能随时重新问一遍（详见 lib/model-probe.js 的注释）。
+ipcMain.handle('llm:probeCapabilities', async (event, { baseURL, api, apiKey, apiKeyEnv, models, concurrency } = {}) => {
+  const list = Array.isArray(models)
+    ? models.filter((m) => typeof m === 'string' && m.length > 0).slice(0, 200)
+    : [];
+  if (list.length === 0) return { ok: false, error: '没有可探测的模型：请先「获取可用模型」或手动添加' };
+  if (typeof baseURL !== 'string' || !/^https?:\/\//.test(baseURL)) {
+    return { ok: false, error: 'API 地址无效（需以 http:// 或 https:// 开头），无法探测' };
+  }
+  // 密钥优先用界面上刚输入的（用户正在验证它），否则按引用名在本机读。
+  // 这样「只想刷新能力」的用户不必重新粘贴一次密钥。
+  const typed = typeof apiKey === 'string' && apiKey.length > 0 ? apiKey : undefined;
+  const key = typed || readCredentialPlaintext(apiKeyEnv);
+  try {
+    const out = await probeModelCapabilities({
+      baseURL,
+      api,
+      apiKey: key,
+      models: list,
+      concurrency,
+      onProgress: (line) => {
+        try { if (!event.sender.isDestroyed()) event.sender.send('llm:probeProgress', line); } catch { /* 窗口已关 */ }
+      },
+    });
+    return { ok: true, hadKey: key !== undefined, ...out };
+  } catch (e) {
+    return { ok: false, error: (e && e.message) || String(e) };
+  }
+});
+
+// 「配置仓库」界面用它把思考档位点选控件画出来：引擎档位名（off/minimal/…/max）
+// 与每个档位要写的线上拼写（off → none）。
+// 之所以走 IPC 而不是在渲染层再写一份常量：这两个表是探测逻辑的一部分，
+// 抄一份就会漂——探测用新拼写、界面写旧拼写，用户点出来的档位引擎不认。
+// preload 处于沙箱里，require 不到本地模块，所以由主进程吐出来。
+ipcMain.handle('llm:reasoningLevels', () => ({
+  ok: true,
+  engine: ENGINE_LEVELS,
+  wire: WIRE_CANDIDATES,
+}));
+// 主题工作室的 IPC（扫描 WebUI 主题插件 / 免费迁移 / 模型精修 / 主题库读写）
+// 逻辑在 lib/theme-ipc.js —— 它需要真实的 ipcMain 才能被端到端验证，
+// 留在本文件里就只能靠手点界面测；抽出来后测试注册的是同一批处理器。
+registerThemeIpc({
+  ipcMain,
+  dshHome: DSH_HOME,
+  appDir: __dirname,
+  discoverHarness,
+  readCredentialPlaintext,
+  rpcCall,
+  revealPath: (dir) => shell.openPath(dir),
+  showInFolder: (file) => shell.showItemInFolder(file),
+});
 // ---------- 侧边栏 Dock：GitHub（SSH 密钥）/ MCP / Skills ----------
 // GitHub 连接走本机 SSH 密钥（git@github.com），不保存任何密钥材料，
 // 只在 ~/.dsh/.github-ssh.json 记录密钥路径与登录名；仓库浏览全部用 git over SSH。
@@ -2488,6 +2593,15 @@ let updaterInstalling = false;
 ipcMain.handle('updater:install', async (_e, exePath) => {
   if (!exePath) return { ok: false, error: '缺少安装包路径' };
   if (!fs.existsSync(exePath)) return { ok: false, error: `安装包不存在: ${exePath}` };
+  // 起安装器之前先确认这真是 Windows 可执行文件。
+  // 旧实现是"spawn 完 1.2 秒就 app.exit(0)"，**不检查 spawn 结果** ——
+  // 一旦下载到的是个坏文件（镜像回错误页、被杀软截断），spawn 会失败，
+  // 但应用照样退出 → 用户眼前一黑，应用再也起不来。这个代价太大，必须先验。
+  if (/\.exe$/i.test(exePath) && !isPeFile(exePath)) {
+    return { ok: false, error: '这个文件不是可执行的安装包（可能下载被中断或镜像返回了错误页），请点「一键更新」重新下载' };
+  }
+  const size = (() => { try { return fs.statSync(exePath).size; } catch { return 0; } })();
+  if (size < 1024) return { ok: false, error: `安装包体积异常（${size} 字节），请重新下载` };
   try {
     updaterInstalling = true;
     const isInno = /\.exe$/i.test(exePath);
@@ -2497,6 +2611,20 @@ ipcMain.handle('updater:install', async (_e, exePath) => {
     const args = [];
     if (isInno) args.push('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', `/DIR="${LAYOUT_ROOT}"`);
     const child = spawn(exePath, args, { detached: true, stdio: 'ignore', windowsHide: false, windowsVerbatimArguments: true });
+    // 等它真的被系统接受（'spawn' 事件）再决定退出。spawn 只保证进程创建动作完成，
+    // 文件不可执行/被拦时是**异步**报 'error'，所以这里必须等一个 tick 而不是直接 unref 走人。
+    const started = await new Promise((resolve) => {
+      let done = false;
+      const finish = (v) => { if (!done) { done = true; resolve(v); } };
+      child.once('spawn', () => finish({ ok: true }));
+      child.once('error', (err) => finish({ ok: false, error: (err && err.message) || String(err) }));
+      setTimeout(() => finish({ ok: true }), 3000); // 兜底：没报错就认为起来了
+    });
+    if (!started.ok) {
+      updaterInstalling = false;
+      pushLog('stderr', `[更新] 启动安装器失败：${started.error}`);
+      return { ok: false, error: `无法启动安装包：${started.error}（安装包已保存在 ${exePath}，可手动运行）` };
+    }
     child.unref();
     pushLog('stdout', `[更新] 已启动安装器: ${exePath}${args.length ? ' （静默安装到 ' + LAYOUT_ROOT + '）' : ''}`);
     // 等 1.2s 让安装器接管后再退出本进程（避免过早关窗导致安装器未被接受）
@@ -2506,6 +2634,7 @@ ipcMain.handle('updater:install', async (_e, exePath) => {
     }, 1200);
     return { ok: true };
   } catch (err) {
+    updaterInstalling = false;
     return { ok: false, error: err.message };
   }
 });
@@ -2629,75 +2758,54 @@ ipcMain.handle('updater:download', async (_e, url) => {
   if (!url) return { ok: false, error: '缺少下载地址' };
   let name = 'update';
   try { name = path.basename(new URL(url).pathname) || name; } catch { /* ignore */ }
+  const isExe = /\.exe$/i.test(name);
+
   // 下载到「应用安装根目录\updates」（需求#6）：不落在临时/账户路径，更新包随应用目录存放，
   // 安装时直接覆盖安装到同一安装根目录，绝不“下到账户路径另装一个新文件夹”。
-  const dir = path.join(LAYOUT_ROOT, 'updates');
-  try { fs.mkdirSync(dir, { recursive: true }); } catch {
-    // 安装根不可写（如只读环境）时回退系统临时目录
-    try { fs.mkdirSync(path.join(os.tmpdir(), 'DSH-update'), { recursive: true }); } catch { /* ignore */ }
+  //
+  // 但安装根**不一定可写** —— Inno 装出来的常见落点是 C://Program Files\XXX，那里要管理员
+  // 权限才写得进。旧实现这里有个静默 bug：兜底目录建出来了，`target` 却仍指向创建失败的
+  // 那个目录（注释写着「回退系统临时目录」，代码没回退）→ 每次写盘都失败。所以目录必须
+  // 先定下来、再据此拼路径，两者不能分开算。
+  const primaryDir = path.join(LAYOUT_ROOT, 'updates');
+  const fallbackDir = path.join(os.tmpdir(), 'DSH-update');
+  let dir;
+  try {
+    dir = pickWritableDir(primaryDir, fallbackDir);
+  } catch (err) {
+    return { ok: false, error: err.message };
   }
-  const target = name === 'update' ? path.join(dir, 'DSH-update-setup.exe') : path.join(dir, name);
-  let startedAt = 0;
-  let lastAt = 0;
-  let lastRecv = 0;
+  const target = path.join(dir, name === 'update' ? 'DSH-update-setup.exe' : name);
+  if (dir !== primaryDir) {
+    pushLog('stderr', `[下载] 安装目录不可写（${primaryDir}），改用 ${dir}`);
+  }
 
-  // 下载候选序列：加速镜像优先，最后回源 GitHub（国内环境经镜像明显更快）
+  // 下载候选序列：加速镜像优先，最后回源 GitHub（国内环境经镜像明显更快）。
+  // 真正的下载逻辑在 lib/download.js —— 停滞超时 / 长度校验 / PE 校验 / 断点续传
+  // 都在那里，并有 scripts/update-download-test.cjs 逐条复现验证。
   const candidates = mirrorOf(url, { github: url });
+  const r = await downloadToFile({
+    candidates,
+    target,
+    fetchImpl: (u, o) => net.fetch(u, o),
+    requirePe: isExe,
+    onProgress: (p) => sendUpdaterProgress({ ...p, name }),
+    log: pushLog,
+  });
 
-  for (let i = 0; i < candidates.length; i++) {
-    const cand = candidates[i];
-    const via = cand !== url ? `（镜像 ${i + 1}/${candidates.length - 1}）` : '（GitHub 官方）';
-    pushLog('stdout', `[下载] ${name} ${via}: ${cand}`);
-    sendUpdaterProgress({ received: 0, total: 0, pct: 0, phase: 'downloading', name, via, speed: 0 });
-    startedAt = Date.now(); lastAt = Date.now(); lastRecv = 0;
-    try {
-      const res = await net.fetch(cand, { headers: { 'User-Agent': 'dsh-desktop' }, signal: AbortSignal.timeout(120000) });
-      if (!res.ok) {
-        pushLog('stderr', `[下载] ${cand} HTTP ${res.status}，切换下一跳…`);
-        continue;
-      }
-      const total = Number(res.headers.get('content-length')) || 0;
-      const reader = res.body.getReader();
-      const ws = fs.createWriteStream(target);
-      let received = 0;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        received += value.byteLength;
-        ws.write(value);
-        const now = Date.now();
-        const dt = now - lastAt;
-        if (dt >= 250) {
-          const speed = ((received - lastRecv) / 1024 / 1024) / (dt / 1000); // MB/s
-          lastAt = now; lastRecv = received;
-          sendUpdaterProgress({
-            received, total, pct: total ? Math.min(100, Math.round((received / total) * 100)) : 0,
-            phase: 'downloading', name, via, speed,
-          });
-        }
-      }
-      ws.end();
-      await new Promise((resolve) => ws.on('finish', resolve));
-      const speedAvg = startedAt ? (received / 1024 / 1024) / ((Date.now() - startedAt) / 1000) : 0;
-      sendUpdaterProgress({ received, total, pct: 100, phase: 'done', name, via, speed: speedAvg });
-      // 完成后：若为 Setup.exe 则自动触发安装并重启（正常软件更新体验），否则打开所在目录
-      const isExe = /\.exe$/i.test(name);
-      pushLog('stdout', `[下载] 完成 ${name} (${(received / 1048576).toFixed(1)} MB, ${speedAvg.toFixed(2)} MB/s)；${isExe ? '即将安装并重启' : '已就绪'}`);
-      if (isExe) {
-        sendUpdaterResult({ ok: true, path: target, name, via, autoInstall: true });
-        return { ok: true, path: target, name, via, autoInstall: true };
-      }
-      try { shell.openPath(target); } catch { /* ignore */ }
-      sendUpdaterResult({ ok: true, path: target, name, via });
-      return { ok: true, path: target, name, via };
-    } catch (err) {
-      pushLog('stderr', `[下载] ${cand} 失败：${err.message}，切换下一跳…`);
-      // 清掉可能写坏的半截文件，下一跳覆盖写
-      try { fs.rmSync(target, { force: true }); } catch { /* ignore */ }
-    }
+  if (!r.ok) {
+    sendUpdaterResult({ ok: false, error: r.error, attempts: r.attempts });
+    return { ok: false, error: r.error, attempts: r.attempts };
   }
-  sendUpdaterResult({ ok: false, error: '所有下载源均失败（GitHub 及加速镜像不可达），请稍后重试' });
-  return { ok: false, error: '所有下载源均失败（GitHub 及加速镜像不可达）' };
+  // 完成后：若为 Setup.exe 则自动触发安装并重启（正常软件更新体验），否则打开所在目录
+  pushLog('stdout', `[下载] ${name} 就绪（${(r.bytes / 1048576).toFixed(1)} MB，${r.via}）`);
+  if (isExe) {
+    sendUpdaterResult({ ok: true, path: target, name, via: r.via, bytes: r.bytes, autoInstall: true });
+    return { ok: true, path: target, name, via: r.via, bytes: r.bytes, autoInstall: true };
+  }
+  try { shell.openPath(target); } catch { /* ignore */ }
+  sendUpdaterResult({ ok: true, path: target, name, via: r.via, bytes: r.bytes });
+  return { ok: true, path: target, name, via: r.via, bytes: r.bytes };
 });
 
 /** 把渲染层动作转发过去；主进程不操作 DOM。 */

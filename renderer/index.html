@@ -10,10 +10,6 @@
 </head>
 <body>
   <video id="bgvideo" autoplay muted loop playsinline poster="bg.jpg" src="bg-animated.mp4"></video>
-  <!-- 紫月主题动态背景：真无缝循环素材（正放+倒放拼接，见 bg-moon.js），单一视频直接 loop -->
-  <div id="bgvideoMoon" aria-hidden="true">
-    <video id="bgmoonA" class="bg-moon-video" autoplay muted loop playsinline preload="auto" src="bg-moon-loop.mp4"></video>
-  </div>
   <canvas id="bgfx"></canvas>
 
   <aside class="dock" id="dock" hidden>
@@ -262,10 +258,9 @@
             <div class="sm-row">
               <label class="sm-label" for="themeSelect">主题</label>
               <select id="themeSelect" class="sm-select">
+                <option value="light">浅色</option>
+                <option value="graphite">深色</option>
                 <option value="dark">深空</option>
-                <option value="aurora">极光</option>
-                <option value="comet">彗星金</option>
-                <option value="moon">紫月</option>
                 <option value="custom">自定义</option>
               </select>
             </div>
@@ -351,6 +346,13 @@
                   <label>自定义 Headers（可选）
                     <textarea class="sm-input cp-headers" rows="2" placeholder="每行一个，如：&#10;Authorization: Bearer xxx&#10;X-Custom: 1"></textarea>
                   </label>
+                  <label>模型列表
+                    <textarea class="sm-input cp-models" rows="3" placeholder="每行一个模型 ID，如：&#10;qwen3.8-max&#10;deepseek-v4.1-flash&#10;留空则自动从端点获取（GET /models）"></textarea>
+                  </label>
+                </div>
+                <div class="cp-hint">
+                  pi-ai 没内置该提供商的 catalog 时，路由必须自己声明模型：留空会自动探测端点，
+                  探测不到就得在这里手填，否则引擎会以 <code>resolves no models</code> 拒绝保存。
                 </div>
                 <div class="cp-actions">
                   <button class="mini-btn primary-btn cp-save" type="button">保存提供商</button>
@@ -365,6 +367,44 @@
               <button class="mini-btn" id="refreshModelsBtn">刷新</button>
               <button class="mini-btn" id="openSettingsDocBtn">打开配置文档</button>
             </div>
+          </div>
+        </div>
+
+        <div class="settings-module" data-module="registry">
+          <div class="settings-module-head">
+            <span class="sm-icon">🗄️</span>
+            <span class="sm-title">配置仓库</span>
+            <span class="sm-chevron">▾</span>
+          </div>
+          <div class="settings-module-body">
+            <div class="meta">
+              这里列出 <code>settings.yaml</code> 里 <code>llm-pi-ai</code> 段真正存下来的每一条配置，
+              逐字段编辑，不用手写 YAML/JSON。
+              标着「默认」的是引擎内置值（你没设过），改它才会写进你的配置文件。
+            </div>
+            <div class="rg-toolbar">
+              <button class="mini-btn" id="rgRefreshBtn" type="button">↻ 重新读取</button>
+              <button class="mini-btn" id="rgExportBtn" type="button" title="把整个配置仓库导出成 JSON 文件，用于备份或换机迁移">⬇ 导出备份</button>
+              <button class="mini-btn" id="rgImportBtn" type="button" title="从 JSON 文件恢复配置，写入前会先给你看改了哪些字段">⬆ 导入恢复</button>
+              <button class="mini-btn" id="rgOpenFileBtn" type="button" title="用系统默认程序打开 settings.yaml（想直接改文件时用）">打开配置文件</button>
+              <input type="file" id="rgImportFile" accept=".json,application/json" hidden />
+              <span class="rg-toolbar-msg"></span>
+            </div>
+            <div class="rg-stats" id="rgStats"></div>
+            <div class="rg-route-list" id="rgRouteList"></div>
+            <details class="rg-builtin">
+              <summary id="rgBuiltinSummary">未配置的内置提供商</summary>
+              <div class="rg-builtin-hint">
+                这些路由 pi-ai 已内置（协议、地址、模型目录都有），不写配置也能用。
+                只有当你要改它们的地址、或换一个自己的密钥引用名时，才需要在这里落一条配置。
+              </div>
+              <div class="rg-builtin-list" id="rgBuiltinList"></div>
+            </details>
+            <details class="rg-raw">
+              <summary>原始配置（只读）</summary>
+              <div class="rg-raw-hint">这就是 <code>settings.yaml</code> 里 <code>llm-pi-ai</code> 段的实际内容（仅你写入的那一层）。</div>
+              <pre class="rg-raw-pre" id="rgRawPre"></pre>
+            </details>
           </div>
         </div>
 
@@ -541,6 +581,7 @@
           </div>
           <div class="meta" id="mkCount"></div>
           <div class="mk-grid" id="mkGrid"></div>
+          <div class="mk-more" id="mkMore" hidden></div>
         </div>
 
         <div class="mk-panel" data-mkpanel="installed">
@@ -553,6 +594,20 @@
         </div>
 
         <div class="mk-panel" data-mkpanel="themes">
+          <!-- 主题工作室：把已下载的 WebUI 主题包迁移成桌面端主题（见 theme-studio.js） -->
+          <div class="ts-studio" id="tsPanel">
+            <div class="ts-head">
+              <div>
+                <div class="ts-title">🖥️ 桌面端主题迁移</div>
+                <div class="meta" id="tsIntro">把下面这些 <b>WebUI 主题</b>的配色与结构解析、翻译成<b>桌面端主题</b>。
+                  免费路径不需要模型；需要补译翻译表覆盖不到的选择器时，可选用你已经配置好的模型做一次兼容精修。</div>
+              </div>
+              <button class="mini-btn" id="tsRefresh" type="button">重新扫描</button>
+            </div>
+            <div id="tsBody"><div class="empty">切换到本标签时自动扫描本机插件…</div></div>
+            <div id="tsInstalled"></div>
+          </div>
+          <div class="ts-sep"></div>
           <div class="meta" id="mkThemeNote" style="margin-bottom:12px"></div>
           <div class="mk-grid" id="mkThemeGrid"></div>
         </div>
@@ -601,12 +656,18 @@
   <script src="panels.js"></script>
   <script src="inspector.js"></script>
   <script src="starfield.js"></script>
+  <!-- providers.js 必须排在 settings.js 之前：settings.js 的 init() 会调 window.__providers.refresh()，
+       脚本是同步加载的，这样顺序能保证入口必然存在（模型配置整块已从 settings.js 搬到这里）。 -->
+  <script src="providers.js"></script>
   <script src="settings.js"></script>
+  <script src="registry.js"></script>
   <script src="dashboard.js"></script>
   <script src="dock.js"></script>
-  <script src="bg-moon.js"></script>
+  <!-- event-seq.js 必须排在 chat.js 之前：chat.js 的 handleSessionEvent 首行就用它按 seq 丢弃重复帧 -->
+  <script src="event-seq.js"></script>
   <script src="app.js"></script>
   <script src="chat.js"></script>
+  <script src="theme-studio.js"></script>
   <script src="market.js"></script>
 </body>
 </html>

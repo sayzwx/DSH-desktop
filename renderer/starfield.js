@@ -56,11 +56,20 @@
     }
   }
 
+  // 只有「星空系」主题才播放动态壁纸。#bgvideo 在这两套主题下是 display:none，
+  // 但隐藏的 <video> 依然会持续解码，必须显式 pause 才真的省资源。
+  const STAR_BG_THEMES = ['dark', 'custom'];
+
+  function bgEnabled() {
+    return STAR_BG_THEMES.includes(document.documentElement.dataset.theme);
+  }
+
   function start() {
+    if (!bgEnabled()) {
+      video.pause();
+      return;
+    }
     resize();
-    // 紫月主题下 #bgvideo 已被 CSS 隐藏并由 bg-moon.js 接管背景，
-    // 不再播放它（避免隐藏状态下仍持续解码大视频浪费资源）
-    if (document.documentElement.dataset.theme === 'moon') { video.pause(); return; }
     const p = video.play();
     if (p && p.catch) p.catch(() => { /* 静默：poster 图兜底 */ });
   }
@@ -78,6 +87,11 @@
   window.__starfield = {
     start,
     stop,
+    /** 主题切换时由 app.js 调用：浅色 / 深色两套基础主题下停掉壁纸 */
+    setTheme() {
+      if (bgEnabled()) start();
+      else stop();
+    },
     // 交互反馈：启动 / 发送消息时 —— 星云微闪
     triggerMeteor() {
       flashUntil = performance.now() + 900;

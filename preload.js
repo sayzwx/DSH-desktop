@@ -81,7 +81,21 @@ contextBridge.exposeInMainWorld('api', {
   setCredential: (ref, value) => ipcRenderer.invoke('credentials:set', { ref, value }),
   unsetCredential: (ref) => ipcRenderer.invoke('credentials:unset', ref),
   mutateSettings: (ns, ops, expectedRevision) => ipcRenderer.invoke('settings:mutate', { ns, ops, expectedRevision }),
-  discoverModels: (settingsNs, provider, apiKey) => ipcRenderer.invoke('llm:discoverModels', { settingsNs, provider, apiKey }),
+  // api / baseURL 是「草稿探测」用的：自定义提供商在写入配置之前还没有 profile，
+  // 引擎只能靠这两个字段去读端点的 GET /models（pi-ai 没内置该 provider 的 catalog 时）。
+  discoverModels: (settingsNs, provider, apiKey, api, baseURL) =>
+    ipcRenderer.invoke('llm:discoverModels', { settingsNs, provider, apiKey, api, baseURL }),
+  // 模型能力探测：现场问出上下文窗口 / 输出上限 / 可用思考档位。
+  // 只传凭据的**引用名**（apiKeyEnv），明文密钥由主进程在本机读取后用于出站请求，不跨 IPC。
+  probeCapabilities: (payload) => ipcRenderer.invoke('llm:probeCapabilities', payload),
+  // 引擎档位名 + 线上拼写映射，供「配置仓库」画出思考档位点选控件。
+  // 单一事实来源是主进程的 lib/model-probe.js，界面不另抄一份。
+  reasoningLevels: () => ipcRenderer.invoke('llm:reasoningLevels'),
+  // 探测过程的逐行进度。注册前先清掉旧监听，避免反复打开编辑器造成监听堆积。
+  onProbeProgress: (cb) => {
+    ipcRenderer.removeAllListeners('llm:probeProgress');
+    ipcRenderer.on('llm:probeProgress', (_e, line) => cb(line));
+  },
   getSettingsDescribe: () => ipcRenderer.invoke('settings:describe'),
   getPluginCatalog: () => ipcRenderer.invoke('settings:pluginCatalog'),
   getPresetDefault: () => ipcRenderer.invoke('settings:presetDefault'),
@@ -162,4 +176,19 @@ contextBridge.exposeInMainWorld('api', {
   backupDsh: () => ipcRenderer.invoke('diagnostics:backupDsh'),
   exportMarkdown: (defaultName, markdown) => ipcRenderer.invoke('chat:exportMarkdown', { defaultName, markdown }),
   openDevTools: () => ipcRenderer.invoke('app:openDevTools'),
+
+  // ---- 主题工作室：WebUI 主题包 → 桌面端主题 ----
+  // 迁移逻辑（解析、映射、净化）全在主进程的 lib/web-themes.js 与 lib/theme-analysis.js，
+  // 渲染层只负责显示与选择；密钥只以「引用名」形式传下去，明文不回渲染进程。
+  themeScan: () => ipcRenderer.invoke('theme:scan'),
+  themeMigrate: (pluginId, schemeId, tone) => ipcRenderer.invoke('theme:migrate', { pluginId, schemeId, tone }),
+  themeAnalyze: (payload) => ipcRenderer.invoke('theme:analyze', payload),
+  themeRoutes: () => ipcRenderer.invoke('theme:routes'),
+  themeInstall: (migrations, analysis) => ipcRenderer.invoke('theme:install', { migrations, analysis }),
+  themeList: () => ipcRenderer.invoke('theme:list'),
+  themeRemove: (id) => ipcRenderer.invoke('theme:remove', id),
+  themeClear: () => ipcRenderer.invoke('theme:clear'),
+  themeRevealPlugin: (pluginId) => ipcRenderer.invoke('theme:revealPlugin', pluginId),
+  themeRevealStore: () => ipcRenderer.invoke('theme:revealStore'),
+  onThemeAnalysisProgress: (cb) => ipcRenderer.on('theme:analysisProgress', (_e, line) => cb(line)),
 });
