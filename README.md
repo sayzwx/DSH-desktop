@@ -11,7 +11,7 @@ DeepSeek Harness 的 Windows 桌面端外壳——零环境安装，装完即用
 
 应用启动后自动检查更新（每 6 小时一次），更新包经国内加速镜像下载，完成后一键重启升级。
 
-> 国内下载加速：官方链接前加镜像前缀，如 `https://ghfast.top/https://github.com/sayzwx/DSH-desktop/releases/download/v0.6.3/DSH-Desktop-v0.6.3-Setup.exe`
+> 国内下载加速：官方链接前加镜像前缀，如 `https://ghfast.top/https://github.com/sayzwx/DSH-desktop/releases/download/v0.8.0/DSH-Desktop-v0.8.0-Setup.exe`
 
 ## Community
 
@@ -36,6 +36,7 @@ DeepSeek Harness 已提供完整的 Agent 运行时与 Web UI。DSH Desktop 不�
 - 模型配置：30+ 内置提供商 + 自定义提供商（OpenAI / Anthropic 兼容端点）
 - 插件市场（dsh-market）开箱即连
 - 原生插件管理：MCP / 技能 / Agent 预设
+- 主题：浅色 / 深色 / 深空 / 自定义四套内置主题，另有主题工作室可把 WebUI 社区主题迁移到桌面端
 - 系统托盘：显示主窗口 / 启停 Harness / 退出
 
 ## Friends
@@ -76,10 +77,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-encoding.ps1
 ### Packaging
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-dist.ps1 -Version 0.6.0
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-dist.ps1 -Version 0.8.0
 ```
 
-产出 `dist\DSH-Desktop-v0.6.3.zip` 与 `DSH-Desktop-v0.6.3-Setup.exe`（Inno Setup 一键安装向导）。引擎不打包进安装包，由安装器自动从官方源拉取构建。
+产出 `dist\DSH-Desktop-v0.8.0.zip` 与 `DSH-Desktop-v0.8.0-Setup.exe`（Inno Setup 一键安装向导）。引擎不打包进安装包，由安装器自动从官方源拉取构建。
 
 ## Runtime architecture
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "DSH 桌面端（DeepSeek Harness Desktop）",
   "main": "main.js",
   "private": true,
@@ -28,6 +28,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "lib/**/*",
       "renderer/**/*",
       "config/**/*",
       "installer/setup.sh",
