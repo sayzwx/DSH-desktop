@@ -325,6 +325,20 @@ function applyCustom() {
   $('#bgColor').value = customColors.bg;
 }
 
+/**
+ * 让系统级窗口边框（Windows 标题栏）跟随应用主题。
+ * 之前标题栏只跟系统设置走：应用切浅色它还是白的、切深色还是黑的，看起来"顶框独立于主题"。
+ * Electron 的 nativeTheme.themeSource 正是按应用（而非系统）声明配色倾向的开关。
+ */
+function syncNativeTheme(theme, web) {
+  if (!api.setNativeTheme) return;
+  let tone = 'dark';
+  if (theme === 'light') tone = 'light';
+  else if (theme === 'webtheme') tone = (web && web.origin && web.origin.tone === 'light') ? 'light' : 'dark';
+  // graphite / dark / custom 都是深底
+  try { api.setNativeTheme(tone); } catch { /* 主进程不可达时静默：只是标题栏颜色不对，不影响功能 */ }
+}
+
 function setTheme(name) {
   const root = document.documentElement;
   const web = isWebTheme(name) ? webThemes.find((t) => t.id === name) : null;
@@ -347,6 +361,9 @@ function setTheme(name) {
   } else {
     applyWebTheme(web); // web 为空时只做 clearWebTheme
   }
+  // 让窗口边框（Windows 标题栏）跟着主题走：深色主题配深色标题栏，浅色配浅色。
+  // 之前标题栏跟系统走 —— 应用里切到浅色它还是白的、切到深色还是黑的，看起来"顶框独立"。
+  syncNativeTheme(theme, web);
   return theme;
 }
 

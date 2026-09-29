@@ -43,6 +43,8 @@
     body: $('#mkBody'),
     search: $('#mkSearch'),
     cats: $('#mkCats'),
+    filters: $('#mkFilters'),
+    sortSel: $('#mkSort'),
     count: $('#mkCount'),
     grid: $('#mkGrid'),
     more: $('#mkMore'),
@@ -63,6 +65,8 @@
     marketBundleVersion: null, // manifest.json 里的 version（如 '1.18.0'）
     search: '',
     category: 'all',
+    filter: 'all',   // all | installed | upd
+    sort: 'default', // default | downloads | stars | name
     tab: 'discover',
     busy: false,
     restartNeeded: false,
@@ -404,6 +408,18 @@
     } catch { /* 拉取失败则沿用已有的 restartNeeded 判断 */ }
     computeRestart();
     const v = verdictOf(focusName) + themeMigrationHint(focusName);
+    // 变更后的联动刷新（2026-09-29 用户反馈：卸载/移除插件后应用端不同步刷新）：
+    //   ① 主题下拉（桌面端星域主题）——迁移主题的来源插件没了/新增了都要重建
+    //   ② 主题工作室（若已挂载）——扫描结果与「已迁移」清单
+    //   ③ 主题卡自身（启用/停用/迁移按钮状态）
+    // 三者都失败也不影响主流程（都是显示层）。
+    if (window.__dshThemes && typeof window.__dshThemes.refresh === 'function') {
+      window.__dshThemes.refresh().catch(() => {});
+    }
+    if (window.__themeStudio && typeof window.__themeStudio.refreshIfMounted === 'function') {
+      window.__themeStudio.refreshIfMounted().catch(() => {});
+    }
+    renderThemes();
     if (S.restartNeeded) {
       const ok = await confirmBox(
         `${label}完成。${v ? '\n\n' + v : '部分插件需要重启 Harness 才会被加载。'}\n\n是否现在重启 Harness？（不重启则下次启动应用时生效）`,
@@ -448,12 +464,23 @@
   function filteredEntries() {
     const list = (S.registry && S.registry.plugins) || [];
     const q = S.search.trim().toLowerCase();
-    return list.filter((e) => {
+    let out = list.filter((e) => {
       if (S.category !== 'all' && e.category !== S.category) return false;
+      if (S.filter === 'installed' && !installedOf(e)) return false;
+      if (S.filter === 'upd') {
+        const k = instKey(e);
+        const u = installedOf(e) ? updateOf(k) : null;
+        if (!(installedOf(e) && u && u.updateAvailable)) return false;
+      }
       if (!q) return true;
-      const hay = [e.name, e.npm, e.owner, descOf(e)].join(' ').toLowerCase();
+      const hay = [e.name, e.npm, e.owner, descOf(e), e.category, CAT_TXT(e.category)].join(' ').toLowerCase();
       return hay.includes(q);
     });
+    // 排序：默认保持目录原序（registry 已按热度排好）；其余维度显式排
+    if (S.sort === 'downloads') out = out.slice().sort((a, b) => (b.downloads || 0) - (a.downloads || 0));
+    else if (S.sort === 'stars') out = out.slice().sort((a, b) => (b.stars || 0) - (a.stars || 0));
+    else if (S.sort === 'name') out = out.slice().sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    return out;
   }
 
   // 分类按钮只在「目录变了 / 分类集合变了」时重建；切换分类只改 active 类。
@@ -486,6 +513,14 @@
     const hasUpd = !!(installed && upd && upd.updateAvailable);
     const stars = e.stars ? `<span class="mk-badge mk-badge-star">★ ${e.stars}</span>` : '';
     const dl = e.downloads ? `<span class="mk-badge">⬇ ${e.downloads}</span>` : '';
+    // 项目网页：registry 的 page（详情页）优先，GitHub 仓库其次；target=_blank 会走
+    // 主进程 setWindowOpenHandler → 系统浏览器打开，不会在应用里导航走。
+    const pageHref = e.page || e.url || '';
+    const links = `
+      <div class="mk-card-links">
+        ${pageHref ? `<a class="mk-link" href="${esc(pageHref)}" target="_blank" rel="noopener noreferrer" title="在浏览器打开项目网页">项目网页 ↗</a>` : ''}
+        ${e.url ? `<a class="mk-link" href="${esc(e.url)}" target="_blank" rel="noopener noreferrer" title="在浏览器打开 GitHub 仓库">GitHub ↗</a>` : ''}
+      </div>`;
     return `<div class="mk-card" data-key="${esc(key)}">
       <div class="mk-card-head">
         <div class="mk-card-name">${esc(e.name)}</div>
@@ -498,6 +533,7 @@
           ? `<span class="mk-installed-tag">✓ 已安装</span>${hasUpd ? `<button type="button" class="primary-btn mk-btn-upd" data-name="${esc(key)}">更新</button>` : '<button type="button" class="mini-btn mk-btn-ver" disabled>' + esc((upd && upd.version) || '') + '</button>'}`
           : `<button type="button" class="primary-btn mk-btn-inst" data-url="${esc(e.url)}">安装</button>`}
       </div>
+      ${links}
     </div>`;
   }
 
@@ -571,8 +607,13 @@
       return;
     }
     let html = '';
+    // 描述反查：registry 里按 npm/名字对上（已装包通常只有几个，线性找没有性能问题）
+    const registryOf = (name) => ((S.registry && S.registry.plugins) || []).find(
+      (x) => instKey(x) === name || x.name === name) || null;
     for (const name of names.sort()) {
       const spec = installed[name];
+      const entry = registryOf(name);
+      const desc = entry ? descOf(entry) : '';
       const act = (S.installed.activation && S.installed.activation[name]) || null;
       const st = act ? (STATE_TXT[act.state] || { cls: 'dim', t: act.state }) : { cls: 'dim', t: '未知' };
       const stHint = act ? (STATE_HINT[act.state] || '') : '未在引擎的激活清单里找到它。';
@@ -587,6 +628,7 @@
       html += `<div class="mk-row" data-name="${esc(name)}">
         <div class="mk-row-main">
           <div class="mk-row-name">${esc(name)} ${isSelf ? '<span class="mk-badge mk-badge-self">市场本体</span>' : ''}</div>
+          ${desc ? `<div class="mk-row-desc">${esc(desc)}</div>` : ''}
           <div class="mk-row-meta">${esc(spec)} · v${esc(ver || '?')} <span class="mk-state mk-state-${st.cls}" title="${esc(stHint)}">${esc(st.t)}</span>${channelNote}</div>
         </div>
         <div class="mk-row-actions">
@@ -630,6 +672,7 @@
       const installed = installedOf(e);
       const act = installed && S.installed.activation && S.installed.activation[key];
       const live = !!(act && act.state === 'live');
+      const pageHref = e.page || e.url || '';
       html += `<div class="mk-card">
         <div class="mk-card-head"><div class="mk-card-name">${esc(e.name)}</div><div class="mk-card-owner">@${esc(e.owner)}</div></div>
         <div class="mk-card-desc">${esc(descOf(e) || '（无描述）')}</div>
@@ -639,6 +682,12 @@
             ? (live ? '<button type="button" class="mini-btn mk-btn-themeoff" data-name="' + esc(key) + '">停用</button>'
                    : '<button type="button" class="primary-btn mk-btn-themeon" data-name="' + esc(key) + '">启用</button>')
             : `<button type="button" class="primary-btn mk-btn-inst" data-url="${esc(e.url)}">安装</button>`}
+          <button type="button" class="mini-btn mk-btn-migrate" data-name="${esc(key)}" data-url="${esc(e.url)}" data-installed="${installed ? '1' : ''}"
+            title="把这款主题迁移成桌面端主题：未安装会先自动安装（引擎热加载），然后免费迁移全部方案档位并直接应用">迁移到桌面端</button>
+        </div>
+        <div class="mk-card-links">
+          ${pageHref ? `<a class="mk-link" href="${esc(pageHref)}" target="_blank" rel="noopener noreferrer" title="在浏览器打开项目网页">项目网页 ↗</a>` : ''}
+          ${e.url ? `<a class="mk-link" href="${esc(e.url)}" target="_blank" rel="noopener noreferrer" title="在浏览器打开 GitHub 仓库">GitHub ↗</a>` : ''}
         </div>
       </div>`;
     }
@@ -787,9 +836,19 @@
 
   async function installByUrl(url, btn) {
     if (S.busy) return;
+    await installNow(url, btn);
+  }
+
+  /**
+   * 安装并返回「这次装上的包名」（用于后续定点动作），失败返回 null。
+   * installByUrl（市场卡「安装」）与 migrateTheme（主题卡「迁移到桌面端」）共用。
+   */
+  async function installNow(url, btn) {
+    if (S.busy) return null;
     // 装之前记下已装清单：装完按差集找出「这次到底装了哪个包」，
     // 才能给出针对它的生效结论（market 的 install 只回 {ok}，不回包名）。
     const before = new Set(Object.keys((S.installed && S.installed.installed) || {}));
+    let addedKey = null;
     await runOp('安装中…', async () => {
       btn && (btn.disabled = true);
       const r = await post('/dsh-market/install', { url });
@@ -799,9 +858,56 @@
         const fresh = await get('/dsh-market/installed');
         if (fresh.ok && fresh.data) S.installed = fresh.data;
         const added = Object.keys((S.installed && S.installed.installed) || {}).filter((k) => !before.has(k));
-        await afterMutate('安装', added[0] || null);
+        addedKey = added[0] || null;
+        await afterMutate('安装', addedKey);
       }
     });
+    return addedKey;
+  }
+
+  /**
+   * 主题卡「迁移到桌面端」：未安装先装（引擎热加载），然后走主题工作室的免费迁移
+   * （全部方案档位 → 写入主题库 → 刷新下拉并直接应用）。
+   * 这条链路回答的是用户最直接的诉求：在市场里看到一款主题，一步就能在桌面端用上。
+   */
+  async function migrateTheme(entry, btn) {
+    if (S.busy) return;
+    const key = entry ? instKey(entry) : btn.dataset.name;
+    if (!key) return;
+    const needInstall = btn.dataset.installed !== '1';
+    const studio = window.__themeStudio;
+    if (!studio || typeof studio.migrateAll !== 'function') {
+      alertBox('主题迁移组件还没就绪（主题工作室未加载）。请重启应用后再试。', '迁移到桌面端');
+      return;
+    }
+    let name = key;
+    if (needInstall) {
+      const okc = await confirmBox(
+        `「${key}」还没安装。将先自动安装（引擎会热加载它），然后免费迁移成桌面端主题并直接应用。\n\n继续？`,
+        '迁移到桌面端', '安装并迁移');
+      if (!okc) return;
+      await installNow(entry.url, btn);
+      // 已装判定用目录条目自身的键（scoped 包的键是 @scope/name，不是按钮上的名字）
+      if (!installedOf(entry)) {
+        alertBox(`「${key}」安装未完成，迁移中止。请看上方进度与结论。`, '迁移到桌面端');
+        return;
+      }
+      name = instKey(entry);
+    }
+    btn && (btn.disabled = true);
+    const old = btn.textContent;
+    btn.textContent = '迁移中…';
+    try {
+      const r = await studio.migrateAll(name);
+      if (!r.ok) throw new Error(r.error || '迁移失败');
+      alertBox(`已迁移「${key}」的 ${r.migrated} 个档位到桌面端，并已直接应用。\n可在「设置 → 星域主题」里随时切换。`, '迁移完成');
+      renderThemes();
+    } catch (e) {
+      alertBox(`迁移失败：${(e && e.message) || e}\n\n可到「主题」标签下方的「桌面端主题迁移」里点「重新扫描」重试。`, '迁移到桌面端');
+    } finally {
+      btn && (btn.disabled = false);
+      btn && (btn.textContent = old);
+    }
   }
 
   async function updateByName(name, btn, force) {
@@ -927,6 +1033,20 @@
       if (b) setCategory(b.dataset.cat);
     });
 
+    // 快捷筛选（全部 / 已安装 / 可更新）与排序
+    if (el.filters) {
+      el.filters.addEventListener('click', (ev) => {
+        const chip = ev.target.closest('.mk-chip');
+        if (!chip || chip.dataset.f === S.filter) return;
+        S.filter = chip.dataset.f;
+        el.filters.querySelectorAll('.mk-chip').forEach((c) => c.classList.toggle('active', c.dataset.f === S.filter));
+        renderDiscover();
+      });
+    }
+    if (el.sortSel) {
+      el.sortSel.addEventListener('change', () => { S.sort = el.sortSel.value; renderDiscover(); });
+    }
+
     // 发现页卡片：安装 / 更新
     el.grid.addEventListener('click', (ev) => {
       const inst = ev.target.closest('.mk-btn-inst');
@@ -951,12 +1071,24 @@
       if (cb) togglePlugin(cb.dataset.toggle, cb.checked);
     });
 
-    // 主题列表：安装 / 启用停用
+    // 主题列表：安装 / 启用停用 / 一键迁移到桌面端
     el.themeGrid.addEventListener('click', (ev) => {
+      const mig = ev.target.closest('.mk-btn-migrate');
+      if (mig) {
+        const card = mig.closest('.mk-card');
+        const name = mig.dataset.name;
+        // 从目录里找回这个主题的完整条目（拿 url / npm）；找不到就用按钮上的数据兜底
+        const entry = ((S.registry && S.registry.plugins) || []).find(
+          (x) => instKey(x) === name || x.name === name) || { npm: name, name, url: mig.dataset.url };
+        migrateTheme(entry, mig);
+        return;
+      }
       const inst = ev.target.closest('.mk-btn-inst');
       if (inst) { installByUrl(inst.dataset.url, inst); return; }
       const b = ev.target.closest('button[data-name]');
-      if (b) togglePlugin(b.dataset.name, b.classList.contains('mk-btn-themeon'));
+      if (b && (b.classList.contains('mk-btn-themeon') || b.classList.contains('mk-btn-themeoff'))) {
+        togglePlugin(b.dataset.name, b.classList.contains('mk-btn-themeon'));
+      }
     });
 
     // 主题页说明里的「打开 WebUI」按钮（说明块由 innerHTML 重建，同样走委托）

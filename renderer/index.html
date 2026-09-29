@@ -579,7 +579,18 @@
         <div class="mk-panel active" data-mkpanel="discover">
           <div class="mk-toolbar">
             <input id="mkSearch" class="mk-search" type="text" placeholder="搜索插件：名称 / 作者 / 描述…" />
+            <select id="mkSort" class="ct-inline-select" title="排序">
+              <option value="default">默认排序</option>
+              <option value="downloads">最多下载</option>
+              <option value="stars">最多 Star</option>
+              <option value="name">名称 A→Z</option>
+            </select>
             <div class="mk-cats" id="mkCats"></div>
+          </div>
+          <div class="mk-filters" id="mkFilters">
+            <button type="button" class="mk-chip active" data-f="all">全部</button>
+            <button type="button" class="mk-chip" data-f="installed">已安装</button>
+            <button type="button" class="mk-chip" data-f="upd">可更新</button>
           </div>
           <div class="meta" id="mkCount"></div>
           <div class="mk-grid" id="mkGrid"></div>

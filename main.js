@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, dialog, net } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, net, nativeTheme } = require('electron');
 const { Tray, Menu, nativeImage, Notification } = require('electron');
 const { spawn, spawnSync, execFile } = require('node:child_process');
 const fs = require('node:fs');
@@ -1092,6 +1092,13 @@ ipcMain.handle('harness:status', async () => {
   return { state: harnessState, webUp, port: PORT, harnessDir: HARNESS_DIR || '（未检测到，点击"启动 Harness"自动获取）' };
 });
 ipcMain.handle('harness:logs', () => logBuffer.slice(-500));
+// 窗口边框（标题栏）跟随应用主题：渲染层切主题时把「浅色 / 深色」倾向同步过来。
+// nativeTheme.themeSource 只影响本应用的配色倾向（含 Windows 标题栏的明暗），不动系统设置。
+ipcMain.handle('app:nativeTheme', (_e, mode) => {
+  const m = mode === 'light' || mode === 'dark' ? mode : 'system';
+  try { nativeTheme.themeSource = m; } catch { /* 忽略：老系统不支持时标题栏保持系统外观 */ }
+  return { ok: true, themeSource: nativeTheme.themeSource };
+});
 ipcMain.handle('harness:openWeb', async () => {
   await shell.openExternal(`http://127.0.0.1:${PORT}`);
   return { ok: true };

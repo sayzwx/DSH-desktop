@@ -39,6 +39,13 @@
       { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
+  /** 本地绝对路径 → file:// URL（skin 预览图是插件目录里的绝对路径，直接放 src 会失效）。 */
+  function escAttrUrl(p) {
+    const u = String(p == null ? '' : p).replace(/\\/g, '/');
+    return 'file:///' + encodeURI(u).replace(/[&<>"']/g, (c) => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
   function toast(msg, kind) {
     if (window.__modal && kind === 'error') { window.__modal.alert(msg, '主题工作室'); return; }
     let el = document.getElementById('tsToast');
@@ -98,8 +105,9 @@
     }
     const plugins = S.scan.plugins || [];
     if (plugins.length === 0) {
-      box.innerHTML = `<div class="empty">尚未在本机找到任何 WebUI 主题插件。<br>
-        <span class="meta">请先到「发现」标签安装主题（例如 <code>dsh-neo-skin</code>），装完回到这里。</span></div>`
+      box.innerHTML = `<div class="empty">本机已安装的插件里没有可识别的主题包。<br>
+        <span class="meta">两条路：① 到「主题」标签的卡片上点「迁移到桌面端」（会自动先安装再迁移）；
+        ② 先在「发现」标签安装主题（例如 <code>dsh-neo-skin</code>），装完回到这里点「重新扫描」。</span></div>`
         + renderSkipped();
       return;
     }
@@ -134,29 +142,43 @@
 
   function renderPlugin(p) {
     const done = installedIdsOf(p.id);
+    const isSkin = p.kind === 'skin';
     const rows = [];
     for (const sch of p.schemes) {
       for (const tone of (sch.tones && sch.tones.length ? sch.tones : ['light', 'dark'])) {
         const key = `${sch.id}:${tone}`;
         const isDone = done.has(key);
+        // skin 型不提供「模型精修」：它的样式是一整段 WebUI 专属选择器的 CSS（可达数十万字符），
+        // 逐条翻译既不可靠也不是一次模型调用能覆盖的 —— 如实不给这个入口，取舍写在 notes 里。
+        const refineBtn = isSkin ? '' : `<button type="button" class="mini-btn ts-refine" data-plugin="${esc(p.id)}" data-scheme="${esc(sch.id)}" data-tone="${tone}" title="用模型解析源码后补译未映射规则、派生强调色、并给出行为层结论（会产生模型费用）">模型精修…</button>`;
         rows.push(`<div class="ts-row">
           <span class="ts-row-label">${esc(sch.label)} <span class="ts-tone ts-tone-${tone}">${tone === 'light' ? '浅色' : '深色'}</span></span>
-          <span class="meta ts-row-meta">${sch.tokenCount} 个变量</span>
+          <span class="meta ts-row-meta">${isSkin
+            ? (p.skin && p.skin.accent ? `强调色 ${esc(p.skin.accent)}` : '未声明强调色')
+            : `${sch.tokenCount} 个变量`}</span>
           <span class="ts-row-actions">
             <button type="button" class="mini-btn ts-install" data-plugin="${esc(p.id)}" data-scheme="${esc(sch.id)}" data-tone="${tone}">${isDone ? '重新安装' : '安装'}</button>
-            <button type="button" class="mini-btn ts-refine" data-plugin="${esc(p.id)}" data-scheme="${esc(sch.id)}" data-tone="${tone}" title="用模型解析源码后补译未映射规则、派生强调色、并给出行为层结论（会产生模型费用）">模型精修…</button>
+            ${refineBtn}
             ${isDone ? '<span class="ts-ok">已迁移 ✓</span>' : ''}
           </span>
         </div>`);
       }
     }
+    // skin 型自带浅/深预览图（skin.json 的 preview 字段），比文字描述直观得多
+    const previewHtml = isSkin && p.skin && (p.skin.previewLight || p.skin.previewDark)
+      ? `<div class="ts-skin-preview">${['previewLight', 'previewDark'].map((k) => p.skin[k]
+        ? `<figure class="ts-skin-fig"><img src="${escAttrUrl(p.skin[k])}" alt="" /><figcaption class="meta">${k === 'previewLight' ? '浅色' : '深色'}预览（WebUI 实际观感）</figcaption></figure>`
+        : '').join('')}</div>`
+      : '';
     const shape = p.shapePolicy || {};
-    const shapeDesc = [
-      shape.zeroRadius ? '圆角清零' : '',
-      shape.borderWidth ? `边框 ${shape.borderWidth}px` : '',
-      shape.hardShadow ? `硬阴影 ${shape.hardShadow.dx}/${shape.hardShadow.dy}px` : '',
-      shape.press ? `按压位移` : '',
-    ].filter(Boolean).join(' · ') || '无结构层';
+    const shapeDesc = isSkin
+      ? 'skin 型：结构层不在迁移范围（整段 CSS 是 WebUI 专属选择器）'
+      : ([
+        shape.zeroRadius ? '圆角清零' : '',
+        shape.borderWidth ? `边框 ${shape.borderWidth}px` : '',
+        shape.hardShadow ? `硬阴影 ${shape.hardShadow.dx}/${shape.hardShadow.dy}px` : '',
+        shape.press ? `按压位移` : '',
+      ].filter(Boolean).join(' · ') || '无结构层');
     const b = p.behavior || {};
     const feats = [
       b.toggle ? '开关' : '', b.schemeSwitch ? '方案切换' : '', b.structureLayer ? '结构层' : '',
@@ -164,6 +186,10 @@
       (b.resourceHints && (b.resourceHints.backgroundImage || b.resourceHints.backgroundVideo)) ? '背景资源' : '',
       (b.resourceHints && b.resourceHints.font) ? '字体' : '',
     ].filter(Boolean).join(' / ') || '无';
+
+    const kindBadge = isSkin
+      ? '<span class="mk-badge" title="官方皮肤生态：skin.json + bodyAttr + 整段 CSS，不含 --dsw-* token，桌面端只承接强调色与命名">skin 型（官方皮肤生态）</span>'
+      : `<span class="mk-badge">${p.source === 'client.js' ? '读 client.js' : '读 src/schemes'}</span>`;
 
     return `<div class="ts-card" data-plugin="${esc(p.id)}">
       <div class="ts-card-head">
@@ -174,9 +200,11 @@
         <div class="ts-card-tags">
           <span class="mk-badge${p.enabled ? ' ts-on' : ''}">${p.enabled ? 'WebUI 已启用' : 'WebUI 已停用'}</span>
           <span class="mk-badge">${p.schemes.length} 个方案</span>
-          <span class="mk-badge">${p.source === 'client.js' ? '读 client.js' : '读 src/schemes'}</span>
+          ${kindBadge}
         </div>
       </div>
+      ${isSkin && p.skin ? `<div class="meta ts-skin-note">skin「${esc(p.skin.name)}」${p.skin.tagline ? ' · ' + esc(p.skin.tagline) : ''}。免费迁移承接<strong>强调色与命名</strong>（底色沿用官方浅/深档）；整段皮肤 CSS 是 WebUI 专属选择器，完整观感请在 WebUI 里启用该皮肤。</div>` : ''}
+      ${previewHtml}
       <div class="ts-facts">
         <span>结构层：${esc(shapeDesc)}</span>
         <span>行为层：${esc(feats)}</span>
@@ -184,7 +212,7 @@
       <div class="ts-rows">${rows.join('')}</div>
       <div class="ts-card-foot">
         <button type="button" class="primary-btn ts-install-all" data-plugin="${esc(p.id)}">全部免费安装（${p.schemes.length * 2} 个）</button>
-        <button type="button" class="mini-btn ts-refine-all" data-plugin="${esc(p.id)}">全部模型精修（${p.schemes.length * 2} 次调用）</button>
+        ${isSkin ? '' : `<button type="button" class="mini-btn ts-refine-all" data-plugin="${esc(p.id)}">全部模型精修（${p.schemes.length * 2} 次调用）</button>`}
         <button type="button" class="mini-btn ts-reveal" data-plugin="${esc(p.id)}">定位主题包目录</button>
       </div>
       <div class="ts-preview" id="tsPreview-${esc(p.id)}"></div>
@@ -507,5 +535,51 @@
       }
     },
     refresh: async () => { await refresh(); render(); },
+    /** 市场变更后的联动刷新：只有工作室真的挂载过才刷（没挂载时面板是隐藏的，刷了也看不见）。 */
+    refreshIfMounted: async () => {
+      if (!inited) return;
+      try {
+        await refresh();
+        render();
+        const inst = document.getElementById('tsInstalled');
+        if (inst) inst.innerHTML = installedSection();
+      } catch { /* 显示层刷新失败不影响主流程 */ }
+    },
+    /**
+     * 供市场「主题」标签的一键迁移调用：扫描（必要时）→ 全部方案档位免费迁移 → 刷新下拉并应用。
+     * 返回 { ok, migrated, appliedId, error }。不弹确认框（调用方已确认过）。
+     */
+    migrateAll: async (pluginId) => {
+      try {
+        if (!S.scan || !(S.scan.plugins || []).some((p) => p.id === pluginId)) await refresh();
+        const p = (S.scan.plugins || []).find((x) => x.id === pluginId);
+        if (!p) return { ok: false, error: `本机没有找到插件「${pluginId}」—— 安装可能还没完成，稍后点「重新扫描」再试` };
+        const all = [];
+        const errors = [];
+        for (const sch of p.schemes) {
+          for (const tone of (sch.tones && sch.tones.length ? sch.tones : ['light', 'dark'])) {
+            try {
+              const m = await api.themeMigrate(pluginId, sch.id, tone);
+              if (m && m.ok && m.migrations) all.push(...m.migrations);
+              else errors.push(`${sch.id}/${tone}: ${(m && m.error) || '失败'}`);
+            } catch (e) { errors.push(`${sch.id}/${tone}: ${e.message}`); }
+          }
+        }
+        if (!all.length) throw new Error(errors.join('；') || '没有任何可迁移的方案');
+        const r = await api.themeInstall(all, null);
+        if (!r || !r.ok) throw new Error((r && r.error) || '写入主题库失败');
+        if (window.__dshThemes) {
+          await window.__dshThemes.refresh();
+          window.__dshThemes.apply(all[0].id);
+        }
+        await refresh();
+        render();
+        const inst = document.getElementById('tsInstalled');
+        if (inst) inst.innerHTML = installedSection();
+        return { ok: true, migrated: all.length, appliedId: all[0].id };
+      } catch (e) {
+        return { ok: false, error: (e && e.message) || String(e) };
+      }
+    },
   };
 })();

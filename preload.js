@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('api', {
   getStatus: () => ipcRenderer.invoke('harness:status'),
   getLogs: () => ipcRenderer.invoke('harness:logs'),
   openWeb: () => ipcRenderer.invoke('harness:openWeb'),
+  setNativeTheme: (mode) => ipcRenderer.invoke('app:nativeTheme', mode),
   listResults: () => ipcRenderer.invoke('results:list'),
   getUsageStats: () => ipcRenderer.invoke('stats:usage'),
   ghStatus: () => ipcRenderer.invoke('github:status'),

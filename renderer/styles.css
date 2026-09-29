@@ -519,6 +519,18 @@
 }
 
 /* 两套基础主题与 WebUI 迁移主题都不带动态壁纸与星域画布 */
+/* 浅色下的对比度修补（2026-09-29 用户反馈「显示框融入白色背景」）：
+   弹窗遮罩沿用 --deep（浅色下近白），白底上几乎看不出有遮罩，弹窗与页面糊成一片。
+   这里用官方浅色文字色做一层真正的暗化，让浮层从页面里浮出来；深色主题不受影响。 */
+:root[data-theme="light"] .modal-overlay {
+  background: rgba(15, 17, 21, 0.34);
+}
+
+/* 浅色下 --float（徽章 / 输入框 / 胶囊按钮的底色）与白卡几乎同色，这里压深一档。 */
+:root[data-theme="light"] {
+  --float: rgba(231, 234, 238, 0.95);
+}
+
 :root[data-theme="light"] #bgvideo,
 :root[data-theme="light"] #bgfx,
 :root[data-theme="graphite"] #bgvideo,
@@ -4106,7 +4118,7 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
 .mk-card-owner { color: var(--text-dim); font-size: 0.82em; font-family: var(--font-mono); }
 .mk-card-desc {
   color: var(--text); opacity: 0.9; font-size: 0.9em; line-height: 1.55;
-  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  /* 不再 3 行截断：用户反馈「描述显示不全」；卡片分批渲染，长描述不会拖垮性能 */
   flex: 1;
 }
 .mk-card-tags { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -4648,3 +4660,42 @@ input[type="text"]:focus, input[type="password"]:focus, input:not([type]):focus,
 .settings-module-body #updateProgressText,
 .settings-module-body #updateStatus
 { white-space: pre-line; }
+
+
+/* ---------- 主题工作室：skin 型主题的预览与说明 ---------- */
+.ts-skin-note {
+  margin: 8px 0 2px; padding: 8px 10px; border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  font-size: 11px; line-height: 1.6; color: var(--text);
+}
+.ts-skin-preview { display: flex; gap: 10px; flex-wrap: wrap; margin: 8px 0 4px; }
+.ts-skin-fig { margin: 0; max-width: 320px; }
+.ts-skin-fig img {
+  display: block; width: 100%; max-height: 170px; object-fit: cover; object-position: top;
+  border-radius: 10px; border: 1px solid var(--border-strong);
+}
+.ts-skin-fig figcaption { margin-top: 4px; }
+
+/* ---------- 插件市场：项目网页链接 / 快捷筛选 ---------- */
+.mk-card-links { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 2px; }
+.mk-link {
+  font-size: 0.8em; color: var(--accent); text-decoration: none;
+  border-bottom: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.mk-link:hover { color: var(--accent-2); border-bottom-color: var(--accent-2); }
+.mk-filters { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 8px; }
+.mk-chip {
+  padding: 4px 12px; border-radius: 999px; cursor: pointer;
+  background: var(--float); border: 1px solid var(--border);
+  color: var(--text-dim); font-size: 0.8em; font-family: var(--font-sans);
+}
+.mk-chip:hover { color: var(--text); border-color: var(--border-strong); }
+.mk-chip.active {
+  color: var(--text); border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.mk-row-desc {
+  color: var(--text); opacity: 0.88; font-size: 0.86em; line-height: 1.55;
+  margin-top: 3px; word-break: break-all;
+}

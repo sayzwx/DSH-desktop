@@ -187,6 +187,16 @@ const PROBE = `(() => {
     },
   });
   if (!scan.plugins.length) failures.push('没扫到任何带主题能力的插件（请先安装 dsh-neo-skin）');
+  // 本测试的夹具是 dsh-neo-skin（token 型）。它没装时整套断言都不成立 —— 这是环境缺夹具，
+  // 不是代码回归；skin 型主题的迁移验证在 scripts/skin-migrate-e2e.cjs。
+  if (!scan.plugins.some((p) => p.id === 'dsh-neo-skin')) {
+    console.log('SKIP: 本机未安装 dsh-neo-skin（token 型夹具缺失）。'
+      + 'skin 型主题的迁移验证见 scripts/skin-migrate-e2e.cjs');
+    try { fs.writeFileSync(RESULT, JSON.stringify({ ...report, skipped: 'missing dsh-neo-skin' }, null, 2)); } catch (e) {}
+    clearTimeout(watchdog);
+    app.exit(0);
+    return;
+  }
 
   await win.webContents.executeJavaScript('window.__themeStudio.mount()', true);
   const cardHtml = await until(win, `(() => {
