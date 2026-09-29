@@ -335,6 +335,23 @@
     return s;
   }
 
+  // 该插件是否是「WebUI 主题」（目录里 category === 'theme'）。
+  // 这类主题的样式通道只到 WebUI，桌面端窗口不受影响 —— 用户在「主题」标签里点「启用」后
+  // 最常见的疑问就是「桌面端怎么没变」（2026-09-29 用户反馈）。所以在结论里把去路写明白。
+  function isThemePlugin(name) {
+    if (!name || !S.registry) return false;
+    return (S.registry.plugins || []).some(
+      (p) => p && p.category === 'theme' && (instKey(p) === name || p.name === name));
+  }
+
+  /** 主题类插件操作后的补充说明：引擎侧生效 ≠ 桌面端生效，迁移入口在哪一句话说清。 */
+  function themeMigrationHint(name) {
+    if (!isThemePlugin(name)) return '';
+    return '\n\n注意：这类主题只作用于 WebUI（Harness 的网页界面），桌面端窗口不会跟着变。'
+      + '要让桌面端也用它，请在本标签下方的「🖥️ 桌面端主题迁移」卡片里点「安装」——'
+      + '迁移免费、不调用模型，迁完会在「设置 → 星域主题」里出现对应的桌面端主题。';
+  }
+
   function computeRestart() {
     let need = false;
     if (S.installed && S.installed.activation) {
@@ -386,7 +403,7 @@
       if (inst.ok && inst.data) S.installed = inst.data;
     } catch { /* 拉取失败则沿用已有的 restartNeeded 判断 */ }
     computeRestart();
-    const v = verdictOf(focusName);
+    const v = verdictOf(focusName) + themeMigrationHint(focusName);
     if (S.restartNeeded) {
       const ok = await confirmBox(
         `${label}完成。${v ? '\n\n' + v : '部分插件需要重启 Harness 才会被加载。'}\n\n是否现在重启 Harness？（不重启则下次启动应用时生效）`,
