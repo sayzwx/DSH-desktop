@@ -402,6 +402,42 @@ async function startHarness() {
   return launchHarness(found);
 }
 
+/**
+ * 该引擎是否支持 `web --no-open`（启动后不自动打开系统默认浏览器）。
+ *
+ * 引擎默认 openBrowser=true：:3080 就绪后会自己弹一个浏览器窗口打开 WebUI
+ * （packages/bundle/web-app 里 openBrowser z.boolean().default(true)，会打一行
+ * "dsh web: opening the default browser; pass --no-open to disable"）。
+ * 桌面端已经有「打开 Web 端」按钮，不需要引擎再弹一个 —— 用户 2026-09-29 反馈
+ * 「启动应用还是会跳出 web 端」就是指它。
+ *
+ * 但**不能无条件传**：不支持该开关的引擎（老版本）会让 commander 因 unknown option
+ * 直接退出，把「少弹一个窗口」变成「引擎起不来」。所以先探测，探测不到就不传。
+ */
+function engineSupportsNoOpen(dir) {
+  if (!dir) return false;
+  const cands = [
+    path.join(dir, 'packages', 'bundle', 'web-app', 'lib', 'startup.js'),
+    path.join(dir, 'packages', 'bundle', 'web-app', 'src', 'startup.ts'),
+    path.join(dir, 'node_modules', '@deepseek-ai', 'dsh-bundle-web-app', 'lib', 'startup.js'),
+  ];
+  // 发行包形态：@deepseek-ai 下任何 *web-app* 包
+  try {
+    const scope = path.join(dir, 'node_modules', '@deepseek-ai');
+    for (const n of fs.readdirSync(scope)) {
+      if (/web-app/.test(n)) {
+        cands.push(path.join(scope, n, 'lib', 'startup.js'), path.join(scope, n, 'dist', 'startup.js'));
+      }
+    }
+  } catch { /* 没有该 scope 目录 */ }
+  for (const f of cands) {
+    try {
+      if (fs.readFileSync(f, 'utf8').includes('no-open')) return true;
+    } catch { /* 文件不存在，继续找 */ }
+  }
+  return false;
+}
+
 function launchHarness(found) {
   HARNESS_DIR = found.dir;
   setState('starting');
@@ -416,12 +452,18 @@ function launchHarness(found) {
   const env = { ...process.env, ...harnessEnv, DSH_HOME };
   if (harnessEnv.DEEPSEEK_API_KEY) delete env.DEEPSEEK_API_KEY;
   const nodeExe = resolveNodeExe();
-  harnessProc = spawn(nodeExe, [found.bin, 'web'], {
+  // 静默启动：不让引擎自己弹浏览器（桌面端有「打开 Web 端」按钮按需打开）
+  const noOpen = engineSupportsNoOpen(found.dir);
+  const webArgs = [found.bin, 'web'].concat(noOpen ? ['--no-open'] : []);
+  harnessProc = spawn(nodeExe, webArgs, {
     cwd: found.dir,
     env,
     windowsHide: true,
   });
-  pushLog('stdout', `[启动 harness: ${nodeExe} ${found.bin} web (${found.kind})]`);
+  pushLog('stdout', `[启动 harness: ${nodeExe} ${found.bin} web${noOpen ? ' --no-open' : ''} (${found.kind})]`);
+  if (!noOpen) {
+    pushLog('stderr', '[本次未传 --no-open（该引擎不支持）：WebUI 就绪后它可能自己打开系统浏览器]');
+  }
   harnessProc.stdout.on('data', (d) => pushLog('stdout', d.toString()));
   harnessProc.stderr.on('data', (d) => pushLog('stderr', d.toString()));
   harnessProc.on('error', (err) => {
