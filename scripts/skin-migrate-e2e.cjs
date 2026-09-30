@@ -140,6 +140,12 @@ const PROBE = `(() => {
       插件数: (scan.plugins || []).length,
       跳过数: (scan.skipped || []).length,
       skin: skin ? { kind: skin.kind, 方案: skin.schemes.map((s) => `${s.id}(${s.tones.join('/')})`), accent: skin.skin.accent } : null } });
+    // 夹具缺失不是代码回归：用户卸掉 skin 包后这条要优雅跳过（通用迁移链路见
+    // scripts/theme-formats-e2e.cjs，它对任意形态的主题包都跑）
+    if (!(scan.plugins || []).some((p) => p.kind === 'skin')) {
+      console.log('SKIP: 本机没有 skin 型主题（夹具缺失）。通用迁移链路请跑 scripts/theme-formats-e2e.cjs');
+      clearTimeout(watchdog); restoreStore(); app.exit(0); return;
+    }
     if (!skin) {
       throw new Error(`扫描没有找到 ${SKIN_ID} —— 请确认它已安装（~/.dsh/profiles/web/node_modules/）`);
     }

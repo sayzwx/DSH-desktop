@@ -143,6 +143,13 @@
   function renderPlugin(p) {
     const done = installedIdsOf(p.id);
     const isSkin = p.kind === 'skin';
+    // 三种形态：token 型（有变量表，免费迁移）/ skin 型（官方皮肤生态）/ 通用型（扫不出变量表，
+    // 只能靠「模型全文承接」）。写法差异很大（SCHEMES 字面量 / src/schemes / overrideTokens 调用 /
+    // skin.json + 整段 CSS），但界面上要能一眼看出是哪种、以及从哪个文件读到的。
+    const isGeneric = p.kind === 'generic';
+    const entry = p.clientEntry || '';
+    const sourceLabel = isSkin ? 'skin.json'
+      : (entry ? `读 ${entry}` : (p.source === 'src/schemes' ? '读 src/schemes' : p.source || '未知来源'));
     const rows = [];
     for (const sch of p.schemes) {
       for (const tone of (sch.tones && sch.tones.length ? sch.tones : ['light', 'dark'])) {
@@ -151,14 +158,14 @@
         // skin 型给的是「全文承接」：模型读整包结构摘要（配色分布 / 形状语言 / 资源表 /
         // 规则样本）后用桌面端自己的类名与变量重新表达，并能引用皮肤自带的图片资源。
         // token 型仍是「模型精修」：只补译免费路径没翻译动的选择器。
-        const refineBtn = isSkin
-          ? `<button type="button" class="mini-btn ts-refine" data-plugin="${esc(p.id)}" data-scheme="${esc(sch.id)}" data-tone="${tone}" title="让模型通读整个皮肤包（自动压缩成结构摘要）后，用桌面端的类名与变量重新表达它的配色/形状/纹理，并可引用皮肤自带的图片资源。会产生模型费用。">模型全文承接…</button>`
+        const refineBtn = (isSkin || isGeneric)
+          ? `<button type="button" class="mini-btn ts-refine" data-plugin="${esc(p.id)}" data-scheme="${esc(sch.id)}" data-tone="${tone}" title="让模型通读整个主题包（自动压缩成结构摘要）后，用桌面端的类名与变量重新表达它的配色/形状/纹理，并可引用皮肤自带的图片资源。会产生模型费用。">模型全文承接…</button>`
           : `<button type="button" class="mini-btn ts-refine" data-plugin="${esc(p.id)}" data-scheme="${esc(sch.id)}" data-tone="${tone}" title="用模型解析源码后补译未映射规则、派生强调色、并给出行为层结论（会产生模型费用）">模型精修…</button>`;
         rows.push(`<div class="ts-row">
           <span class="ts-row-label">${esc(sch.label)} <span class="ts-tone ts-tone-${tone}">${tone === 'light' ? '浅色' : '深色'}</span></span>
           <span class="meta ts-row-meta">${isSkin
             ? (p.skin && p.skin.accent ? `强调色 ${esc(p.skin.accent)}` : '未声明强调色')
-            : `${sch.tokenCount} 个变量`}</span>
+            : (isGeneric ? '无变量表 · 需模型承接' : `${sch.tokenCount} 个变量`)}</span>
           <span class="ts-row-actions">
             <button type="button" class="mini-btn ts-install" data-plugin="${esc(p.id)}" data-scheme="${esc(sch.id)}" data-tone="${tone}">${isDone ? '重新安装' : '安装'}</button>
             ${refineBtn}
@@ -191,8 +198,10 @@
     ].filter(Boolean).join(' / ') || '无';
 
     const kindBadge = isSkin
-      ? '<span class="mk-badge" title="官方皮肤生态：skin.json + bodyAttr + 整段 CSS，不含 --dsw-* token，桌面端只承接强调色与命名">skin 型（官方皮肤生态）</span>'
-      : `<span class="mk-badge">${p.source === 'client.js' ? '读 client.js' : '读 src/schemes'}</span>`;
+      ? '<span class="mk-badge" title="官方皮肤生态：skin.json + bodyAttr + 整段 CSS，不含 --dsw-* token">skin 型（官方皮肤生态）</span>'
+      : isGeneric
+        ? '<span class="mk-badge mk-badge-self" title="本机扫不出变量表（既不是 SCHEMES 字面量，也没有 skin.json），免费路径只能给强调色与命名；真正的观感需要「模型全文承接」">通用型（需模型承接）</span>'
+        : `<span class="mk-badge" title="变量表来源：${esc(sourceLabel)}">token 型 · ${esc(sourceLabel)}</span>`;
 
     return `<div class="ts-card" data-plugin="${esc(p.id)}">
       <div class="ts-card-head">
@@ -214,8 +223,8 @@
       </div>
       <div class="ts-rows">${rows.join('')}</div>
       <div class="ts-card-foot">
-        <button type="button" class="primary-btn ts-install-all" data-plugin="${esc(p.id)}">全部免费安装（${p.schemes.length * 2} 个）</button>
-        ${isSkin
+        <button type="button" class="primary-btn ts-install-all" data-plugin="${esc(p.id)}"${isGeneric ? ' title="通用型没有变量表：免费安装只会承接强调色与命名，观感请用「模型全文承接」"' : ''}>全部免费安装（${p.schemes.length * 2} 个）</button>
+        ${(isSkin || isGeneric)
           ? `<button type="button" class="mini-btn ts-refine-all" data-plugin="${esc(p.id)}">全部档位全文承接（${p.schemes.length * 2} 次调用）</button>`
           : `<button type="button" class="mini-btn ts-refine-all" data-plugin="${esc(p.id)}">全部模型精修（${p.schemes.length * 2} 次调用）</button>`}
         <button type="button" class="mini-btn ts-reveal" data-plugin="${esc(p.id)}">定位主题包目录</button>
