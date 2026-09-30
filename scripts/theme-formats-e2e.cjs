@@ -180,6 +180,65 @@ for (const ch of channels) {
     check('不在应用变量表里的名字不会被应用', applied.invented, '');
     await js(`window.api.themeRemove(${JSON.stringify(probeId)})`).catch(() => {});
 
+    // ---------- 4.6 主题背景图挂载点：能挂上、且真的看得见 ----------
+    // 背景：#themeBg 是本次新增的静态背景挂载点（webtheme 下 #bgvideo/#bgfx 会 display:none）。
+    // 只验证"规则通过了"不够 —— 还要确认这一层没有被上层不透明元素盖住。
+    const bgProbeId = 'e2e-bg-probe:default:dark';
+    const bgAsset = await js(`(() => {
+      // 找一个真实存在的主题包内图片；找不到就跳过（本机可能没装带资源的主题）
+      return window.api.themeScan().then((s) => {
+        const p = (s.plugins || [])[0];
+        return p ? p.dir : '';
+      });
+    })()`);
+    if (bgAsset) {
+      // 用**绝对 file:// 路径**（真实管线会把主题包内的相对路径改写成绝对路径，这里还原那一步）
+      const assetUrl = 'file:///' + (bgAsset + '/assets/current.jpg').split('\\').join('/');
+      const probeCss = `#themeBg { background-image: url(${assetUrl}); }`;
+      await js(`window.api.themeInstall([${JSON.stringify({
+        id: bgProbeId,
+        kind: 'webtheme',
+        label: 'E2E 背景挂载探针',
+        origin: { plugin: 'e2e-bg-probe', scheme: 'default', tone: 'dark' },
+        createdAt: new Date().toISOString(),
+        tokens: {},
+        tokenCount: 0,
+        shapePolicy: {},
+        behavior: {},
+        css: probeCss,
+        notes: [],
+      })}], null)`);
+      const bg = await js(`(async () => {
+        await window.__dshThemes.refresh();
+        window.__dshThemes.apply(${JSON.stringify(bgProbeId)});
+        await new Promise((r) => setTimeout(r, 300));
+        const el = document.getElementById('themeBg');
+        if (!el) return { missing: true };
+        const cs = getComputedStyle(el);
+        const r = el.getBoundingClientRect();
+        // 谁盖在这一层上面？（取视口中心点）
+        const top = document.elementFromPoint(Math.round(innerWidth / 2), Math.round(innerHeight / 2));
+        const topCs = top ? getComputedStyle(top) : null;
+        return {
+          display: cs.display, zIndex: cs.zIndex, size: cs.backgroundSize,
+          hasImage: /url\\(/.test(cs.backgroundImage), image: cs.backgroundImage.slice(0, 80),
+          rect: [Math.round(r.width), Math.round(r.height)], viewport: [innerWidth, innerHeight],
+          topEl: top ? (top.id || top.className || top.tagName) : '', topBg: topCs ? topCs.backgroundColor : '',
+        };
+      })()`);
+      steps.push({ step: '4.6 背景挂载点', detail: { css: probeCss, ...bg } });
+      checkTrueLocal('#themeBg 元素存在且可见', !bg.missing && bg.display !== 'none', bg);
+      checkTrueLocal('#themeBg 挂上了背景图（规则真的生效）', bg.hasImage === true, bg.image);
+      checkTrueLocal('#themeBg 铺满视口', bg.rect && bg.rect[0] >= bg.viewport[0] - 2 && bg.rect[1] >= bg.viewport[1] - 2, bg.rect);
+      // 盖在上面的元素必须不是不透明整块 —— 否则背景图看不见（这就是用户看到的"没有背景"）
+      const topBg = bg.topBg || '';
+      const topAlphaZero = !topBg || /transparent/.test(topBg) || /,\s*0(\.0+)?\)\s*$/.test(topBg);
+      checkTrueLocal('上层元素不会整体遮住背景层', topAlphaZero, { topEl: bg.topEl, topBg });
+      await js(`window.api.themeRemove(${JSON.stringify(bgProbeId)})`).catch(() => {});
+    } else {
+      steps.push({ step: '4.6 背景挂载点', detail: '跳过（没找到带资源的主题包）' });
+    }
+
     // ---------- 5. 清理 ----------
     for (const id of ids.filter((x) => !beforeIds.has(x))) {
       await js(`window.api.themeRemove(${JSON.stringify(id)})`).catch(() => {});

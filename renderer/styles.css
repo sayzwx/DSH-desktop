@@ -536,6 +536,22 @@
 :root[data-theme="webtheme"] #bgvideo,
 :root[data-theme="webtheme"] #bgfx { display: none; }
 
+/* 主题背景层：迁移过来的主题（data-theme="webtheme"）在这里挂静态背景图。
+   🔴 为什么必须有这一层：webtheme 下 #bgvideo / #bgfx 会被 display:none，
+   没有它的话"背景"就彻底没有落点 —— 模型实测给出的原话就是「桌面端无对应挂载点」，
+   于是皮肤壁纸只能放弃迁移。图片引用走 file://（CSP 的 img-src 已放行）。 */
+#themeBg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-color: transparent;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  transition: background-image 0.6s var(--ease-light);
+}
+
 /* 迁移主题注入的 CSS 落点：主题工作室产出的规则挂在这里。
    放在 styles.css 之后（见 app.js 的 webStyleEl()），同优先级下后写生效。 */
 #webThemeStyle { /* 占位：具体内容运行时注入 */ }

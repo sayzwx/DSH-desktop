@@ -167,6 +167,32 @@ const prompt = A.buildAnalysisPrompt({ plugin: scan.plugins[0] || { id: 'x', sch
 checkTrue('提示词说明可以直接给桌面端变量', /也可以直接在 tokens 里给它们赋值/.test(prompt.user), null);
 checkTrue('输出形状里写明了两类 token 名', /--dsw-\* 或桌面端变量/.test(prompt.user), null);
 
+// ---------- F. 页面级背景图：免费自动承接 ----------
+// 用户报「精修后为什么还是没有背景」—— 真因：webtheme 下 #bgvideo/#bgfx 会 display:none，
+// 桌面端**根本没有挂背景图的落点**。现在有了 #themeBg，且 body/html 的 background-image
+// 走**确定性免费路径**（不用花模型的钱）。
+console.log('=== F. 页面级背景图（免费承接）===');
+checkTrue('#themeBg 挂载点存在于 index.html', /id="themeBg"/.test(fs.readFileSync(path.join(ROOT, 'renderer', 'index.html'), 'utf8')), null);
+checkTrue('#themeBg 样式存在（fixed 全屏 cover）',
+  /#themeBg \{[\s\S]{0,400}background-size: cover/.test(stylesCss), null);
+const kiminoDir2 = path.join(ROOT_PLUGINS, 'dsh-kimino-theme');
+if (fs.existsSync(kiminoDir2)) {
+  const src2 = W.readPluginClientSource(kiminoDir2).src;
+  const bg = W.detectPageBackground(src2, kiminoDir2);
+  console.log('  kimino 检出背景图:', bg ? `${bg.selector} → ${path.basename(bg.file)}（${(bg.size / 1024 / 1024).toFixed(1)}MB）` : '(未检出)');
+  checkTrue('检出 body 上的页面级背景图', !!bg && bg.selector === 'body', bg);
+  checkTrue('虚拟路径 /kimino-bg/current.jpg 解析成包内真实文件',
+    !!bg && fs.existsSync(bg.file) && /current\.jpg$/.test(bg.file), bg && bg.file);
+  // 迁移产物里应该带上 #themeBg 规则（免费，不用模型）
+  const p2 = (scan.plugins || []).find((x) => x.id === 'dsh-kimino-theme');
+  if (p2) {
+    const mig = W.buildMigration({ plugin: p2, schemeId: p2.schemes[0].id, tone: 'dark', stylesCss });
+    checkTrue('免费迁移产物里含 #themeBg 背景规则', /#themeBg \{[^}]*background-image/.test(mig.css), mig.css.slice(0, 120));
+    checkTrue('背景 URL 已改写成 file:// 且指向包内文件', /url\('file:\/\/\/[^']*current\.jpg'\)/.test(mig.css), null);
+    checkTrue('notes 说明背景已承接', mig.notes.some((n) => /背景图已自动承接/.test(n)), mig.notes.slice(-1));
+  }
+}
+
 console.log();
 if (failures.length) {
   console.error(`FAIL (${failures.length} 项，通过 ${passed} 项)`);

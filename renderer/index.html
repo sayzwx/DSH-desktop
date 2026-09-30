@@ -14,6 +14,10 @@
 <body>
   <video id="bgvideo" autoplay muted loop playsinline poster="bg.jpg" src="bg-animated.mp4"></video>
   <canvas id="bgfx"></canvas>
+  <!-- 主题背景层：迁移过来的主题在这里挂**静态背景图**（皮肤壁纸/纹理）。
+       为什么必须有这一层：data-theme="webtheme" 下 #bgvideo 与 #bgfx 会 display:none（见 styles.css），
+       于是"背景"彻底没有落点 —— 模型实测就是给出「桌面端无对应挂载点」而放弃迁移壁纸。 -->
+  <div id="themeBg" aria-hidden="true"></div>
 
   <aside class="dock" id="dock" hidden>
     <div class="dock-head">
