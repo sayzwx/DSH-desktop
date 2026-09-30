@@ -452,6 +452,8 @@
       ${a.css ? `<div class="ts-preview-css"><pre>${esc(a.css)}</pre></div>` : '<div class="meta">没有补译出新的 CSS 规则</div>'}
       ${(a.behavior || []).length ? `<div class="ts-preview-title">行为层结论</div><ul class="ts-preview-notes">${
         a.behavior.map((b) => `<li><b>${esc(b.feature)}</b> — ${esc(verdict[b.verdict] || b.verdict)}：${esc(b.detail)}</li>`).join('')}</ul>` : ''}
+      ${(a.adjustments || []).length ? `<div class="ts-preview-title">对比度护栏（自动修正，避免文字与底色糊在一起）</div><ul class="ts-preview-notes">${
+        a.adjustments.map((x) => `<li><code>${esc(x.token)}</code> ${esc(x.from)} → <b>${esc(x.to)}</b> <span class="meta">（压在 ${esc(x.on)} 上，最差 ${esc(String(x.ratio))}:1${x.feasible ? '' : '，此组合无解已取最接近值'}）</span></li>`).join('')}</ul>` : ''}
       ${(a.unmapped || []).length ? `<div class="ts-preview-title">仍无法承接</div><ul class="ts-preview-notes">${
         a.unmapped.map((u) => `<li>${esc(u)}</li>`).join('')}</ul>` : ''}
       ${(r.dropped || []).length ? `<div class="meta">净化丢弃 ${r.dropped.length} 处：${esc(r.dropped.slice(0, 4).join('；'))}</div>` : ''}`;

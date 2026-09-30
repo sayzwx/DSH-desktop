@@ -1690,7 +1690,15 @@ const gitCtl = registerGitIpc({
   resolveGitExe: () => resolveExe('git'),
   defaultWorkspaceDir,
   // 允许执行 git 的根：工作区目录 / 引擎目录 / DSH 家目录 / 用户主目录
-  allowRoots: [defaultWorkspaceDir(), HARNESS_DIR, DSH_HOME, os.homedir()].filter(Boolean),
+  // 🔴 传函数（每次调用时求值）：HARNESS_DIR / DSH_HOME 是异步探测的，注册这一刻还是空串
+  allowRoots: () => [defaultWorkspaceDir(), HARNESS_DIR, DSH_HOME, os.homedir()].filter(Boolean),
+  // 引擎登记的工作区目录（用户真实工作区常不等于默认目录 —— 真机实测踩到过，见 lib/git-ipc.js 注释）
+  listWorkspaceDirs: async () => {
+    try {
+      const r = await rpcCall('workspace.list', {});
+      return ((r && r.ok && r.value && r.value.items) || []).map((w) => w && w.path).filter(Boolean);
+    } catch { return []; }
+  },
   openTerminal: openSystemTerminal,
 });
 

@@ -15,7 +15,7 @@ const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
 const FIX = path.join(ROOT, 'dist', 'git-fixtures');
-const { registerGitIpc, isValidBranchName, parseBranches, parseStatusPorcelain, parseAheadBehind } =
+const { registerGitIpc, isValidBranchName, parseBranches, parseStatusPorcelain, parseAheadBehind, isInside } =
   require(path.join(ROOT, 'lib', 'git-ipc.js'));
 
 const failures = [];
@@ -59,6 +59,15 @@ for (const ok of ['main', 'feat/e2e-work', 'release-1.2', 'a_b/c.d']) checkTrue(
 for (const bad of ['-b', '--help', '../etc', 'a..b', 'x/', 'a b', '', 'x//y', 'end.lock/']) {
   checkTrue(`拒绝 ${JSON.stringify(bad)}`, !isValidBranchName(bad));
 }
+
+// ---------- ②b 路径包含判断（真机踩过：git 给正斜杠、path.resolve 给反斜杠）----------
+console.log('=== ②b 路径包含判断 ===');
+checkTrue('正斜杠 root（git 的写法）与反斜杠路径', isInside('C:/a/b', 'C:////a////b////c.md'));
+checkTrue('反斜杠 root 与正斜杠路径', isInside('C:////a////b', 'C:/a/b/c.md'));
+checkTrue('root 自身算在内', isInside('C:////a////b', 'C:////a////b'));
+checkTrue('越界不算（同级目录）', !isInside('C:////a////b', 'C:////a////c////x.md'));
+checkTrue('前缀相近但不同目录不算（b vs bb）', !isInside('C:////a////b', 'C:////a////bb////x.md'));
+checkTrue('Windows 大小写不敏感', isInside('C:////A////B', 'c:////a////b////x.md'));
 
 // ---------- ③ handler 契约（注入有状态假执行器）----------
 console.log('=== ③ handler 契约（假执行器）===');

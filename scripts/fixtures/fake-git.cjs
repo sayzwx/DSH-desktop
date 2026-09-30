@@ -46,7 +46,9 @@ function createFakeGit({ root, fixDir } = {}) {
       if (args[0] === 'rev-parse') return fail('fatal: not a git repository (or any of the parent directories): .git');
       return fail('not a git repository');
     }
-    if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return ok(target + '\n');
+    // 🔴 照真 git 的行为返回**正斜杠**路径（Windows 上 git 就是这样），否则测试会漏掉
+    //    "正斜杠 toplevel vs 反斜杠 path.resolve"这类平台差异 bug（真机踩过）。
+    if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return ok(target.split(path.sep).join('/') + '\n');
     if (args[0] === 'rev-parse' && args.includes('HEAD')) return ok(state.branch + '\n');
     if (args[0] === 'status') return ok(read('status-main.txt'));
     if (args[0] === 'for-each-ref') {
