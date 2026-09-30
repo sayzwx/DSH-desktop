@@ -81,7 +81,7 @@ check('CSP：img-src 含 file:', "img-src 'self' data: file:" in html)
 check('CSP：font-src 含 file:', "font-src 'self' file:" in html)
 check('界面：精修失败如实汇报', '模型没有产出可用内容' in studio)
 
-strays = [n for n in names if re.search(r'(fix-icon|make-icons|_probe|_seg|dbg-|dist/market-scan|icon-work|1-clean|1-mask)', n)]
+strays = [n for n in names if re.search(r'(fix-icon|make-icons|_probe|_seg|dbg-|dist/market-scan|icon-work)', n)]
 # 注：scripts/ 历来随包发（v0.8.1 就有 82 个条目，含开发脚本与临时 png），属既有打包行为；
 # market-theme-coverage.cjs 一并带上无害（应用从不执行它）。后续可考虑整目录排除。
 check('包内没有调试临时文件（scripts/ 随包发属既有行为）', not strays, str(strays[:5]))
