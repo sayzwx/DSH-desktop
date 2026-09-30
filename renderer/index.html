@@ -221,6 +221,21 @@
             <button class="primary-btn" id="chatSend">发送</button>
             <button class="danger-btn" id="chatCancel" disabled>停止</button>
           </div>
+          <!-- Git 状态栏：仓库 | 本地 | 当前分支（点分支可切换 / 新建）。数据来自主进程 lib/git-ipc.js -->
+          <div class="git-bar" id="gitBar" hidden>
+            <div class="gb-left">
+              <span class="gb-repo" id="gbRepo">—</span>
+              <span class="gb-scope" id="gbScope">本地</span>
+            </div>
+            <div class="gb-right">
+              <span class="gb-dirty" id="gbDirty" hidden></span>
+              <button class="gb-branch" id="gbBranchBtn" type="button" title="切换 / 新建分支">
+                <span class="gb-branch-icon">⎇</span><span class="gb-branch-name" id="gbBranchName">—</span><span class="ct-caret">▾</span>
+              </button>
+            </div>
+          </div>
+          <!-- 分支面板挂到 body（在 app.js 之前先摆这里，加载后由 git-bar.js 移动） -->
+          <div class="gb-panel" id="gbPanel" hidden></div>
           <div class="chat-usage-bar" id="chatUsageBar" hidden>
             <div class="cu-context" id="cuContext" title="本会话已用上下文 tokens / 模型最大上下文">上下文 —</div>
             <div class="cu-track"><div class="cu-fill" id="cuFill"></div></div>
@@ -652,6 +667,57 @@
     </div>
   </footer>
 
+  <!-- ============ 右侧快捷动作：浮动动作列 + 审阅面板 + 内置浏览器 ============
+       对齐 Qoder 的交互：右下角 ＋ 打开动作列；动作列里可开审阅 / 内置浏览器 / 终端。
+       内置浏览器用的是主进程的 WebContentsView（独立 webContents，不受页面 CSP 限制），
+       #qaBrowserView 只是"占位矩形"，实际网页由主进程贴在这个矩形上。 -->
+  <button class="qa-toggle" id="ctQuickBtn" type="button" hidden title="快捷动作（打开工作区文件 / 侧边任务 / 内置浏览器 / 审阅 / 终端）">＋</button>
+  <div class="qa-panel" id="qaPanel" hidden>
+    <button class="qa-card" data-act="folder" type="button">
+      <span class="qa-ico">🗀</span>
+      <span class="qa-text"><b>打开工作区文件</b><small>Alt E</small></span>
+    </button>
+    <button class="qa-card" data-act="sideTask" type="button">
+      <span class="qa-ico">☰</span>
+      <span class="qa-text"><b>打开侧边任务</b><small>切换会话列表</small></span>
+    </button>
+    <button class="qa-card" data-act="browser" type="button">
+      <span class="qa-ico">🌐</span>
+      <span class="qa-text"><b>打开内置浏览器</b><small>Ctrl T</small></span>
+    </button>
+    <button class="qa-card" data-act="review" type="button">
+      <span class="qa-ico">⌗</span>
+      <span class="qa-text"><b>打开审阅</b><small>Ctrl Shift G</small></span>
+    </button>
+    <button class="qa-card" data-act="terminal" type="button">
+      <span class="qa-ico">⌨</span>
+      <span class="qa-text"><b>打开终端</b><small>Ctrl Shift J</small></span>
+    </button>
+  </div>
+
+  <section class="qa-side" id="qaReview" hidden>
+    <header class="qa-side-head">
+      <span class="qa-side-title">审阅（工作区改动）</span>
+      <span class="qa-side-actions">
+        <button class="mini-btn" id="qaReviewRefresh" type="button" title="刷新">↻</button>
+        <button class="mini-btn" id="qaReviewClose" type="button" title="关闭">✕</button>
+      </span>
+    </header>
+    <div class="qa-body"></div>
+  </section>
+
+  <section class="qa-side qa-browser" id="qaBrowser" hidden>
+    <header class="qa-browser-bar">
+      <button class="mini-btn" data-nav="back" type="button" title="后退">←</button>
+      <button class="mini-btn" data-nav="forward" type="button" title="前进">→</button>
+      <button class="mini-btn" data-nav="reload" type="button" title="刷新">↻</button>
+      <input class="qa-addr" id="qaAddr" type="text" placeholder="输入网址（Enter 打开）" spellcheck="false" />
+      <button class="mini-btn" id="qaBrowserExternal" type="button" title="在系统浏览器中打开">↗</button>
+      <button class="mini-btn" id="qaBrowserClose" type="button" title="关闭">✕</button>
+    </header>
+    <div class="qa-browser-view" id="qaBrowserView"></div>
+  </section>
+
   <!-- 主题化模态框（替换原生 confirm/alert） -->
   <div class="modal-overlay" id="modalOverlay" hidden>
     <div class="modal" role="dialog" aria-modal="true">
@@ -688,6 +754,10 @@
   <script src="event-seq.js"></script>
   <script src="app.js"></script>
   <script src="chat.js"></script>
+  <!-- git-bar / quick-actions 在 chat.js 之后：两者都在运行时读 window.__ws（chat.js 发布的工作区），
+       不依赖加载顺序，但放后面更贴近"消费 chat.js 状态"的定位。 -->
+  <script src="git-bar.js"></script>
+  <script src="quick-actions.js"></script>
   <script src="theme-studio.js"></script>
   <script src="market.js"></script>
 </body>

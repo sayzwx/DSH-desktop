@@ -192,4 +192,25 @@ contextBridge.exposeInMainWorld('api', {
   themeRevealPlugin: (pluginId) => ipcRenderer.invoke('theme:revealPlugin', pluginId),
   themeRevealStore: () => ipcRenderer.invoke('theme:revealStore'),
   onThemeAnalysisProgress: (cb) => ipcRenderer.on('theme:analysisProgress', (_e, line) => cb(line)),
+
+  // ---------------- Git（工作区级别的本地仓库）----------------
+  // 全部在主进程执行（spawn git，不拼 shell）；渲染层只传目录与分支名，
+  // 分支名在白名单校验不过会被拒。
+  gitWorkspaceDir: () => ipcRenderer.invoke('git:workspaceDir'),
+  gitStatus: (dir) => ipcRenderer.invoke('git:status', { dir }),
+  gitCheckout: (dir, branch) => ipcRenderer.invoke('git:checkout', { dir, branch }),
+  gitCreateBranch: (dir, name, from) => ipcRenderer.invoke('git:createBranch', { dir, name, from }),
+  gitInit: (dir) => ipcRenderer.invoke('git:init', { dir }),
+  gitDiff: (dir, file) => ipcRenderer.invoke('git:diff', { dir, file }),
+  gitOpenTerminal: (dir) => ipcRenderer.invoke('git:openTerminal', { dir }),
+
+  // ---------------- 内置浏览器（WebContentsView，独立 webContents）----------------
+  browserOpen: (url, bounds) => ipcRenderer.invoke('browser:open', { url, bounds }),
+  browserSetBounds: (bounds) => ipcRenderer.invoke('browser:setBounds', bounds || {}),
+  browserNavigate: (url) => ipcRenderer.invoke('browser:navigate', { url }),
+  browserNav: (action) => ipcRenderer.invoke('browser:nav', { action }),
+  browserClose: () => ipcRenderer.invoke('browser:close'),
+  browserOpenExternal: (url) => ipcRenderer.invoke('browser:openExternal', { url }),
+  browserState: () => ipcRenderer.invoke('browser:state'),
+  onBrowserEvent: (cb) => ipcRenderer.on('browser:event', (_e, data) => cb(data)),
 });

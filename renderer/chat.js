@@ -138,6 +138,24 @@
   function renderWorkspaceControl() {
     const w = currentWorkspace();
     ctWsName.textContent = w ? (w.title || w.path || '未命名工作区') : '全部';
+    publishWorkspace();
+  }
+
+  /**
+   * 把"当前工作区"发布给其它模块（git 状态栏、快捷动作面板都要跟着它走）。
+   * 沿用仓库既有的跨模块约定：一个只读访问器 + 一个 `dsh:*` 事件（同 dsh:settings-saved /
+   * dsh:theme-changed）。**不引入反向依赖** —— 它们只读，不参与 chat 的状态机。
+   */
+  function publishWorkspace() {
+    const w = currentWorkspace();
+    window.__ws = {
+      path: () => (w && w.path) || '',
+      id: () => currentWorkspaceId || '',
+      title: () => (w && (w.title || w.path)) || '',
+    };
+    window.dispatchEvent(new CustomEvent('dsh:workspace-changed', {
+      detail: { workspaceId: currentWorkspaceId || '', path: (w && w.path) || '' },
+    }));
   }
 
   function closeWorkspaceMenu() {

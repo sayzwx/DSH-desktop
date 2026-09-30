@@ -1063,7 +1063,11 @@ function createWindow() {
       mainWindow.hide();
     }
   });
-  mainWindow.on('closed', () => (mainWindow = null));
+  mainWindow.on('closed', () => {
+    // 内置浏览器的 WebContentsView 必须随窗口一起销毁，否则它的 webContents 会挂着不放
+    try { browserCtl.destroy(); } catch { /* ignore */ }
+    mainWindow = null;
+  });
 }
 
 // ---------- 窗口自动检测（需求 #3） ----------
@@ -1648,6 +1652,53 @@ registerThemeIpc({
   revealPath: (dir) => shell.openPath(dir),
   showInFolder: (file) => shell.showItemInFolder(file),
 });
+// ---------- Git（工作区级）与内置浏览器 ----------
+// git：让界面"知道当前在哪个仓库/分支"并能切分支、新建分支；全部 spawn(git, 数组, {cwd})，
+//      不拼 shell，分支名走白名单校验；可执行范围限制在工作区目录与用户主目录之下。
+// 浏览器：WebContentsView（Electron 30+），独立 webContents，不受渲染层 CSP 约束；
+//      渲染层只提供"占位矩形"，视图由主进程贴上去。
+const { registerGitIpc } = require('./lib/git-ipc.js');
+const { registerBrowserIpc } = require('./lib/browser-ipc.js');
+
+/** 在工作区目录打开**系统终端**（应用内终端需要 node-pty 原生依赖，另议） */
+async function openSystemTerminal(dir) {
+  const { spawn: spawnDetached } = require('node:child_process');
+  if (process.platform === 'win32') {
+    // 优先 Windows Terminal；没有就退回 cmd（start 会新开窗口，不阻塞）
+    try {
+      spawnDetached('wt.exe', ['-d', dir], { detached: true, stdio: 'ignore', windowsHide: false }).unref();
+      return;
+    } catch { /* 没有 wt，退回 cmd */ }
+    spawnDetached('cmd.exe', ['/c', 'start', 'cmd', '/K', `cd /d "${dir}"`], { detached: true, stdio: 'ignore', windowsHide: false }).unref();
+    return;
+  }
+  if (process.platform === 'darwin') {
+    spawnDetached('open', ['-a', 'Terminal', dir], { detached: true, stdio: 'ignore' }).unref();
+    return;
+  }
+  for (const term of ['x-terminal-emulator', 'gnome-terminal', 'konsole', 'xfce4-terminal']) {
+    try {
+      spawnDetached(term, ['--working-directory', dir], { detached: true, stdio: 'ignore' }).unref();
+      return;
+    } catch { /* 试下一个 */ }
+  }
+  throw new Error('没有找到可用的终端程序');
+}
+
+const gitCtl = registerGitIpc({
+  ipcMain,
+  resolveGitExe: () => resolveExe('git'),
+  defaultWorkspaceDir,
+  // 允许执行 git 的根：工作区目录 / 引擎目录 / DSH 家目录 / 用户主目录
+  allowRoots: [defaultWorkspaceDir(), HARNESS_DIR, DSH_HOME, os.homedir()].filter(Boolean),
+  openTerminal: openSystemTerminal,
+});
+
+const browserCtl = registerBrowserIpc({
+  ipcMain,
+  getWindow: () => mainWindow,
+});
+
 // ---------- 侧边栏 Dock：GitHub（SSH 密钥）/ MCP / Skills ----------
 // GitHub 连接走本机 SSH 密钥（git@github.com），不保存任何密钥材料，
 // 只在 ~/.dsh/.github-ssh.json 记录密钥路径与登录名；仓库浏览全部用 git over SSH。
