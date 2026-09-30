@@ -82,6 +82,12 @@ robocopy $eleDist $appDir /E /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
 if ($LASTEXITCODE -ge 8) { throw 'robocopy electron dist failed' }
 Move-Item (Join-Path $appDir 'electron.exe') (Join-Path $appDir 'DSH.exe') -Force
 Copy-Item (Join-Path $root 'DSH.ico') (Join-Path $appDir 'DSH.ico') -Force
+# 再拷一份到「带版本号的目录」：快捷方式的图标路径里带版本号，升级后就是一个**从没被
+# Windows 图标缓存过的新路径**，用户不必等缓存过期/手动清缓存也能看到新图标
+# （踩过：同一路径换图标文件，资源管理器长期显示旧图，ie4uinit -show 也不一定立刻生效）。
+$icoVerDir = Join-Path $appDir (Join-Path 'ico' $Version)
+New-Item -ItemType Directory -Force -Path $icoVerDir | Out-Null
+Copy-Item (Join-Path $root 'DSH.ico') (Join-Path $icoVerDir 'DSH.ico') -Force
 
 # 应用本体 → resources\app（剔除 .git / dist / electron 运行时 / 大体积非必需资源）
 $resApp = Join-Path $appDir 'resources\app'

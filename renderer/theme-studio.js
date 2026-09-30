@@ -379,7 +379,18 @@
       S.lastAnalysis = { plugin, scheme, tone, ...r };
       const got = await doInstall(plugin, scheme, tone, r.analysis);
       showAnalysis(plugin, r);
-      toast(`模型精修完成并已应用：${got.migrations[0].label}`, 'ok');
+      // 如实汇报：模型可能"跑了但什么都没带进来"（产出被净化全丢）。原来无论有没有产出都提示
+      // "完成并已应用"，用户看到界面没变化只会以为功能坏了（实测踩到：14 条桌面端变量被全丢）。
+      const a = (r && r.analysis) || {};
+      const added = Object.keys(a.tokens || {}).length + ((a.css || '').trim() ? 1 : 0);
+      const droppedN = (a.dropped || []).length;
+      if (added === 0) {
+        toast(`模型没有产出可用内容（被净化丢弃 ${droppedN} 处）：${(a.dropped || [])[0] || '见下方分析详情'}`, 'error');
+      } else if (added <= 2) {
+        toast(`精修内容很少（tokens ${Object.keys(a.tokens || {}).length} 条 / css ${(a.css || '').trim() ? '有' : '无'}，丢弃 ${droppedN} 处），效果可能不明显：${r.migrations ? '' : ''}见下方分析详情`, 'ok');
+      } else {
+        toast(`模型精修完成并已应用：${got.migrations[0].label}`, 'ok');
+      }
       await refresh();
       render();
     } catch (e) {

@@ -130,6 +130,43 @@ for (const p of scan.plugins || []) {
   }
 }
 
+// ---------- E. 精修产出：桌面端变量必须被保留（2026-09-30 用户报「精修没效果」）----------
+// 真因：模型返回的是**桌面端变量**（--panel/--text/--accent…），净化只认 --dsw-*，
+// 14 条全被丢弃 → 精修"跑成功"但什么都没带进来。
+console.log('=== E. 精修产出的桌面端变量 ===');
+const A = require(path.join(ROOT, 'lib', 'theme-analysis.js'));
+const desktopTokens = W.collectDesktopTokenNames(stylesCss);
+console.log(`  桌面端变量白名单: ${desktopTokens.size} 个`);
+checkTrue('桌面端变量白名单非空', desktopTokens.size > 50, desktopTokens.size);
+
+const modelOutput = {   // 复刻真实模型返回（kimino 精修那次）
+  accent: '', accentReason: '',
+  tokens: {
+    '--panel': '#0f172a', '--float': '#111c33', '--sidebar-fill': '#0b1220', '--bubble-bg': '#101c33',
+    '--menu-bg': '#0f1a30', '--tip-bg': '#0f1a30', '--text': '#e2e8f7', '--text-dim': '#93a3bf',
+    '--text-caption': '#7f8ea8', '--border': 'rgba(147,197,253,0.28)', '--accent': '#93c5fd',
+    '--danger': '#f87171', '--code-bg': '#0b1220', '--inline-code-bg': '#16233d',
+    '--dsw-alias-bg-base': 'rgba(5,8,20,0.9)',
+    '--totally-invented-var': '#fff',
+  },
+  css: '.card { border-radius: 0; }',
+  behavior: [], unmapped: [], confidence: 'medium',
+};
+const san = A.sanitizeAnalysis(modelOutput, { stylesCss, pluginDir: 'C:/nonexistent' });
+const keptTokens = Object.keys(san.analysis.tokens);
+console.log(`  保留 ${keptTokens.length} 条 / 丢弃 ${san.dropped.length} 条`);
+console.log(`  丢弃原因: ${JSON.stringify(san.dropped)}`);
+check('14 条桌面端变量全部保留', keptTokens.filter((k) => k.startsWith('--') && !k.startsWith('--dsw-') && k !== '--totally-invented-var').length, 14);
+check('--dsw-* 仍然保留', keptTokens.includes('--dsw-alias-bg-base'), true);
+check('凭空造的变量名被丢弃', keptTokens.includes('--totally-invented-var'), false);
+checkTrue('丢弃原因写清楚了（指明"不在桌面端变量表里"）',
+  san.dropped.some((d) => /不在桌面端变量表里/.test(d)), san.dropped);
+
+// 提示词要明确允许桌面端变量，否则模型只能猜
+const prompt = A.buildAnalysisPrompt({ plugin: scan.plugins[0] || { id: 'x', schemes: [] }, stylesCss, migration: { tokens: {}, css: '', notes: [], label: 'x', shapePolicy: {} } });
+checkTrue('提示词说明可以直接给桌面端变量', /也可以直接在 tokens 里给它们赋值/.test(prompt.user), null);
+checkTrue('输出形状里写明了两类 token 名', /--dsw-\* 或桌面端变量/.test(prompt.user), null);
+
 console.log();
 if (failures.length) {
   console.error(`FAIL (${failures.length} 项，通过 ${passed} 项)`);

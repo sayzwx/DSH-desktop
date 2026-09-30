@@ -2,7 +2,10 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' file:;" />
+  <!-- img-src 必须含 file:：迁移过来的主题会用主题包自带的图片（皮肤纹理 / 壁纸），
+       而 background-image 受 img-src 管辖；不含 file: 时这些图会被静默拦掉，
+       表现就是"皮肤承接了却看不出效果"（media-src 早就有 file:，img 之前漏了）。 -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: file:; font-src 'self' file:; media-src 'self' file:;" />
   <title>DSH</title>
   <link rel="stylesheet" href="vendor/katex/katex.min.css" />
   <link rel="stylesheet" href="vendor/highlight/dsh-theme.css" />

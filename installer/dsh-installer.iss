@@ -65,8 +65,8 @@ Source: "{#StagingDir}\check-env.ps1"; DestDir: "{tmp}"; Flags: dontcopy
 Source: "{#StagingDir}\安装说明.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autodesktop}\DSH"; Filename: "{#MyAppExe}"; WorkingDir: "{app}\app"; IconFilename: "{app}\app\DSH.ico"
-Name: "{userstartup}\DSH"; Filename: "{#MyAppExe}"; WorkingDir: "{app}\app"; IconFilename: "{app}\app\DSH.ico"
+Name: "{autodesktop}\DSH"; Filename: "{#MyAppExe}"; WorkingDir: "{app}\app"; IconFilename: "{app}\app\ico\{#MyAppVersion}\DSH.ico"
+Name: "{userstartup}\DSH"; Filename: "{#MyAppExe}"; WorkingDir: "{app}\app"; IconFilename: "{app}\app\ico\{#MyAppVersion}\DSH.ico"
 
 [Run]
 ; 后台自动完成：写配置 → 建快捷方式 → 拉取并构建 Harness 引擎 → 启动新版

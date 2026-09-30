@@ -275,9 +275,16 @@ function applyWebTheme(theme) {
   clearWebTheme();
   if (!theme) return;
   const root = document.documentElement;
+  const rootVars = getComputedStyle(root);
   let n = 0;
   for (const [k, v] of Object.entries(theme.tokens || {})) {
-    if (!/^--dsw-[a-z0-9-]+$/.test(k) || typeof v !== 'string' || !v.trim()) continue;
+    if (typeof v !== 'string' || !v.trim()) continue;
+    const isDsw = /^--dsw-[a-z0-9-]+$/.test(k);
+    // 桌面端自己的变量同样要应用：模型在做承接时经常给出 --panel / --text / --accent 这类
+    // （没有官方 --dsw-* 对应物的观感，只能这么表达）。但要**确认它真的存在** ——
+    // 凭空造的变量名应用了也没有任何效果，只会让用户以为"精修成功了"。
+    const isDesktop = !isDsw && /^--[a-z0-9-]+$/.test(k) && rootVars.getPropertyValue(k).trim() !== '';
+    if (!isDsw && !isDesktop) continue;
     root.style.setProperty(k, v.trim());
     webThemeApplied.push(k);
     n++;

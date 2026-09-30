@@ -100,6 +100,7 @@ for (const ch of channels) {
     // ---------- 2. 逐个主题迁移 + 写库 ----------
     const listBefore = await js('window.api.themeList()');
     const beforeIds = new Set(((listBefore && listBefore.themes) || []).map((t) => t.id));
+    const migratedIds = [];
     for (const p of plugins) {
       for (const sch of p.schemes) {
         for (const tone of sch.tones) {
@@ -110,6 +111,7 @@ for (const ch of channels) {
           }
           const r = await js(`window.api.themeInstall(${JSON.stringify(m.migrations)}, null)`);
           if (!r || !r.ok) failures.push(`${p.id}/${sch.id}/${tone} 写库失败: ${JSON.stringify(r && r.error)}`);
+          migratedIds.push(m.migrations[0].id);
           steps.push({ step: `2 · 迁移 ${sch.id}/${tone}`, detail: { id: m.migrations[0].id, label: m.migrations[0].label, tokens: m.migrations[0].tokenCount } });
         }
       }
@@ -119,7 +121,9 @@ for (const ch of channels) {
     const list = await js('window.api.themeList()');
     const ids = ((list && list.themes) || []).map((t) => t.id);
     steps.push({ step: '3 · 主题库', detail: { 新增: ids.filter((x) => !beforeIds.has(x)).length, 总数: ids.length } });
-    checkTrueLocal('主题库里有迁移产物', ids.length > beforeIds.size);
+    // 注意：用户自己的主题库通常**不是空的**（他之前精修装过），所以不能断言"新增 > 0"，
+    // 只能断言"我们迁的都在库里"（这条才是本测试要保证的）。
+    checkTrueLocal('迁移产物都在主题库里', migratedIds.every((x) => ids.includes(x)), { migratedIds, ids });
     const scan2 = await js('window.api.themeScan()');
     const p0 = (scan2.plugins || []).find((x) => x.id === plugins[0].id);
     checkTrueLocal('扫描结果能回标"已迁移过的档位"', !!(p0 && p0.installedIds && p0.installedIds.length), p0 && p0.installedIds);
@@ -140,6 +144,41 @@ for (const ch of channels) {
     checkTrueLocal('每张卡都渲染出了档位行', probe.cards.every((c) => c.rows > 0), probe.cards);
     checkTrueLocal('卡片标出了变量表来源（读 …js / skin.json / 通用型）',
       probe.cards.every((c) => c.badges.some((b) => /读 |skin|通用型|token 型/.test(b))), probe.cards.map((c) => c.badges));
+
+    // ---------- 4.5 桌面端变量必须真的应用（app.js applyWebTheme）----------
+    // 精修修复的另一半：净化放行了桌面端变量，但 applyWebTheme 原来只认 --dsw-*，
+    // 于是"过了净化也不会生效"。这里手工塞一个带桌面端变量的主题，装→应用→读回内联值。
+    const probeId = 'e2e-probe:default:dark';
+    await js(`window.api.themeInstall([${JSON.stringify({
+      id: probeId,
+      kind: 'webtheme',
+      label: 'E2E 桌面变量探针',
+      origin: { plugin: 'e2e-probe', scheme: 'default', tone: 'dark' },
+      createdAt: new Date().toISOString(),
+      tokens: { '--dsw-alias-brand-primary': '#123456', '--panel': '#123456', '--text': '#abcdef', '--totally-invented-var': '#000' },
+      tokenCount: 3,
+      shapePolicy: {},
+      behavior: {},
+      css: '',
+      notes: [],
+    })}], null)`);
+    const applied = await js(`(async () => {
+      await window.__dshThemes.refresh();
+      window.__dshThemes.apply(${JSON.stringify(probeId)});
+      const cs = getComputedStyle(document.documentElement);
+      return {
+        panel: cs.getPropertyValue('--panel').trim(),
+        text: cs.getPropertyValue('--text').trim(),
+        dsw: cs.getPropertyValue('--dsw-alias-brand-primary').trim(),
+        invented: document.documentElement.style.getPropertyValue('--totally-invented-var').trim(),
+      };
+    })()`);
+    steps.push({ step: '4.5 桌面端变量生效', detail: applied });
+    check('--panel 被应用（模型给桌面端变量要真生效）', applied.panel, '#123456');
+    check('--text 被应用', applied.text, '#abcdef');
+    check('--dsw-* 仍然应用', applied.dsw, '#123456');
+    check('不在应用变量表里的名字不会被应用', applied.invented, '');
+    await js(`window.api.themeRemove(${JSON.stringify(probeId)})`).catch(() => {});
 
     // ---------- 5. 清理 ----------
     for (const id of ids.filter((x) => !beforeIds.has(x))) {
