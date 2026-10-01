@@ -158,6 +158,11 @@ window.__dshLocales['en-US'] = {
   'panel.files.title': 'Files produced this turn ({n})',
   'panel.files.more': '+{n} files',
   'panel.files.showInFolder': 'Show in folder',
+  'panel.files.open': 'Open',
+  'panel.files.copyPath': 'Copy path',
+  'panel.files.addToComposer': 'Add to composer',
+  'panel.files.addToComposerHint': 'Put this file path into the input box',
+  'panel.files.missing': 'File is gone',
 
   // ---- Plan mode ----
   'plan.chip': 'Plan ✕',

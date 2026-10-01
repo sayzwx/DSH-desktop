@@ -1925,6 +1925,10 @@ function renderAssistantContent(container, content, meta) {
     if (!sessionId) return;
     currentSessionId = sessionId;
     lastSessionId = sessionId;
+    // 🔴 切会话必须重新广播：每条会话有自己的运行目录（cwd），
+    //    底部 Git 状态栏 / 快捷动作要跟着换 —— 只在切工作区时广播过，
+    //    结果切了会话状态栏还显示上一条会话的仓库（用户反馈"git 识别/显示要排查"）。
+    publishWorkspace();
     streamMsg = null;
     domBlocks = new Map();
     pendingUserEl = null;
@@ -2686,6 +2690,7 @@ class ReferencePanel {
         await openSession(rest[0].sessionId);
       } else {
         currentSessionId = null;
+        publishWorkspace();
         messagesEl.innerHTML = '<div class="chat-empty"><div class="big">🗑</div>会话已删除<br />点击「＋ 新会话」重新开始</div>';
         setTurnUI(false);
         renderStatus();

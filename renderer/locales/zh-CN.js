@@ -153,6 +153,11 @@ window.__dshLocales['zh-CN'] = {
   'panel.files.title': '本回合产出的文件（{n}）',
   'panel.files.more': '+{n} 个文件',
   'panel.files.showInFolder': '在文件夹中显示',
+  'panel.files.open': '打开',
+  'panel.files.copyPath': '复制路径',
+  'panel.files.addToComposer': '添加到对话框',
+  'panel.files.addToComposerHint': '把这个文件路径填进输入框',
+  'panel.files.missing': '文件不在了',
 
   // ---- Plan 模式 ----
   'plan.chip': '计划中 ✕',

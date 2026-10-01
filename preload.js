@@ -152,6 +152,9 @@ contextBridge.exposeInMainWorld('api', {
   // Host（openPath 受 host.describe 返回的 canOpenPath 门控，调用前先读它）
   hostDescribe: () => ipcRenderer.invoke('host:describe'),
   hostOpenPath: (path) => ipcRenderer.invoke('host:openPath', { path }),
+  // 产物卡片：在文件夹中显示 / 取体积与时间（主进程只 stat，不读内容）
+  hostShowInFolder: (path) => ipcRenderer.invoke('host:showInFolder', { path }),
+  filesStat: (paths) => ipcRenderer.invoke('files:stat', { paths }),
 
   // ---- typert Remote：@引用候选（只读）与消息反馈（per-message CAS）----
   // 引用：agentId=当前会话，query=@ 之后的文本；两域各自独立降级

@@ -843,6 +843,41 @@ const RPC_BRIDGE = {
   'host:openPath': ['host.openPath', (a) => ({ path: a.path })],
 };
 
+/**
+ * 产物卡片用：**在文件夹中显示**（资源管理器里选中该文件）与**取文件体积/时间**。
+ *
+ * 为什么不由引擎提供：引擎的 host 只有 openPath，没有 reveal；桌面端主进程本就有 Electron
+ * 的 shell.showItemInFolder，比绕一圈更直接。两者都只读、只 stat，不读内容。
+ * 安全：路径必须存在；一次最多 50 条，避免被塞长列表。
+ */
+ipcMain.handle('host:showInFolder', async (_e, args) => {
+  const target = String((args && args.path) || '');
+  if (!target) return { ok: false, error: '缺少路径' };
+  try {
+    if (!fs.existsSync(target)) return { ok: false, error: '文件不存在（可能已被移动或删除）' };
+    shell.showItemInFolder(target);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e && e.message) || '打开失败' };
+  }
+});
+
+ipcMain.handle('files:stat', async (_e, args) => {
+  const list = Array.isArray(args) ? args : (args && args.paths) || [];
+  const out = [];
+  for (const p of list.slice(0, 50)) {
+    const target = String(p || '');
+    if (!target) continue;
+    try {
+      const st = fs.statSync(target);
+      out.push({ path: target, ok: true, size: st.size, mtime: st.mtimeMs, dir: st.isDirectory() });
+    } catch {
+      out.push({ path: target, ok: false });
+    }
+  }
+  return { ok: true, items: out };
+});
+
 /** 仅在值不是 undefined 时写入键，避免把 undefined 传给 zod 严格 schema。 */
 function withOptional(payload, key, value) {
   if (value !== undefined) payload[key] = value;

@@ -741,10 +741,16 @@ async function main() {
       out.jobLiveFirst = jobRows.length === 2 && jobRows[0].classList.contains('live') && jobRows[1].classList.contains('settled');
       out.jobTitleActive = /2 个运行中|1 个运行中/.test((dock.querySelector('.cd-head') || {}).textContent || '');
 
-      // 产出文件：chip + 超出 6 个折叠成 +N
+      // 产出文件：**卡片**（图标 + 名字 + 体积/时间 + 两个操作），全部渲染、列表内滚动
+      // （旧契约是"最多 6 个文字 chip + 折叠成 +N"，2026-10-01 按用户要求改成 WorkBuddy 那种卡片）
       render({ turnFiles: ['a.txt', 'b.txt', 'c.txt', 'd.txt', 'e.txt', 'f.txt', 'g.txt', 'h.txt'] });
-      out.fileChips = qa('.cd-file').length;
-      out.fileMore = (dock.querySelector('.cd-file-more') || {}).textContent || null;
+      const cards = qa('.cd-file-card');
+      out.fileCards = cards.length;
+      out.fileNames = cards.map((c) => (c.querySelector('.cd-file-name') || {}).textContent);
+      out.fileActs = cards.every((c) => c.querySelectorAll('.cd-file-act').length === 2);
+      out.fileIcons = cards.every((c) => !!c.querySelector('.cd-file-icon'));
+      const listEl = dock.querySelector('.cd-file-list');
+      out.fileListScrolls = !!listEl && getComputedStyle(listEl).overflowY === 'auto';
 
       render({}); // 复原，别把合成状态留在界面上
       return out;
@@ -765,8 +771,11 @@ async function main() {
       check('后台任务行数', panels.jobRows, 2);
       check('运行中任务排在已结束之前', panels.jobLiveFirst, true);
       check('任务标题带运行中计数', panels.jobTitleActive, true);
-      check('产出文件最多 6 个 chip', panels.fileChips, 6);
-      check('超出部分折叠为 +N', panels.fileMore, '+2 个文件');
+      check('产出文件全部渲染成卡片（不再截成 6 个）', panels.fileCards, 8);
+      check('卡片有文件名', panels.fileNames.slice(0, 3), ['a.txt', 'b.txt', 'c.txt']);
+      check('卡片带图标', panels.fileIcons, true);
+      check('卡片有两个悬停操作', panels.fileActs, true);
+      check('产物列表可滚动（产物多时不截断）', panels.fileListScrolls, true);
     }
 
     // --- 轨道 D：原始事件抽屉 ---

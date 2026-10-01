@@ -214,36 +214,132 @@
     ));
   }
 
+  /** 文件类型 → 图标与配色类别（WorkBuddy 那套"图标 + 名字 + 体积"的卡片观感） */
+  const FILE_KIND = [
+    [/\.(png|jpe?g|webp|gif|bmp|svg|avif|ico)$/i, '🖼', 'img'],
+    [/\.(mp4|mov|webm|mkv|avi)$/i, '🎬', 'vid'],
+    [/\.(mp3|wav|flac|m4a|ogg)$/i, '🎵', 'aud'],
+    [/\.(pdf)$/i, '📕', 'pdf'],
+    [/\.(docx?|wps|odt|rtf)$/i, '📄', 'doc'],
+    [/\.(xlsx?|csv|tsv|ods)$/i, '📊', 'sheet'],
+    [/\.(pptx?|key)$/i, '📽', 'slide'],
+    [/\.(zip|rar|7z|tar|gz|tgz)$/i, '🗜', 'zip'],
+    [/\.(js|mjs|cjs|ts|tsx|jsx|css|scss|html|htm|json|ya?ml|toml|py|ps1|sh|bat|cmd|c|h|cpp|go|rs|java|rb|php|sql)$/i, '📜', 'code'],
+    [/\.(md|txt|log|ini|conf)$/i, '📝', 'text'],
+    [/\.(exe|msi|dmg|appimage|deb|rpm)$/i, '⚙', 'bin'],
+  ];
+  function fileMeta(name) {
+    for (const [re, icon, kind] of FILE_KIND) if (re.test(name)) return { icon, kind };
+    return { icon: '📄', kind: 'file' };
+  }
+  function humanSize(bytes) {
+    if (typeof bytes !== 'number' || !isFinite(bytes) || bytes < 0) return '';
+    if (bytes < 1024) return bytes + ' B';
+    const units = ['KB', 'MB', 'GB', 'TB'];
+    let v = bytes / 1024;
+    let i = 0;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    return (v >= 100 ? Math.round(v) : v.toFixed(1)) + ' ' + units[i];
+  }
+
+  /**
+   * 本回合产出的文件：**卡片**（图标 + 文件名 + 体积 + 操作），对齐 WorkBuddy 的产物样式。
+   * 之前是一排纯文字小胶囊 + 一个"在文件夹中显示"，看不出是什么文件、多大、能干什么。
+   * 体积是异步补的（主进程 stat），补不到就不显示那行 —— 不编造。
+   */
   function renderTurnFiles(host, files) {
     if (!files || files.length === 0) return;
     const body = document.createElement('div');
     body.className = 'cd-files';
-    // 最多展示 6 个，其余折叠成 "+N"，与官方 ui-deliverables 的车道宽度策略一致
-    const shown = files.slice(0, 6);
-    for (const p of shown) {
-      const chip = document.createElement('button');
-      chip.type = 'button';
-      chip.className = 'cd-file';
-      chip.textContent = p.split(/[\\/]/).pop();
-      chip.title = p;
-      chip.onclick = () => ctx.openPath(p);
-      body.appendChild(chip);
+    const list = document.createElement('div');
+    list.className = 'cd-file-list';
+    body.appendChild(list);
+
+    const cards = new Map();
+    for (const p of files) {
+      const name = String(p).split(/[\\/]/).pop();
+      const meta = fileMeta(name);
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'cd-file-card';
+      card.dataset.path = p;
+      card.title = p;
+      card.innerHTML = `<span class="cd-file-icon kind-${meta.kind}">${meta.icon}</span>`
+        + `<span class="cd-file-main"><b class="cd-file-name">${esc(name)}</b>`
+        + `<small class="cd-file-meta"></small></span>`
+        + `<span class="cd-file-acts">`
+        + `<span class="cd-file-act" data-act="folder" title="${esc(t('panel.files.showInFolder'))}">↗</span>`
+        + `<span class="cd-file-act" data-act="copy" title="${esc(t('panel.files.copyPath'))}">⧉</span>`
+        + '</span>';
+      card.onclick = async (e) => {
+        const act = e.target.closest('[data-act]');
+        if (act && act.getAttribute('data-act') === 'folder') { e.stopPropagation(); showInFolder(p); return; }
+        if (act && act.getAttribute('data-act') === 'copy') { e.stopPropagation(); copyPath(p); return; }
+        ctx.openPath(p);
+      };
+      // 右键：打开 / 打开文件夹 / 复制路径（与 WorkBuddy 的产物右键菜单一致的语义）
+      card.oncontextmenu = (e) => {
+        e.preventDefault();
+        if (!window.__ctxMenu) return;
+        window.__ctxMenu.open(e.clientX, e.clientY, [
+          { label: t('panel.files.open'), onSelect: () => ctx.openPath(p) },
+          { label: t('panel.files.showInFolder'), disabled: !canReveal(), onSelect: () => showInFolder(p) },
+          { label: t('panel.files.copyPath'), onSelect: () => copyPath(p) },
+          { separator: true },
+          { label: t('panel.files.addToComposer'), title: t('panel.files.addToComposerHint'), onSelect: () => addToComposer(p) },
+        ]);
+      };
+      list.appendChild(card);
+      cards.set(p, card);
     }
-    if (files.length > shown.length) {
-      const more = document.createElement('span');
-      more.className = 'cd-file-more';
-      more.textContent = t('panel.files.more', { n: files.length - shown.length });
-      more.title = files.slice(shown.length).join('\n');
-      body.appendChild(more);
+
+    // 体积/时间异步补进来（失败就留空，不显示假数据）
+    if (window.api && typeof window.api.filesStat === 'function') {
+      const wanted = files.slice(0, 50);
+      window.api.filesStat(wanted).then((r) => {
+        for (const it of (r && r.items) || []) {
+          const card = cards.get(it.path);
+          if (!card) continue;
+          const metaEl = card.querySelector('.cd-file-meta');
+          if (!metaEl) continue;
+          if (!it.ok) { metaEl.textContent = t('panel.files.missing'); card.classList.add('is-missing'); continue; }
+          const when = it.mtime ? new Date(it.mtime) : null;
+          const hhmm = when ? `${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}` : '';
+          metaEl.textContent = [humanSize(it.size), hhmm].filter(Boolean).join(' · ');
+        }
+      }).catch(() => { /* 补不到就不显示 */ });
     }
+
+    const actions = document.createElement('div');
+    actions.className = 'cd-files-actions';
     const folder = document.createElement('button');
     folder.type = 'button';
     folder.className = 'mini-btn cd-files-folder';
     folder.textContent = t('panel.files.showInFolder');
     folder.disabled = !ctx.sessionCwd || !ctx.canOpenPath;
     folder.onclick = () => ctx.openPath(ctx.sessionCwd);
-    body.appendChild(folder);
+    actions.appendChild(folder);
+    body.appendChild(actions);
     host.appendChild(section(t('panel.files.title', { n: files.length }), body));
+  }
+
+  function canReveal() {
+    return !!(window.api && typeof window.api.hostShowInFolder === 'function');
+  }
+  function showInFolder(p) {
+    if (!canReveal()) { ctx.openPath(p.replace(/[\\/][^\\/]*$/, '')); return; }
+    window.api.hostShowInFolder(p);
+  }
+  function copyPath(p) {
+    try { navigator.clipboard?.writeText(p); } catch { /* ignore */ }
+  }
+  function addToComposer(p) {
+    // 把产物路径塞进输入框（"添加到对话框"）：走 chat.js 暴露的引用注入
+    const input = document.getElementById('chatInput');
+    if (!input) return;
+    input.value = (input.value ? input.value.replace(/\s*$/, ' ') : '') + p;
+    input.focus();
+    try { input.setSelectionRange(input.value.length, input.value.length); } catch { /* ignore */ }
   }
 
   /**
