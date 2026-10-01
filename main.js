@@ -33,7 +33,9 @@ function resolveDshRoot() {
   return path.join(xdg || path.join(os.homedir(), '.local', 'share'), 'DSH');
 }
 const DSH_ROOT = resolveDshRoot();
-const DSH_HOME = path.join(os.homedir(), '.dsh');
+// 🔴 认 DSH_HOME 环境变量：引擎侧支持自定义数据目录；硬编码 ~/.dsh 会让那类用户的
+//    插件与主题库整个扫不到（用户反馈「主题在我这儿扫得到、在别人那儿扫不出来」时的高频原因之一）。
+const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
 const PORT = 3080;
 const LOG_LIMIT = 5000;
 
@@ -1694,6 +1696,8 @@ registerThemeIpc({
   rpcCall,
   revealPath: (dir) => shell.openPath(dir),
   showInFolder: (file) => shell.showItemInFolder(file),
+  dialog,                                // 「手动添加插件扫描目录」用原生选择器
+  getWindow: () => mainWindow,           // 选择器的父窗口
 });
 // ---------- Git（工作区级）与内置浏览器 ----------
 // git：让界面"知道当前在哪个仓库/分支"并能切分支、新建分支；全部 spawn(git, 数组, {cwd})，

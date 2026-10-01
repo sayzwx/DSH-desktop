@@ -5556,3 +5556,56 @@ input[type="text"]:focus, input[type="password"]:focus, input:not([type]):focus,
 /* 浅色：卡片用实底白，避免白卡压白底看不见 */
 :root[data-theme="light"] .cd-file-card { background: #fff; }
 :root[data-theme="light"] .cd-file-meta { color: #5b6472; }
+
+/* ============================================================
+   插件扫描目录：逐个显示"读没读到" + 手动添加/移除
+   起因：用户报「主题在我这儿扫得到、在别人那儿扫不出来」—— 原先只列一串路径，
+   看不出是"目录不存在""没权限"还是"位置猜错了"，完全没法定位。
+   ============================================================ */
+.ts-roots {
+  margin: 8px 0 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--void) 35%, transparent);
+}
+.ts-roots-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.ts-root {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+.ts-root + .ts-root { border-top: 1px dashed var(--border); }
+.ts-root-ico { flex: none; width: 12px; text-align: center; }
+.ts-root.ok .ts-root-ico { color: var(--ok, #10b981); }
+.ts-root.warn .ts-root-ico { color: var(--warn, #ff6c33); }
+.ts-root.miss .ts-root-ico { color: var(--text-caption, var(--text-dim)); }
+.ts-root-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+.ts-root.miss .ts-root-path { opacity: 0.6; text-decoration: line-through; }
+.ts-root-detail { flex: none; color: var(--text-caption, var(--text-dim)); font-family: var(--font-mono); }
+.ts-root.warn .ts-root-detail { color: var(--warn, #ff6c33); }
+.ts-root-remove { flex: none; }
+
+:root[data-theme="light"] .ts-roots { background: var(--panel); }
+:root[data-theme="light"] .ts-root-path { color: #5b6472; }

@@ -227,6 +227,32 @@ const ok = (name, cond, detail) => { if (cond) { passed++; return; } failures.pu
     } else {
       console.log('  （跳过：没有两条 cwd 不同的会话）');
     }
+    // ---------- 5. 主题：扫描根逐个状态（用户报"别人机器扫不到主题"的定位入口） ----------
+    const themeScan = await js(`(async () => {
+      const nav = document.querySelector('.nav-btn[data-page="market"]');
+      if (nav) nav.click();
+      await new Promise((r) => setTimeout(r, 2500));
+      const tab = [...document.querySelectorAll('.mk-tab')].find((b) => (b.dataset.mktab || '') === 'themes');
+      if (tab) tab.click();
+      await new Promise((r) => setTimeout(r, 4000));
+      const box = document.getElementById('tsBody');
+      const rows = [...document.querySelectorAll('.ts-roots .ts-root')].map((r) => ({
+        cls: r.className.replace('ts-root ', ''),
+        path: (r.querySelector('.ts-root-path') || {}).textContent,
+        detail: (r.querySelector('.ts-root-detail') || {}).textContent,
+      }));
+      return {
+        hasRootsBox: !!document.querySelector('.ts-roots'),
+        rows,
+        hasAddBtn: !!document.querySelector('.ts-root-add'),
+        plugins: document.querySelectorAll('#tsBody .ts-plugin, #tsBody [data-plugin]').length,
+      };
+    })()`);
+    console.log('主题扫描根:', JSON.stringify(themeScan, null, 1).slice(0, 900));
+    ok('主题页渲染出扫描根列表', themeScan && themeScan.hasRootsBox === true, themeScan && themeScan.hasRootsBox);
+    ok('每个扫描根带状态（可读/不存在）', themeScan && themeScan.rows.length > 0 && themeScan.rows.every((r) => r.detail), themeScan && themeScan.rows);
+    ok('有「添加扫描目录」入口', themeScan && themeScan.hasAddBtn === true, themeScan && themeScan.hasAddBtn);
+    return 0;
   } catch (e) {
     failures.push('检查自身失败：' + ((e && e.message) || e));
   } finally {

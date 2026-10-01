@@ -194,6 +194,9 @@ contextBridge.exposeInMainWorld('api', {
   themeClear: () => ipcRenderer.invoke('theme:clear'),
   themeRevealPlugin: (pluginId) => ipcRenderer.invoke('theme:revealPlugin', pluginId),
   themeRevealStore: () => ipcRenderer.invoke('theme:revealStore'),
+  // 手动添加 / 移除插件扫描目录（插件装在扫描根之外时用；持久化在主题库里）
+  themeAddScanRoot: () => ipcRenderer.invoke('theme:addScanRoot'),
+  themeRemoveScanRoot: (path) => ipcRenderer.invoke('theme:removeScanRoot', { path }),
   onThemeAnalysisProgress: (cb) => ipcRenderer.on('theme:analysisProgress', (_e, line) => cb(line)),
 
   // ---------------- Git（工作区级别的本地仓库）----------------

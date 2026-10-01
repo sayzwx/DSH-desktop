@@ -108,15 +108,47 @@
       box.innerHTML = `<div class="empty">本机已安装的插件里没有可识别的主题包。<br>
         <span class="meta">两条路：① 到「主题」标签的卡片上点「迁移到桌面端」（会自动先安装再迁移）；
         ② 先在「发现」标签安装主题（例如 <code>dsh-neo-skin</code>），装完回到这里点「重新扫描」。</span></div>`
+        + renderScanRoots()
         + renderSkipped();
       return;
     }
     box.innerHTML = renderModelBar()
       + `<div class="ts-store-meta">已迁移到桌面端：<b>${S.installed.length}</b> 个主题`
       + (S.installed.length ? ` · <a href="#" id="tsRevealStore">打开主题库文件</a>` : '')
-      + ` · 插件扫描目录：<code>${esc((S.scan.roots || []).join(' | '))}</code></div>`
+      + `</div>`
+      + renderScanRoots()
       + plugins.map(renderPlugin).join('')
       + renderSkipped();
+  }
+
+  /**
+   * 插件扫描目录：**逐个显示"读没读到"**。
+   *
+   * 为什么要有这个：用户反馈「主题在我这儿扫得到、在别人那儿扫不出来」。
+   * 原先只列一串路径，看不出哪个目录不存在/没权限/猜错了位置 —— 完全无法定位。
+   * 现在每个根给状态（✓ N 个包 / ⚠ 读不到：EPERM / ○ 不存在），并支持**手动添加**扫描目录
+   * （我们猜不全所有安装布局，留一个显式出口）。
+   */
+  function renderScanRoots() {
+    const reports = (S.scan && S.scan.rootReports) || [];
+    const rows = reports.map((r) => {
+      const icon = r.readable ? '✓' : (r.exists ? '⚠' : '○');
+      const cls = r.readable ? 'ok' : (r.exists ? 'warn' : 'miss');
+      const detail = r.readable ? `${r.entries} 个包` : (r.error || (r.exists ? '读不到' : '不存在'));
+      return `<div class="ts-root ${cls}" title="${esc(r.path)}">
+          <span class="ts-root-ico">${icon}</span>
+          <code class="ts-root-path">${esc(r.path)}</code>
+          <span class="ts-root-detail">${esc(String(detail))}</span>
+          ${r.custom ? `<button type="button" class="mini-btn ts-root-remove" data-root="${esc(r.path)}" title="不再扫描这个目录">移除</button>` : ''}
+        </div>`;
+    }).join('');
+    return `<div class="ts-roots">
+        <div class="ts-roots-head">
+          <span>插件扫描目录（${reports.filter((r) => r.readable).length}/${reports.length} 可读）</span>
+          <button type="button" class="mini-btn ts-root-add" title="插件装在别处？手动指向它所在的目录">＋ 添加扫描目录</button>
+        </div>
+        ${rows || '<div class="meta">没有可用的扫描目录</div>'}
+      </div>`;
   }
 
   function renderModelBar() {
@@ -472,6 +504,23 @@
         return;
       }
       if (t.id === 'tsRefresh') { await refresh(); render(); return; }
+      // 手动添加 / 移除插件扫描目录：插件装在别处时（扫描根猜不到）的显式出口
+      if (t.classList.contains('ts-root-add')) {
+        const r = await api.themeAddScanRoot();
+        if (r && r.cancelled) return;
+        if (!r || !r.ok) { toast((r && r.error) || '添加失败', 'error'); return; }
+        await refresh();
+        render();
+        toast(r.added ? `已加入扫描目录：${r.added}` : '已更新扫描目录', 'ok');
+        return;
+      }
+      if (t.classList.contains('ts-root-remove')) {
+        const r = await api.themeRemoveScanRoot(t.dataset.root);
+        if (!r || !r.ok) { toast((r && r.error) || '移除失败', 'error'); return; }
+        await refresh();
+        render();
+        return;
+      }
       if (t.classList.contains('ts-reveal')) {
         const r = await api.themeRevealPlugin(t.dataset.plugin);
         if (r && !r.ok) toast(r.error || '打开失败', 'error');

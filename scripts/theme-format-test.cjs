@@ -193,10 +193,70 @@ if (fs.existsSync(kiminoDir2)) {
   }
 }
 
+// ---------- E. 扫描根覆盖与体检报告（用户报"别人机器扫不到主题"）----------
+console.log('=== E. 扫描根 / 体检报告 / 自定义目录 ===');
+{
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-scan-home-'));
+  // ① 全部 profile 都要进扫描根（原先只认 profiles/web —— profile 名不同就整片漏掉）
+  const betaRoot = path.join(home, 'profiles', 'beta', 'node_modules');
+  fs.mkdirSync(path.join(betaRoot, 'some-plugin'), { recursive: true });
+  fs.writeFileSync(path.join(betaRoot, 'some-plugin', 'package.json'), JSON.stringify({ name: 'some-plugin', version: '1.0.0' }));
+  const roots = W.pluginRoots({ dshHome: home, harnessDir: 'D:/some-harness' });
+  checkTrue('扫描根包含非 web 的 profile', roots.some((r) => /profiles[\\/]beta[\\/]node_modules$/.test(r)), roots);
+  checkTrue('扫描根包含 harness 同级 node_modules', roots.some((r) => /some-harness[\\/]node_modules$/.test(r)), roots);
+
+  // ② 体检报告：读得到的根给包数；自定义的不存在根也要列出来（状态：不存在）
+  // 自定义根的语义 = **node_modules 那一层**（与界面上的选择器一致）
+  const custom = path.join(home, 'my-plugins', 'node_modules');
+  const customParent = path.join(home, 'parent-with-node-modules');   // 用来验"选到上层也能用"
+  fs.mkdirSync(path.join(customParent, 'node_modules'), { recursive: true });
+  const reports = W.pluginRootReports({ dshHome: home, harnessDir: null, extraRoots: [custom] });
+  const beta = reports.find((r) => r.path === path.resolve(betaRoot));
+  checkTrue('体检：可读根标记 readable 且包数 > 0', !!beta && beta.readable === true && beta.entries >= 1, beta);
+  const customRep = reports.find((r) => r.path === path.resolve(custom));
+  checkTrue('体检：自定义但不存在 → exists=false 且 custom=true', !!customRep && customRep.exists === false && customRep.custom === true, customRep);
+
+  // ③ 自定义扫描目录里的主题包**真的能被扫到**（这是给"装在别处"的兜底出口）
+  const pkgDir = path.join(custom, 'fixture-token-theme');
+  fs.mkdirSync(pkgDir, { recursive: true });
+  fs.writeFileSync(path.join(pkgDir, 'package.json'), JSON.stringify({ name: 'fixture-token-theme', version: '1.0.0' }));
+  // 注意形状：必须是**可识别的主题写法**（SCHEMES 字面量 / overrideTokens 调用 / CSS 文本…）。
+  // 裸的 `const light = {...}; const dark = {...}` 不算 —— 那和无主题能力的普通代码无法区分。
+  fs.writeFileSync(path.join(pkgDir, 'client.js'), [
+    "const SCHEMES = { main: { tokens: {",
+    "  '--dsw-alias-bg-base': { light: '#ffffff', dark: '#0b1020' },",
+    "  '--dsw-alias-text-1': { light: '#111111', dark: '#eaf0ff' },",
+    "} } };",
+    "module.exports = { SCHEMES };",
+  ].join('\n'));
+  const stylesCss = fs.readFileSync(path.join(ROOT, 'renderer', 'styles.css'), 'utf8');
+  const scanCustom = W.scanThemePlugins({ dshHome: home, harnessDir: null, stylesCss, extraRoots: [custom] });
+  const hit = (scanCustom.plugins || []).find((p) => p.id === 'fixture-token-theme');
+  checkTrue('自定义扫描目录里的主题被扫到', !!hit, (scanCustom.plugins || []).map((p) => p.id));
+  checkTrue('扫描结果带回体检报告（含自定义根）',
+    Array.isArray(scanCustom.rootReports) && scanCustom.rootReports.some((r) => r.custom === true && r.readable === true),
+    scanCustom.rootReports);
+  // 不传 extraRoots 时不该扫到它（证明"自定义根"确实生效，而不是碰巧扫到）
+  // 选到"上层目录"也要能用（自动下钻到它的 node_modules）
+  const pkgParent = path.join(customParent, 'node_modules', 'fixture-parent-theme');
+  fs.mkdirSync(pkgParent, { recursive: true });
+  fs.writeFileSync(path.join(pkgParent, 'package.json'), JSON.stringify({ name: 'fixture-parent-theme', version: '1.0.0' }));
+  fs.writeFileSync(path.join(pkgParent, 'client.js'), "ctx.theme.overrideTokens('p', { '--dsw-alias-bg-base': '#222', '--dsw-alias-text-1': '#eee' });\n");
+  const scanParent = W.scanThemePlugins({ dshHome: home, harnessDir: null, stylesCss, extraRoots: [customParent] });
+  checkTrue('自定义根选到上层目录也能扫到（自动下钻 node_modules）',
+    (scanParent.plugins || []).some((p) => p.id === 'fixture-parent-theme'), (scanParent.plugins || []).map((p) => p.id));
+
+  const scanPlain = W.scanThemePlugins({ dshHome: home, harnessDir: null, stylesCss });
+  checkTrue('不传自定义根就扫不到（确认是自定义根起的作用）',
+    !(scanPlain.plugins || []).some((p) => p.id === 'fixture-token-theme'), (scanPlain.plugins || []).map((p) => p.id));
+
+  fs.rmSync(home, { recursive: true, force: true });
+}
+
 console.log();
 if (failures.length) {
   console.error(`FAIL (${failures.length} 项，通过 ${passed} 项)`);
   for (const f of failures) console.error('  - ' + f);
   process.exit(1);
 }
-console.log(`PASS: 主题包形态兼容（入口解析 / 通用提取 / 官方排除 / 扫描与迁移一致）共 ${passed} 项`);
+console.log(`PASS: 主题包形态兼容（入口解析 / 通用提取 / 官方排除 / 扫描与迁移一致 / 扫描根与自定义目录）共 ${passed} 项`);
