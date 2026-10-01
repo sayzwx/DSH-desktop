@@ -40,6 +40,8 @@
   let sessions = [];
   let workspaces = [];           // workspace.list items
   let currentWorkspaceId = null; // null = 全部
+  let chatDefaultDir = '';        // 引擎目录（没指定工作区时的兜底目录），用来标出"目录落在引擎目录里的会话"
+  const LAST_WS_KEY = 'dsh-last-workspace';
   let archivedSessionIds = new Set();
   // 就地改名：列表会被 refreshSessions 频繁整段重绘（turn/start、session/title 等都会触发），
   // 草稿必须存在这里而不是只存在 DOM 里，否则输入到一半就被重绘清掉。
@@ -102,6 +104,8 @@
     if (!r.ok) return;
     workspaces = r.items || [];
     archivedSessionIds = new Set(r.archivedSessionIds || []);
+    // 引擎目录（没指定工作区时的兜底目录）：用来在列表上标出"目录落在引擎目录里的历史会话"
+    chatDefaultDir = r.defaultDir || '';
     if (currentWorkspaceId && !workspaces.some((w) => w.workspaceId === currentWorkspaceId)) {
       currentWorkspaceId = null;
     }
@@ -145,16 +149,24 @@
    * 把"当前工作区"发布给其它模块（git 状态栏、快捷动作面板都要跟着它走）。
    * 沿用仓库既有的跨模块约定：一个只读访问器 + 一个 `dsh:*` 事件（同 dsh:settings-saved /
    * dsh:theme-changed）。**不引入反向依赖** —— 它们只读，不参与 chat 的状态机。
+   *
+   * cwd() 是**当前会话的真实运行目录**（引擎的 session.cwd）：git 状态栏 / "打开工作区文件"
+   * 都该用它 —— 你在哪条会话里，操作的就是那条会话的目录。之前只有 path()（筛选用的工作区），
+   * 在「全部」视图下是空的 → 于是回落到默认目录（引擎目录），打开的就是源码文件夹（真机 bug）。
    */
   function publishWorkspace() {
     const w = currentWorkspace();
+    const active = sessions.find((s) => s.sessionId === currentSessionId) || null;
+    const activeCwd = (active && active.cwd) || '';
     window.__ws = {
       path: () => (w && w.path) || '',
+      cwd: () => activeCwd || (w && w.path) || '',
       id: () => currentWorkspaceId || '',
       title: () => (w && (w.title || w.path)) || '',
+      defaultDir: () => chatDefaultDir || '',
     };
     window.dispatchEvent(new CustomEvent('dsh:workspace-changed', {
-      detail: { workspaceId: currentWorkspaceId || '', path: (w && w.path) || '' },
+      detail: { workspaceId: currentWorkspaceId || '', path: (w && w.path) || '', cwd: activeCwd },
     }));
   }
 
@@ -259,12 +271,25 @@
     const titleCell = renaming
       ? `<input class="cs-title-input" type="text" value="${esc(renameDraft.value)}" spellcheck="false" />`
       : `<span class="cs-title">${esc(s.title)}</span>`;
-    return `<div class="chat-session ${s.sessionId === currentSessionId ? 'active' : ''}${renaming ? ' renaming' : ''}" data-id="${esc(s.sessionId)}" data-title="${esc(s.title || '')}" draggable="${renaming ? 'false' : 'true'}">
-      ${s.blank ? `<span class="cs-blank" title="${esc(t('session.blank.title'))}">${esc(t('session.blank.badge'))}</span>` : ''}
-      ${titleCell}
-      ${s.running ? `<span class="cs-dot" title="${esc(t('session.running'))}"></span>` : ''}
-      ${renaming ? '' : `<span class="cs-rename" title="${esc(t('session.action.rename'))}">✎</span>`}
-      <span class="cs-del" title="${esc(t('session.delete.title'))}">✕</span>
+    // 会话**真实运行目录**（引擎本来就给 cwd，之前被主进程的映射丢了 → 见 main.js chat:list 注释）。
+    // 列表上直接显示目录名：未归入工作区的会话一眼就能看出它在哪个目录里跑，
+    // 落在引擎目录（defaultDir）的标 ⚠ —— 那种会话是历史遗留（建会话时没选工作区）。
+    const cwd = s.cwd || '';
+    const dirName = cwd ? cwd.split(/[\\/]/).filter(Boolean).pop() : '';
+    const isEngineDir = !!cwd && !!chatDefaultDir &&
+      cwd.replace(/[\\/]+$/, '').toLowerCase() === chatDefaultDir.replace(/[\\/]+$/, '').toLowerCase();
+    const pathCell = dirName
+      ? `<span class="cs-path${isEngineDir ? ' cs-path-warn' : ''}" title="${esc(cwd)}${isEngineDir ? esc(t('session.dir.engineWarn')) : ''}">${isEngineDir ? '⚠ ' : ''}${esc(dirName)}</span>`
+      : '';
+    return `<div class="chat-session ${s.sessionId === currentSessionId ? 'active' : ''}${renaming ? ' renaming' : ''}" data-id="${esc(s.sessionId)}" data-title="${esc(s.title || '')}" data-cwd="${esc(cwd)}" draggable="${renaming ? 'false' : 'true'}">
+      <div class="cs-line">
+        ${s.blank ? `<span class="cs-blank" title="${esc(t('session.blank.title'))}">${esc(t('session.blank.badge'))}</span>` : ''}
+        ${titleCell}
+        ${s.running ? `<span class="cs-dot" title="${esc(t('session.running'))}"></span>` : ''}
+        ${renaming ? '' : `<span class="cs-rename" title="${esc(t('session.action.rename'))}">✎</span>`}
+        <span class="cs-del" title="${esc(t('session.delete.title'))}">✕</span>
+      </div>
+      ${pathCell ? `<div class="cs-line2">${pathCell}</div>` : ''}
     </div>`;
   }
 
@@ -307,7 +332,9 @@
       }
       const ungrouped = list.filter((s) => !workspaceOf(s.sessionId));
       if (ungrouped.length > 0) {
-        parts.push(groupSectionHTML('__ungrouped__', t('workspace.ungrouped'), '', ungrouped, false));
+        // 标题用"未归入工作区"（不是"未分组"—— 它是**真的没有归属**，不是显示分组），
+        // 悬停给一句解释：这些会话建立时没指定工作区，列表下方显示的是各自的真实目录。
+        parts.push(groupSectionHTML('__ungrouped__', t('workspace.ungrouped'), t('workspace.ungroupedHint'), ungrouped, false));
       }
     }
     if (parts.length === 0) {
@@ -440,6 +467,7 @@
     const cwd = s && s.cwd;
     // canOpenPath 为 false 时（远程/容器部署）灰掉"在文件夹中显示"，而不是点击后才报错
     const canOpen = !hostCaps || hostCaps.canOpenPath !== false;
+    const current = workspaceOf(sessionId);
     window.__ctxMenu.open(x, y, [
       { label: t('session.action.rename'), onSelect: () => beginRename(sessionId) },
       { label: t('session.action.fork'), title: t('session.fork.menuTitle'), onSelect: () => forkSession(sessionId) },
@@ -450,10 +478,60 @@
         title: !cwd ? t('session.showInFolder.noCwd') : (!canOpen ? t('host.openPath.unavailable') : cwd),
         onSelect: () => openPath(cwd),
       },
+      // 归入工作区：把会话从「未归入工作区」挪到真实工作区（引擎 workspace.insertSessionBefore）。
+      // 只有在这里才能真正"修好"历史遗留会话 —— 否则它们的目录永远只挂在会话上、分组里看不到归属。
+      {
+        label: current ? t('session.action.changeWorkspace') : t('session.action.assignWorkspace'),
+        title: cwd ? t('session.assignWorkspace.hint', { dir: cwd }) : t('session.showInFolder.noCwd'),
+        onSelect: () => openAssignWorkspaceMenu(sessionId),
+      },
       { label: t('export.menuLabel'), onSelect: () => exportSessionMarkdown(sessionId) },
       { separator: true },
       { label: t('session.action.delete'), danger: true, onSelect: () => deleteSession(sessionId) },
     ]);
+  }
+
+  /** 「归入工作区」选择器：列出现有工作区 + "用这条会话的目录新建一个" */
+  function openAssignWorkspaceMenu(sessionId) {
+    const s = sessions.find((v) => v.sessionId === sessionId);
+    const cwd = (s && s.cwd) || '';
+    const current = workspaceOf(sessionId);
+    const items = workspaces.map((w) => ({
+      label: `${(current && current.workspaceId === w.workspaceId) ? '✓ ' : ''}${w.title || w.path || t('workspace.unnamed')}`,
+      title: w.path || '',
+      onSelect: () => assignSessionToWorkspace(sessionId, w.workspaceId),
+    }));
+    if (items.length) items.push({ separator: true });
+    items.push({
+      label: t('session.assignWorkspace.createFromDir'),
+      disabled: !cwd,
+      title: cwd || '',
+      onSelect: () => createWorkspaceFromSession(sessionId),
+    });
+    const anchor = sessionsEl.querySelector(`.chat-session[data-id="${sessionId}"]`);
+    const rect = anchor ? anchor.getBoundingClientRect() : null;
+    window.__ctxMenu.open(rect ? rect.left + 12 : 200, rect ? rect.bottom - 4 : 200, items);
+  }
+
+  async function assignSessionToWorkspace(sessionId, workspaceId) {
+    const r = await api.chatMoveSession(workspaceId, sessionId);   // 位置参数：workspaceId, sessionId
+    if (!r.ok) { showChatError(t('session.assignWorkspace.failed', { error: r.error })); return; }
+    await loadWorkspaces();
+    refreshSessions();
+  }
+
+  /** 用这条会话的真实目录新建一个工作区，并把它归进去（目录来自引擎的 session.cwd） */
+  async function createWorkspaceFromSession(sessionId) {
+    const s = sessions.find((v) => v.sessionId === sessionId);
+    const cwd = (s && s.cwd) || '';
+    if (!cwd) { showChatError(t('session.showInFolder.noCwd')); return; }
+    const add = await api.addWorkspace(cwd);
+    if (!add.ok) { showChatError(t('workspace.addFailed', { error: add.error })); return; }
+    const ws = add.workspace || add.item || null;
+    const id = ws && (ws.workspaceId || ws.id);
+    await loadWorkspaces();
+    if (id) await assignSessionToWorkspace(sessionId, id);
+    else refreshSessions();
   }
 
   async function forkSession(sessionId) {
@@ -1332,9 +1410,21 @@
     return div;
   }
 
+  /** 角色行（小头像点 + 名称 + 时间）。"廉价感"的一个来源就是消息没有任何身份标记。 */
+  function ensureRoleRow(div) {
+    if (!div || div.querySelector(':scope > .msg-role')) return;
+    const now = new Date();
+    const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const role = document.createElement('div');
+    role.className = 'msg-role';
+    role.innerHTML = `<span class="msg-role-dot">D</span><span class="msg-role-name">DeepSeek</span><span class="msg-role-time">${hhmm}</span>`;
+    div.insertBefore(role, div.firstChild);
+  }
+
   function makeAssistantMsg() {
     const div = document.createElement('div');
     div.className = 'msg msg-assistant pending';
+    ensureRoleRow(div);
     messagesEl.appendChild(div);
     return div;
   }
@@ -1629,8 +1719,10 @@
     return el;
   }
 
-  function renderAssistantContent(container, content, meta) {
-    container.innerHTML = '';
+function renderAssistantContent(container, content, meta) {
+  container.innerHTML = '';
+  container.classList.remove('pending');
+  ensureRoleRow(container);   // 定稿会清空容器 → 角色行要补回来（否则只有流式阶段有身份标记）
     for (const block of content || []) {
       if (block.type === 'reasoning' && block.text) {
         const d = document.createElement('details');
@@ -2517,10 +2609,12 @@ class ReferencePanel {
       return !workspaceOf(s.sessionId);
     });
     if (blanks.length > 0) {
+      rememberWorkspace(workspaceId);
       await openSession(blanks[0].sessionId);
       return;
     }
     const r = await api.chatCreate(workspaceId ? { workspaceId } : null);
+    rememberWorkspace(workspaceId);
     if (!r.ok) {
       themedAlert('创建会话失败：' + r.error, '星际通讯中断');
       return;
@@ -2533,9 +2627,32 @@ class ReferencePanel {
   // 「＋ 新会话」：一键开聊，不再强制选择工作区。
   //  - 处于工作区筛选视图 → 新会话归属该工作区（保证创建后立即可见）
   //  - 否则 → 直接在默认目录开"闲聊"会话（未分组），点击即可对话
+  /**
+   * 新建会话。
+   *
+   * 🔴 「全部」视图下**不再**回落成"没工作区"：以前 currentWorkspaceId 为 null 时会把 cwd 交给
+   * 主进程的默认目录（= 引擎目录），于是新会话跑在引擎目录里、落在「未归入工作区」里，
+   * 用户点"打开工作区"看到的是源码文件夹。现在：
+   *   ① 有筛选中的工作区 → 用它；② 没有则用**上次用过的工作区**；
+   *   ③ 一个工作区都没有 → 直接引导选目录建工作区（绝不静默用引擎目录）。
+   */
   async function newSession() {
     if (!running) return;
-    await createSessionInWorkspace(currentWorkspaceId);
+    if (currentWorkspaceId) { await createSessionInWorkspace(currentWorkspaceId); return; }
+    const last = readLastWorkspace();
+    const target = workspaces.find((w) => w.workspaceId === last)
+      || workspaces.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0];
+    if (target) { await createSessionInWorkspace(target.workspaceId); return; }
+    // 没有任何工作区：引导建一个（选目录 → workspace.create），而不是拿引擎目录凑合
+    showChatError(t('workspace.needOne'));
+    await pickWorkspaceFolder();
+  }
+
+  function readLastWorkspace() {
+    try { return localStorage.getItem(LAST_WS_KEY) || ''; } catch { return ''; }
+  }
+  function rememberWorkspace(id) {
+    try { if (id) localStorage.setItem(LAST_WS_KEY, id); } catch { /* ignore */ }
   }
 
   // 从电脑上选一个文件夹作为工作区（原生目录选择器）。

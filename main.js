@@ -1200,12 +1200,18 @@ ipcMain.handle('chat:disconnect', () => {
 ipcMain.handle('chat:list', async () => {
   const r = await rpcCall('session.list', {});
   if (!r.ok) return { ok: false, error: r.error?.message || 'session.list failed' };
+  // 🔴 cwd / agentPreset 必须带出去：引擎的 session.list **本来就给** cwd，
+  //    之前这里只挑走 title/running/blank 把 cwd 丢了 —— 于是渲染层拿不到"这条会话在哪个目录"，
+  //    "打开工作区/在文件夹中打开"只能回落到默认目录（引擎目录），
+  //    用户看到的就变成"打开工作区却打开了 harness 源码文件夹"（真机确认过的 bug）。
   const items = (r.value?.items || []).map((it) => ({
     sessionId: it.sessionId,
     title: it.projections?.values?.title || '新会话',
     running: !!it.running,
     blank: !!it.blank,
     updatedAt: it.updatedAt,
+    cwd: typeof it.cwd === 'string' ? it.cwd : '',
+    agentPreset: it.agentPreset || '',
   }));
   items.sort((a, b) => b.updatedAt - a.updatedAt);
   return { ok: true, items };
@@ -1223,7 +1229,9 @@ ipcMain.handle('chat:create', async (_e, options) => {
 ipcMain.handle('chat:workspaces', async () => {
   const r = await rpcCall('workspace.list', {});
   if (!r.ok) return { ok: false, error: r.error?.message || 'workspace.list failed' };
-  return { ok: true, items: r.value?.items || [], archivedSessionIds: r.value?.archivedSessionIds || [] };
+  // defaultDir 是"没指定工作区时的兜底目录"（引擎目录）—— 渲染层用它来识别
+  // 「目录落在引擎目录里的历史会话」并给出提醒（真机确认过：那种会话打开"工作区"会是源码目录）
+  return { ok: true, items: r.value?.items || [], archivedSessionIds: r.value?.archivedSessionIds || [], defaultDir: defaultWorkspaceDir() };
 });
 ipcMain.handle('chat:pickWorkspaceDir', async () => {
   // 原生目录选择器：让用户从电脑上选一个文件夹作为工作区

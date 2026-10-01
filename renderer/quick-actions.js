@@ -22,6 +22,34 @@
   const addrInput = document.getElementById('qaAddr');
   if (!panel || !review || !browser) return;
 
+  /**
+   * 把三块搬进**对话区右侧的一列**（`.qa-dock`），而不是让它们浮在整个窗口上。
+   * 用户反馈"右侧预览框跟应用是割裂的"—— 浮层卡片压在壁纸上、自带阴影，确实像贴上去的。
+   * 现在它跟左侧会话列表一样是 `.chat-shell` 里的一列：同一套面板底色/边框/圆角，
+   * 开关按钮也搬进工具条（不再有右下角那颗悬浮 ＋）。
+   */
+  let dock = null;
+  const shell = document.querySelector('.chat-shell');
+  const toolbar = document.getElementById('chatToolbar');
+  if (shell) {
+    dock = document.createElement('aside');
+    dock.className = 'qa-dock';
+    dock.id = 'qaDock';
+    dock.hidden = true;
+    dock.innerHTML = `<div class="qa-dock-head">
+        <span class="qa-dock-title">快捷动作</span>
+        <button type="button" class="mini-btn qa-dock-close" title="收起">✕</button>
+      </div>
+      <div class="qa-dock-body"></div>`;
+    shell.appendChild(dock);
+    const body = dock.querySelector('.qa-dock-body');
+    body.appendChild(panel);
+    body.appendChild(review);
+    body.appendChild(browser);
+    dock.querySelector('.qa-dock-close').addEventListener('click', () => closeAll());
+  }
+  if (toolbar && toggleBtn) toolbar.appendChild(toggleBtn);   // 工具条按钮（配合 .qa-toggle 的静态定位）
+
   let dir = '';
   let browserOpen = false;
   let lastReview = null;
@@ -32,6 +60,10 @@
   }
 
   async function resolveDir() {
+    // 同 git-bar：优先当前会话的真实目录（cwd），再退回工作区路径。
+    // "打开工作区文件/审阅/终端"都该作用在你正在聊的那个目录上。
+    const fromCwd = window.__ws && typeof window.__ws.cwd === 'function' ? window.__ws.cwd() : '';
+    if (fromCwd) return fromCwd;
     const fromChat = window.__ws && typeof window.__ws.path === 'function' ? window.__ws.path() : '';
     if (fromChat) return fromChat;
     try {
@@ -135,6 +167,7 @@
   }
 
   async function actBrowser(url) {
+    ensureDock();
     if (!browserOpen) {
       browser.hidden = false;
       browserOpen = true;
@@ -170,14 +203,30 @@
   });
 
   // ---------------------------------------------------------------- 面板开合
+  /** 审阅/浏览器都在这一列里 —— 用它之前先把列打开，否则"点了没反应" */
+  function ensureDock() {
+    if (dock && dock.hidden) { dock.hidden = false; if (shell) shell.classList.add('qa-open'); }
+  }
+
   function closeAll() {
     panel.hidden = true;
     review.hidden = true;
     closeBrowser();
+    if (dock) dock.hidden = true;          // 整列收起（右侧让回给消息区）
+    if (shell) shell.classList.remove('qa-open');
   }
 
   function togglePanel() {
-    if (panel.hidden) { panel.hidden = false; } else { closeAll(); }
+    if (dock && dock.hidden) {
+      dock.hidden = false;
+      shell && shell.classList.add('qa-open');
+      panel.hidden = false;
+      review.hidden = true;
+      // 打开时顺带刷新一下目录（可能刚切过会话）
+      dir = '';
+    } else {
+      closeAll();
+    }
   }
 
   if (toggleBtn) {
@@ -191,7 +240,7 @@
       if (a === 'folder') actOpenFolder();
       else if (a === 'sideTask') actSideTask();
       else if (a === 'browser') actBrowser();
-      else if (a === 'review') { panel.hidden = true; review.hidden = false; renderReview(); }
+      else if (a === 'review') { ensureDock(); panel.hidden = true; review.hidden = false; renderReview(); }
       else if (a === 'terminal') actTerminal();
     });
   });
@@ -228,12 +277,11 @@
     const mod = e.ctrlKey || e.metaKey;
     if (e.altKey && !mod && (e.key === 'e' || e.key === 'E')) { e.preventDefault(); actOpenFolder(); return; }
     if (mod && !e.shiftKey && (e.key === 't' || e.key === 'T')) { e.preventDefault(); actBrowser(); return; }
-    if (mod && e.shiftKey && (e.key === 'g' || e.key === 'G')) { e.preventDefault(); review.hidden = false; renderReview(); return; }
+    if (mod && e.shiftKey && (e.key === 'g' || e.key === 'G')) { e.preventDefault(); ensureDock(); review.hidden = false; renderReview(); return; }
     if (mod && e.shiftKey && (e.key === 'j' || e.key === 'J')) { e.preventDefault(); actTerminal(); return; }
     if (e.key === 'Escape') {
-      if (!panel.hidden) panel.hidden = true;
-      else if (!review.hidden) review.hidden = true;
-      else if (browserOpen) closeBrowser();
+      if (browserOpen) closeBrowser();
+      else if (dock && !dock.hidden) closeAll();
     }
   });
 
@@ -242,5 +290,5 @@
     if (!review.hidden) renderReview();
   });
 
-  window.__quickActions = { open: () => { panel.hidden = false; }, close: closeAll, openReview: () => { review.hidden = false; renderReview(); }, openBrowser: actBrowser };
+  window.__quickActions = { open: () => { panel.hidden = false; }, close: closeAll, openReview: () => { ensureDock(); review.hidden = false; renderReview(); }, openBrowser: actBrowser };
 })();

@@ -28,7 +28,16 @@ window.__dshLocales['en-US'] = {
 
   // ---- Workspace grouping ----
   'workspace.unnamed': 'Unnamed workspace',
-  'workspace.ungrouped': 'Ungrouped',
+  'session.action.assignWorkspace': 'Assign to workspace…',
+  'session.action.changeWorkspace': 'Change workspace…',
+  'session.assignWorkspace.hint': 'Move this session into a workspace (current dir: {dir})',
+  'session.assignWorkspace.createFromDir': 'Create workspace from this directory',
+  'session.assignWorkspace.failed': 'Assign failed: {error}',
+  'session.dir.engineWarn': '(dir is the Harness engine dir: this session was created without a workspace; consider assigning one)',
+  'workspace.needOne': 'No workspace yet: pick a folder as a workspace before creating a session (the engine dir is no longer used as a fallback).',
+  'workspace.addFailed': 'Create workspace failed: {error}',
+  'workspace.ungroupedHint': 'These sessions were created without a workspace, so they belong to no group. The small line under each shows its real working directory; right-click to assign one.',
+  'workspace.ungrouped': 'Unassigned',
 
   // ---- Rename ----
   'session.rename.empty': 'Name cannot be empty',

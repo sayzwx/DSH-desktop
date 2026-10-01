@@ -212,6 +212,10 @@ const OPEN_PANELS_JS = `(async () => {
     report.git = { workspaceDir: wsDir && wsDir.dir, ...statusDir };
     console.log('真 git 状态:', JSON.stringify(report.git).slice(0, 300));
 
+    // 切到对话页：快捷动作列属于对话页（不是浮层），不切页它的占位矩形是 0×0
+    await evalJs(`(() => { const b = document.querySelector('.nav-btn[data-page="chat"]'); if (b) b.click(); return !!b; })()`);
+    await sleep(2000);
+
     // ---------- 真 git 全链路：造一个真仓库，走完 状态→新建分支→切回→改动→diff→初始化 ----------
     // 仓库放在**用户主目录下**（保证落在白名单内）；用真 git（应用进程能 spawn，这正是真机测试的价值）
     console.log('  [步骤] 真仓库全链路…');

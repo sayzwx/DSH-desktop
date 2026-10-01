@@ -32,6 +32,10 @@
 
   /** 当前工作区目录：渲染层优先，主进程兜底 */
   async function resolveDir() {
+    // 优先"当前会话的真实运行目录"（cwd），其次才是筛选用的工作区路径 ——
+    // 在「全部」视图下工作区路径是空的，只看 path() 会回落到引擎目录（真机 bug）。
+    const fromCwd = window.__ws && typeof window.__ws.cwd === 'function' ? window.__ws.cwd() : '';
+    if (fromCwd) return fromCwd;
     const fromChat = window.__ws && typeof window.__ws.path === 'function' ? window.__ws.path() : '';
     if (fromChat) return fromChat;
     try {

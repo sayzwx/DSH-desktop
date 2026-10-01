@@ -86,7 +86,19 @@ for (const ch of [...new Set([...preloadSrc.matchAll(/ipcRenderer\.invoke\('([^'
       if (level >= 2) report.consoleErrors.push(String(message).slice(0, 200));
     });
     await win.loadFile(path.join(ROOT, 'renderer', 'index.html'));
-    await wait(2500);
+    await wait(2000);
+    // 🔴 必须切到**对话页**：快捷动作列现在是 .chat-shell 里的一列（不再是 fixed 浮层），
+    //    停在仪表盘页时它所在的页面 display:none → 占位矩形恒为 0×0（真机审计也踩过）。
+    await win.webContents.executeJavaScript(
+      `(() => {
+        const b = document.querySelector('.nav-btn[data-page="chat"]'); if (b) b.click();
+        // e2e 里没有引擎 → 应用会把对话外壳隐藏（.chat-shell display:none），
+        // 而快捷动作列现在是它里面的一列 → 不强制显示就量不到尺寸（不是产品问题，是夹具缺引擎）。
+        const shell = document.querySelector('.chat-shell');
+        if (shell) shell.style.display = 'flex';
+        return true;
+      })()`, true);
+    await wait(1500);
     const js = (expr) => win.webContents.executeJavaScript(expr, true);
 
     // ---------- 1. 主进程 git 能力 ----------
@@ -223,7 +235,21 @@ for (const ch of [...new Set([...preloadSrc.matchAll(/ipcRenderer\.invoke\('([^'
       const st = await window.api.browserState();
       const el = document.getElementById('qaBrowser');
       const slot = document.getElementById('qaBrowserView').getBoundingClientRect();
-      return { open: st.open, url: st.url, panelHidden: el.hidden, slot: [Math.round(slot.width), Math.round(slot.height)] };
+      const dock = document.getElementById('qaDock');
+      const chatPage = document.getElementById('page-chat');
+      const box = (e) => { if (!e) return null; const r = e.getBoundingClientRect(); const c = getComputedStyle(e); return { w: Math.round(r.width), h: Math.round(r.height), display: c.display, hidden: e.hidden }; };
+      return {
+        open: st.open, url: st.url, panelHidden: el.hidden,
+        slot: [Math.round(slot.width), Math.round(slot.height)],
+        diag: {
+          chatActive: chatPage ? chatPage.classList.contains('active') : null,
+          chatDisplay: chatPage ? getComputedStyle(chatPage).display : null,
+          shell: box(document.querySelector('.chat-shell')),
+          dock: box(dock),
+          browser: box(document.getElementById('qaBrowser')),
+          slotBox: box(document.getElementById('qaBrowserView')),
+        },
+      };
     })()`);
     steps.push({ step: '7 · 内置浏览器', detail: bopen });
     checkTrue('浏览器视图创建成功', bopen.open === true, bopen);

@@ -24,7 +24,16 @@ window.__dshLocales['zh-CN'] = {
 
   // ---- 工作区分组 ----
   'workspace.unnamed': '未命名工作区',
-  'workspace.ungrouped': '未分组',
+  'session.action.assignWorkspace': '归入工作区…',
+  'session.action.changeWorkspace': '更改所属工作区…',
+  'session.assignWorkspace.hint': '让这条会话归入某个工作区（当前目录：{dir}）',
+  'session.assignWorkspace.createFromDir': '用这条会话的目录新建工作区',
+  'session.assignWorkspace.failed': '归入工作区失败：{error}',
+  'session.dir.engineWarn': '（目录是 Harness 引擎目录：建这条会话时没选工作区，建议归入一个工作区）',
+  'workspace.needOne': '还没有工作区：请先选一个文件夹作为工作区再新建会话（不会再拿引擎目录凑合）。',
+  'workspace.addFailed': '创建工作区失败：{error}',
+  'workspace.ungroupedHint': '这些会话建立时没有指定工作区，所以不属于任何分组。每条下面的小字是它的真实运行目录；右键可「归入工作区」。',
+  'workspace.ungrouped': '未归入工作区',
 
   // ---- 重命名 ----
   'session.rename.empty': '名称不能为空',
