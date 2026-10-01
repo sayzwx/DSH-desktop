@@ -37,7 +37,7 @@
     dock.id = 'qaDock';
     dock.hidden = true;
     dock.innerHTML = `<div class="qa-dock-head">
-        <span class="qa-dock-title">快捷动作</span>
+        <span class="qa-dock-title">侧边预览</span>
         <button type="button" class="mini-btn qa-dock-close" title="收起">✕</button>
       </div>
       <div class="qa-dock-body"></div>`;
@@ -203,9 +203,20 @@
   });
 
   // ---------------------------------------------------------------- 面板开合
+  /** 同步工具条按钮的按下态（aria-pressed + active 类）——图标按钮没按下态就看不出开关 */
+  function syncToggle() {
+    if (!toggleBtn) return;
+    const open = !!(dock && !dock.hidden);
+    toggleBtn.setAttribute('aria-pressed', open ? 'true' : 'false');
+    toggleBtn.classList.toggle('active', open);
+    toggleBtn.title = open
+      ? '收起侧边预览'
+      : '侧边预览（打开工作区文件 / 侧边任务 / 内置浏览器 / 审阅 / 终端）';
+  }
+
   /** 审阅/浏览器都在这一列里 —— 用它之前先把列打开，否则"点了没反应" */
   function ensureDock() {
-    if (dock && dock.hidden) { dock.hidden = false; if (shell) shell.classList.add('qa-open'); }
+    if (dock && dock.hidden) { dock.hidden = false; if (shell) shell.classList.add('qa-open'); syncToggle(); }
   }
 
   function closeAll() {
@@ -214,6 +225,7 @@
     closeBrowser();
     if (dock) dock.hidden = true;          // 整列收起（右侧让回给消息区）
     if (shell) shell.classList.remove('qa-open');
+    syncToggle();
   }
 
   function togglePanel() {
@@ -224,6 +236,7 @@
       review.hidden = true;
       // 打开时顺带刷新一下目录（可能刚切过会话）
       dir = '';
+      syncToggle();
     } else {
       closeAll();
     }
@@ -232,6 +245,7 @@
   if (toggleBtn) {
     toggleBtn.hidden = false;
     toggleBtn.addEventListener('click', (e) => { e.stopPropagation(); togglePanel(); });
+    syncToggle();   // 初始态：aria-pressed=false + 正确的悬停提示
   }
 
   document.querySelectorAll('#qaPanel [data-act]').forEach((btn) => {

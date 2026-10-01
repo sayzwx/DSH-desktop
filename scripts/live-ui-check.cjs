@@ -116,7 +116,41 @@ const ok = (name, cond, detail) => { if (cond) { passed++; return; } failures.pu
     ok('列在输入框右侧（不遮住发送按钮）', layout && layout.dockRightOfInput === true && layout.sendBox && layout.dockBox && layout.sendBox.x + layout.sendBox.w <= layout.dockBox.x + 2, layout && { send: layout.sendBox, dock: layout.dockBox });
     ok('开关按钮在工具条里', layout && layout.toggleInToolbar === true);
 
+    // 按钮形态：必须是"侧边面板"图标而不是 ＋（＋ 会被理解成"新增"），且打开时要有按下态
+    const btn = await js(`(() => {
+      const b = document.getElementById('ctQuickBtn');
+      if (!b) return null;
+      return {
+        text: (b.textContent || '').trim(),
+        hasSvg: !!b.querySelector('svg'),
+        svgRects: b.querySelectorAll('svg rect, svg path').length,
+        pressed: b.getAttribute('aria-pressed'),
+        activeClass: b.classList.contains('active'),
+        title: b.title,
+        box: (() => { const r = b.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; })(),
+        color: getComputedStyle(b).color,
+        svgBox: (() => { const sv = b.querySelector('svg'); if (!sv) return null; const r = sv.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; })(),
+      };
+    })()`);
+    console.log('开关按钮:', JSON.stringify(btn));
+    ok('按钮不是 ＋ 文字', btn && btn.text.includes('＋') === false, btn && btn.text);
+    ok('按钮是图标（内联 SVG）', btn && btn.hasSvg === true && btn.svgRects >= 2, btn);
+    ok('按钮有按下态（aria-pressed=true）', btn && btn.pressed === 'true' && btn.activeClass === true, btn);
+    ok('悬停提示说清是侧边预览', btn && /侧边预览/.test(btn.title || ''), btn && btn.title);
+    ok('按钮可见且有尺寸（没被工具条挤掉）', btn && btn.box[0] >= 20 && btn.box[1] >= 18, btn && btn.box);
+    ok('图标本身渲染出来了', btn && btn.svgBox && btn.svgBox[0] >= 10, btn && btn.svgBox);
+
     // ---------- 2. 消息区排版 ----------
+    // 没有消息就量不到排版（会得到 null 然后假失败）→ 先点一条会话把它渲染出来
+    const picked = await js(`(async () => {
+      if (document.querySelector('.msg-md')) return 'already';
+      const rows = [...document.querySelectorAll('.chat-session')];
+      if (!rows.length) return 'no-sessions';
+      rows[0].click();
+      await new Promise((r) => setTimeout(r, 3000));
+      return document.querySelector('.msg-md') ? 'clicked' : 'still-empty';
+    })()`);
+    if (picked !== 'already') console.log('  （消息区准备:', picked, '）');
     const typo = await js(`(() => {
       const md = document.querySelector('.msg-md');
       const code = document.querySelector('.md-code pre');
@@ -133,9 +167,14 @@ const ok = (name, cond, detail) => { if (cond) { passed++; return; } failures.pu
       };
     })()`);
     console.log('排版:', JSON.stringify(typo).slice(0, 300));
-    ok('正文字号 ≥14px', typo && parseFloat(typo.msgFont) >= 14, typo && typo.msgFont);
-    if (typo && typo.codeFont) ok('代码块字号 ≥12px', parseFloat(typo.codeFont) >= 12, typo.codeFont);
-    if (typo && typo.roleRows > 0) ok('助手消息有角色行', typo.roleRows > 0, typo.roleRows);
+    if (!typo || !typo.msgFont) {
+      console.log('  （跳过排版断言：这条会话没有已渲染的消息）');
+    } else {
+      ok('正文字号 ≥14px', parseFloat(typo.msgFont) >= 14, typo.msgFont);
+      ok('助手消息不套气泡', typo.assistantNoBubble === true, typo.assistantNoBubble);
+      ok('助手消息有角色行', typo.roleRows > 0, typo.roleRows);
+      if (typo.codeFont) ok('代码块字号 ≥12px', parseFloat(typo.codeFont) >= 12, typo.codeFont);
+    }
 
     // ---------- 3. 产物卡片 ----------
     const art = await js(`(async () => {

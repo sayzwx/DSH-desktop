@@ -5410,22 +5410,33 @@ input[type="text"]:focus, input[type="password"]:focus, input:not([type]):focus,
 .qa-text b { font-size: 13px; }
 .qa-text small { font-size: 11px; }
 
-/* 工具条里的开关按钮（原来是右下角悬浮胶囊） */
+/* 工具条里的"侧边预览"开关（原来是右下角悬浮的 ＋ 胶囊 —— ＋ 挨着「原始事件」会被当成"新增"） */
 .qa-toggle {
   position: static;
-  width: auto;
-  height: auto;
-  min-width: 26px;
-  padding: 0 8px;
-  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  border-radius: 7px;
   border: 1px solid var(--border-strong);
   background: color-mix(in srgb, var(--abyss) 70%, transparent);
-  color: var(--text);
-  font-size: 13px;
-  line-height: 20px;
+  color: var(--text-dim);
+  line-height: 1;
   box-shadow: none;
+  transition: color 0.16s, border-color 0.16s, background 0.16s;
 }
-.qa-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.qa-toggle svg { display: block; }
+.qa-toggle:hover { color: var(--accent); border-color: var(--accent); }
+/* 按下态：图标按钮没有"开着/关着"的视觉差，用户就不知道点了有没有生效 */
+.qa-toggle.active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border-strong));
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+:root[data-theme="light"] .qa-toggle { background: var(--panel); color: var(--text-dim); }
+:root[data-theme="light"] .qa-toggle.active { background: color-mix(in srgb, var(--accent) 14%, #fff); color: var(--accent); }
 
 /* 审阅面板：列内铺满，不再 fixed 全高 */
 .qa-side {

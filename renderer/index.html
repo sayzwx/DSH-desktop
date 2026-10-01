@@ -667,11 +667,16 @@
     </div>
   </footer>
 
-  <!-- ============ 右侧快捷动作：浮动动作列 + 审阅面板 + 内置浏览器 ============
-       对齐 Qoder 的交互：右下角 ＋ 打开动作列；动作列里可开审阅 / 内置浏览器 / 终端。
-       内置浏览器用的是主进程的 WebContentsView（独立 webContents，不受页面 CSP 限制），
-       #qaBrowserView 只是"占位矩形"，实际网页由主进程贴在这个矩形上。 -->
-  <button class="qa-toggle" id="ctQuickBtn" type="button" hidden title="快捷动作（打开工作区文件 / 侧边任务 / 内置浏览器 / 审阅 / 终端）">＋</button>
+  <!-- ============ 侧边预览（右侧动作列）：浮动动作列 + 审阅面板 + 内置浏览器 ============
+       按钮在工具条里，图标是"右侧面板"而不是 ＋（＋ 挨着「原始事件」会被理解成"新增"）。 -->
+  <button class="mini-btn qa-toggle" id="ctQuickBtn" type="button" hidden
+          aria-pressed="false"
+          title="侧边预览（打开工作区文件 / 侧边任务 / 内置浏览器 / 审阅 / 终端）">
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+      <rect x="1.6" y="3" width="12.8" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.2" />
+      <path d="M9.8 3h2.6a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H9.8z" fill="currentColor" opacity="0.55" />
+    </svg>
+  </button>
   <div class="qa-panel" id="qaPanel" hidden>
     <button class="qa-card" data-act="folder" type="button">
       <span class="qa-ico">🗀</span>
