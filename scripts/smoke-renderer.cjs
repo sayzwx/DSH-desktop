@@ -12,6 +12,7 @@
  * 用法: node scripts/smoke-renderer.cjs
  */
 const http = require('node:http');
+const fs = require('node:fs');
 const path = require('node:path');
 const { spawn, execSync } = require('node:child_process');
 
@@ -776,6 +777,15 @@ async function main() {
       check('卡片带图标', panels.fileIcons, true);
       check('卡片有两个悬停操作', panels.fileActs, true);
       check('产物列表可滚动（产物多时不截断）', panels.fileListScrolls, true);
+    }
+
+    // --- 市场页：未就绪时的状态区分与自动重试（2026-10-01 用户报"更新后市场加载不出来"）---
+    {
+      const mk = fs.readFileSync(path.join(ROOT, 'renderer', 'market.js'), 'utf8');
+      check('区分"正在启动"与"没启动"（不再一律说请先启动）', /Harness 引擎正在启动/.test(mk) && /state === 'starting'/.test(mk), true);
+      check('未就绪时自动重试（不靠用户点重试）', /scheduleAutoRetry\(p\)/.test(mk) && /autoRetryTimer/.test(mk), true);
+      check('需要人工动作时不空转（重启/允许构建）', /p\.needsRestart \|\| p\.installedNotLoaded/.test(mk), true);
+      check('就绪后停止轮询再进入加载', /stopAutoRetry\(\);/.test(mk), true);
     }
 
     // --- 轨道 D：原始事件抽屉 ---

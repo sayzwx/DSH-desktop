@@ -180,7 +180,19 @@
     const hs = await api.getStatus().catch(() => null);
     const harnessRunning = !!(hs && (hs.state === 'running' || hs.webUp));
     const r = await get('/dsh-market/status');
-    if (!harnessRunning) return { ok: false, reason: '请先启动 Harness 引擎。' };
+    if (!harnessRunning) {
+      // 🔴 区分"正在启动"与"没启动"：之前两者都报"请先启动 Harness 引擎"——
+      //    用户在引擎冷启动期间打开市场页，看到的是**误导性**文案，而且
+      //    引擎就绪后页面**不会自己回来**（实测：state=starting → 停在未就绪界面）。
+      const starting = !!(hs && (hs.state === 'starting' || hs.state === 'installing'));
+      return {
+        ok: false,
+        starting,
+        reason: starting
+          ? 'Harness 引擎正在启动…（首次或刚更新后会慢一些，就绪后本页会自动加载）'
+          : '请先启动 Harness 引擎。',
+      };
+    }
     // dshmarket 未加载：harness 把 /dsh-market/* fallback 到 HTML（HTTP 200 但 data 是 <html> 字符串），
     // r.ok=true 但语义上是「没装好」。检测 data 是不是对象且有 version 字段。
     const dataLooksLikeStatus = r.ok && r.data && typeof r.data === 'object' && (r.data.version || r.data.name);
@@ -1173,6 +1185,34 @@
   }
 
   // ---------------- 启动 ----------------
+  /**
+   * 未就绪时的**自动重试**：引擎冷启动（或刚更新完）要几十秒，用户不该盯着一个
+   * "请先启动引擎"的界面干等 —— 每 2 秒自探一次，就绪后自动进入；最多等 120 秒。
+   * 需要用户动作的情况（要重启桌面端 / 装了没加载）不自动重试，避免白转圈。
+   */
+  let autoRetryTimer = null;
+  let autoRetryStart = 0;
+  function stopAutoRetry() {
+    if (autoRetryTimer) { clearInterval(autoRetryTimer); autoRetryTimer = null; }
+  }
+  function scheduleAutoRetry(p) {
+    stopAutoRetry();
+    if (p.needsRestart || p.installedNotLoaded) return;   // 需要人工：重启 / 允许构建
+    const baseReason = p.reason;
+    autoRetryStart = Date.now();
+    autoRetryTimer = setInterval(async () => {
+      const waited = Math.round((Date.now() - autoRetryStart) / 1000);
+      if (waited > 120) {
+        stopAutoRetry();
+        el.notReadyText.textContent = `${baseReason}\n（已等待 ${waited} 秒仍未就绪：可在「设置」里查看引擎日志，或点「启动 Harness」重试）`;
+        return;
+      }
+      el.notReadyText.textContent = `${baseReason}（已等待 ${waited} 秒…）`;
+      const again = await probeMarket();
+      if (again.ok) { stopAutoRetry(); boot(); }
+    }, 2000);
+  }
+
   async function boot() {
     const p = await probeMarket();
     if (!p.ok) {
@@ -1180,8 +1220,10 @@
       el.notReadyText.textContent = p.reason;
       el.tabs.hidden = true;
       el.body.hidden = true;
+      scheduleAutoRetry(p);
       return;
     }
+    stopAutoRetry();
     el.notReady.hidden = true;
     el.tabs.hidden = false;
     el.body.hidden = false;
