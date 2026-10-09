@@ -126,7 +126,8 @@ registerGitIpc({
   openTerminal: async (d) => { openedTerminal.push(d); },
   runCommand: fakeRun,
 });
-checkTrue('注册了 7 个 git 通道', handlers.size === 7, [...handlers.keys()]);
+checkTrue('注册了 8 个 git 通道（含 remoteUrl）', handlers.size === 8, [...handlers.keys()]);
+checkTrue('git:remoteUrl 在册（GitHub 面板自动带出当前仓库用）', handlers.has('git:remoteUrl'), true);
 const call = (ch, args) => handlers.get(ch)(null, args);
 
 const s1 = await call('git:status', { dir: REPO });

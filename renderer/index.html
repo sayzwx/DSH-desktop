@@ -19,13 +19,7 @@
        于是"背景"彻底没有落点 —— 模型实测就是给出「桌面端无对应挂载点」而放弃迁移壁纸。 -->
   <div id="themeBg" aria-hidden="true"></div>
 
-  <aside class="dock" id="dock" hidden>
-    <div class="dock-head">
-      <span class="dock-title" id="dockTitle">GitHub</span>
-      <button class="mini-btn dock-close" id="dockClose" type="button" title="关闭侧边栏">✕</button>
-    </div>
-    <div class="dock-body" id="dockBody"></div>
-  </aside>
+    <!-- 旧 #dock 抽屉已移除：GitHub 并入右侧栏，MCP/技能并入设置页 -->
 
   <aside class="sidebar" id="sidebar">
     <div class="logo">
@@ -54,17 +48,10 @@
       <button class="nav-btn" id="navMarket" data-page="market" title="浏览 / 搜索 / 一键安装社区插件，管理已装插件与主题">
         <span class="nav-icon">🛒</span><span class="nav-label">插件市场</span>
       </button>
-      <div class="nav-divider"></div>
-      <button class="nav-btn dock-btn" data-dock="github">
-        <span class="nav-icon">🐙</span><span class="nav-label">GitHub</span>
-      </button>
-      <button class="nav-btn dock-btn" data-dock="mcp">
-        <span class="nav-icon">🔌</span><span class="nav-label">MCP 工具</span>
-      </button>
-      <button class="nav-btn dock-btn" data-dock="skill">
-        <span class="nav-icon">🧠</span><span class="nav-label">技能</span>
-      </button>
     </nav>
+    <!-- 2026-10-09：GitHub / MCP / 技能 三个入口从左栏移除（用户反馈"过于割裂"）——
+         GitHub → 右侧栏第三个标签（浏览型，自动带出当前工作区仓库）；
+         MCP 服务 / 技能 → 「设置与主题」页的「集成」区块（配置型）。 -->
     <div class="sidebar-footer">
       <div class="status-pill" id="statusPill" title="引擎状态"><span class="dot"></span><span id="statusText">未运行</span></div>
       <div class="win-indicator" id="winIndicator" hidden title="已打开/后台的应用窗口（含辅助窗口）"><span class="wi-icon">🪟</span><span id="winIndicatorText">0</span></div>
@@ -266,6 +253,20 @@
     </section>
 
     <section class="page" id="page-settings">
+    <!-- 集成：MCP 服务 / 技能（原左栏抽屉迁入；dock.js 按容器渲染） -->
+    <div class="settings-integrations" id="settingsIntegrations">
+      <div class="si-head">集成</div>
+      <div class="si-card">
+        <div class="si-title">MCP 服务</div>
+        <div class="si-desc">已配置的 Model Context Protocol 服务器与其启动命令。</div>
+        <div id="mcpPanelRoot" class="si-body"><div class="dock-loading">切到本页时自动读取…</div></div>
+      </div>
+      <div class="si-card">
+        <div class="si-title">技能</div>
+        <div class="si-desc">引擎可调用的技能清单（含模型可用标记）。</div>
+        <div id="skillPanelRoot" class="si-body"><div class="dock-loading">切到本页时自动读取…</div></div>
+      </div>
+    </div>
       <div class="cosmic-title">
         <h1>观测站配置</h1>
         <p class="subtitle">分模块配置 · 点击模块标题展开 / 收起</p>

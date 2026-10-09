@@ -206,6 +206,7 @@ contextBridge.exposeInMainWorld('api', {
   // 分支名在白名单校验不过会被拒。
   gitWorkspaceDir: () => ipcRenderer.invoke('git:workspaceDir'),
   gitStatus: (dir) => ipcRenderer.invoke('git:status', { dir }),
+  gitRemoteUrl: (dir) => ipcRenderer.invoke('git:remoteUrl', { dir }),
   gitCheckout: (dir, branch) => ipcRenderer.invoke('git:checkout', { dir, branch }),
   gitCreateBranch: (dir, name, from) => ipcRenderer.invoke('git:createBranch', { dir, name, from }),
   gitInit: (dir) => ipcRenderer.invoke('git:init', { dir }),

@@ -10,42 +10,75 @@
   const $ = (s) => document.querySelector(s);
   const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-  const dock = $('#dock');
-  const dockTitle = $('#dockTitle');
-  const dockBody = $('#dockBody');
-  const dockClose = $('#dockClose');
+  // 2026-10-09 重构：独立的 #dock 抽屉取消，三个面板改为**按目标容器渲染**——
+  //   · GitHub → 右侧栏第三个标签「GitHub」（浏览型，独占标签；自动带出当前工作区仓库）
+  //   · MCP / 技能 → 「设置与主题」页的「集成」区块（配置型，语义上属于设置）
+  // 左侧栏的三个彩色 emoji 按钮随之移除（用户反馈"过于割裂"）。
+  // 🔴 GitHub 的渲染目标 #ghPanelRoot 由右侧栏（quick-actions.js）**动态创建**，
+  //    不能在模块加载时缓存（那时还不存在）—— 在 renderGithub 入口赋值。
+  let dockBody = null;
+  let dockBodyEl = null;       // 当前渲染目标（MCP/技能在设置页时指向它们的容器）
 
   let currentView = null;
   let ghUser = null;           // {login, name, avatar}
   let ghNav = null;            // {owner, repo, branch, defaultBranch}
   let ghTreeCache = null;      // {tree, truncated}
 
-  const TITLES = { github: 'GitHub', mcp: 'MCP 工具', skill: '技能' };
-
-  function openView(v) {
-    currentView = v;
-    dock.hidden = false;
-    dockTitle.textContent = TITLES[v] || v;
-    if (v === 'github') renderGithub();
-    else if (v === 'mcp') renderMcp();
-    else renderSkill();
+  /**
+   * GitHub 自动带出**当前工作区**的仓库：git remote get-url origin → owner/repo，
+   * 直接进文件树（当前分支）。之前要手动输 owner/repo，没人配得起这个流程。
+   */
+  function parseOwnerRepo(url) {
+    const m = /github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(String(url || '').trim());
+    return m ? { owner: m[1], repo: m[2] } : null;
+  }
+  async function autoOpenCurrentRepo() {
+    try {
+      const dir = (window.__ws && window.__ws.cwd()) || '';
+      if (!dir) return false;
+      const r = await api.gitRemoteUrl(dir);
+      const nav = r && r.ok && parseOwnerRepo(r.url);
+      if (!nav) return false;
+      ghNav = { owner: nav.owner, repo: nav.repo, url: `https://github.com/${nav.owner}/${nav.repo}` };
+      const st = await api.ghStatus();
+      ghUser = st && st.ok && st.connected ? st : null;
+      // 当前分支优先（git bar 已在用同一套状态）
+      try {
+        const br = await api.gitStatus(dir);
+        ghNav.branch = br && br.ok && br.current ? br.current : (ghNav.defaultBranch || null);
+      } catch { /* 没有就用默认分支 */ }
+      if (!ghNav.branch) { ghNav.repo && await renderBranches(); return true; }
+      ghTreeCache = null;
+      renderTree();
+      return true;
+    } catch { return false; }
   }
 
-  document.querySelectorAll('.dock-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const v = btn.dataset.dock;
-      if (currentView === v && !dock.hidden) {
-        dock.hidden = true;
-        currentView = null;
-        return;
-      }
-      openView(v);
+  // 对外接口：右侧栏标签切换时调用；设置页激活时刷新 MCP/技能
+  window.__dshDock = {
+    renderGithub: async (target) => {
+      dockBody = target || document.getElementById('ghPanelRoot') || null;
+      if (!dockBody) return;
+      dockBodyEl = dockBody;
+      currentView = 'github';
+      if (ghNav && ghNav.branch) { renderTree(); return; }
+      const auto = await autoOpenCurrentRepo();
+      if (auto) return;
+      await renderGithub();
+    },
+    renderMcp,
+    renderSkill,
+  };
+
+  // 设置页激活时刷新两个集成面板（懒加载：切到那页才拉数据）
+  document.querySelectorAll('.nav-btn[data-page="settings"]').forEach((b) => {
+    b.addEventListener('click', () => {
+      setTimeout(() => { renderMcp(); renderSkill(); }, 350);
     });
   });
-  dockClose.addEventListener('click', () => { dock.hidden = true; });
 
   function dockErr(msg) {
-    dockBody.innerHTML = `<div class="dock-empty">⚠ ${esc(msg)}</div>`;
+    dockBodyEl.innerHTML = `<div class="dock-empty">⚠ ${esc(msg)}</div>`;
   }
 
   // ================= GitHub =================
@@ -431,15 +464,18 @@
   }
 
   // ================= MCP =================
-  async function renderMcp() {
-    dockBody.innerHTML = '<div class="dock-loading">正在读取 MCP 服务器…</div>';
+  async function renderMcp(target) {
+    const body = target || $('#mcpPanelRoot');
+    if (!body) return;
+    dockBodyEl = body;
+    body.innerHTML = '<div class="dock-loading">正在读取 MCP 服务器…</div>';
     const r = await api.mcpList();
     const servers = r.ok ? r.servers || [] : [];
     if (!r.ok) {
       dockErr(r.error);
       return;
     }
-    dockBody.innerHTML = `<div class="dock-count">${servers.length} 个 MCP 服务器</div>` +
+    body.innerHTML = `<div class="dock-count">${servers.length} 个 MCP 服务器</div>` +
       (servers.length === 0
         ? `<div class="dock-empty">未配置 MCP 服务器。<br />在 <code>~/.dsh/profiles/web/cordis.yml</code> 中添加 <code>mcp-client</code> 行后重启生效。</div>`
         : servers.map((s) => `<div class="dock-mcp">
@@ -449,12 +485,15 @@
   }
 
   // ================= 技能 =================
-  async function renderSkill() {
-    dockBody.innerHTML = '<div class="dock-loading">正在读取技能…</div>';
+  async function renderSkill(target) {
+    const body = target || $('#skillPanelRoot');
+    if (!body) return;
+    dockBodyEl = body;
+    body.innerHTML = '<div class="dock-loading">正在读取技能…</div>';
     const r = await api.skillsList(null);
     if (!r.ok) { dockErr(r.error); return; }
     const skills = r.skills || [];
-    dockBody.innerHTML = `<div class="dock-count">${skills.length} 个技能</div>` +
+    body.innerHTML = `<div class="dock-count">${skills.length} 个技能</div>` +
       (skills.length === 0
         ? '<div class="dock-empty">暂无技能</div>'
         : skills.map((s) => `<div class="dock-skill">

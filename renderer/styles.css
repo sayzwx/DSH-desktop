@@ -5712,3 +5712,43 @@ input[type="text"]:focus, input[type="password"]:focus, input:not([type]):focus,
 :root[data-theme="light"] .qa-view-context .cd-section { background: #fff; }
 :root[data-theme="light"] .qa-view-context .cd-head { background: #f5f6f7; }
 :root[data-theme="light"] .qa-view-context .cd-file-card { background: #fff; }
+
+/* ============================================================
+   GitHub 独立标签（右侧栏）+ 设置页「集成」区块
+   GitHub 是浏览型（跟当前工作区强相关，独占标签）；MCP/技能是配置型（归设置页）。
+   左侧栏三个彩色 emoji 按钮已移除（用户反馈"过于割裂"）。
+   ============================================================ */
+.qa-view-github { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.gh-panel-root { flex: 1; min-height: 0; overflow-y: auto; padding: 2px; }
+.gh-panel-root .dock-breadcrumb { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.gh-panel-root .dock-crumb { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gh-panel-root .dock-tree { font-size: 12.5px; }
+.gh-panel-root .dock-count { font-size: 11px; color: var(--text-caption, var(--text-dim)); margin-bottom: 6px; }
+
+/* 设置页「集成」区块 */
+.settings-integrations { display: flex; flex-direction: column; gap: 12px; margin: 4px 0 18px; }
+.si-head {
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.si-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--panel) 85%, transparent);
+}
+.si-title { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.si-desc { margin: 3px 0 10px; font-size: 12px; color: var(--text-dim); }
+.si-body { min-height: 40px; }
+.si-body .dock-mcp, .si-body .dock-skill {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 6px;
+  background: color-mix(in srgb, var(--float) 40%, transparent);
+}
+:root[data-theme="light"] .si-card { background: #fff; }
+:root[data-theme="light"] .si-body .dock-mcp, :root[data-theme="light"] .si-body .dock-skill { background: #f7f8fa; }

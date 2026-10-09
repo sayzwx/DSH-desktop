@@ -39,6 +39,8 @@
   let contextDock = document.getElementById('chatContextDock');
   let viewContext = null;
   let viewActions = null;
+  let viewGithub = null;
+  let githubLoaded = false;
   const shell = document.querySelector('.chat-shell');
   const toolbar = document.getElementById('chatToolbar');
   if (shell) {
@@ -50,6 +52,7 @@
         <div class="qa-dock-tabs" role="tablist">
           <button type="button" class="qa-tab" data-qatab="context" role="tab">任务与产物</button>
           <button type="button" class="qa-tab" data-qatab="actions" role="tab">动作</button>
+          <button type="button" class="qa-tab" data-qatab="github" role="tab">GitHub</button>
         </div>
         <button type="button" class="mini-btn qa-dock-close" title="收起">✕</button>
       </div>
@@ -66,6 +69,11 @@
     viewActions.appendChild(panel);
     viewActions.appendChild(review);
     viewActions.appendChild(browser);
+    viewGithub = document.createElement('div');
+    viewGithub.className = 'qa-view qa-view-github';
+    viewGithub.hidden = true;
+    viewGithub.innerHTML = '<div id="ghPanelRoot" class="gh-panel-root"><div class="dock-loading">切到此标签时自动读取…</div></div>';
+    body.appendChild(viewGithub);
     dock.querySelector('.qa-dock-close').addEventListener('click', () => closeAll());
     dock.querySelector('.qa-dock-tabs').addEventListener('click', (e) => {
       const b = e.target.closest('.qa-tab');
@@ -76,12 +84,18 @@
 
   let activeTab = 'context';
   function switchTab(tab) {
-    activeTab = tab === 'actions' ? 'actions' : 'context';
+    activeTab = tab === 'actions' ? 'actions' : (tab === 'github' ? 'github' : 'context');
     if (dock) {
       dock.querySelectorAll('.qa-tab').forEach((b) => b.classList.toggle('active', b.dataset.qatab === activeTab));
     }
     if (viewContext) viewContext.hidden = activeTab !== 'context';
     if (viewActions) viewActions.hidden = activeTab !== 'actions';
+    if (viewGithub) viewGithub.hidden = activeTab !== 'github';
+    // GitHub 标签：首次切入才拉数据（懒加载）；内容由 dock.js 渲染进 #ghPanelRoot
+    if (activeTab === 'github' && !githubLoaded && window.__dshDock) {
+      githubLoaded = true;
+      window.__dshDock.renderGithub(document.getElementById('ghPanelRoot'));
+    }
   }
   /** 打开侧栏并切到指定标签（chat.js 在任务/产物出现时会调 openContext()） */
   function openContext() {
