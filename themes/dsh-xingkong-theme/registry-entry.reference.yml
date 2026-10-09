@@ -1,0 +1,17 @@
+# 收录用条目（PR 到 awesome-dsh-plugin 的 data/plugins/ 下）
+#
+# 目标文件：awesome-dsh-plugin/awesome-dsh-plugin → data/plugins/sayzwx__DSH-desktop.yml
+#   （文件名规则：<owner>__<repo>.yml，owner/repo 与仓库完全一致）
+# 规则要点（来自 contributing.md）：
+#   · 一个 PR 只加一个文件；README 由脚本生成，**不要手工编辑**
+#   · category 必须用 theme（会自动进 dsh-market 的「主题 Tab」，可一键安装/切换/卸载）
+#   · 只有 description.en 必填；zh 可选（写不了维护者会补）
+#   · ⚠️ 描述里含 ": " 必须加引号，否则 YAML 会把冒号当键值分隔
+#
+# ---- 以下为可提交内容（复制到目标文件即可）----
+url: https://github.com/sayzwx/DSH-desktop/tree/main/themes/dsh-xingkong-theme
+name: sayzwx/DSH-desktop
+category: theme
+description:
+  en: "Nebula Core: a deep-space observatory theme with Void-Black layers, aurora-cyan accents, and full coverage of the official 110 semantic tokens."
+  zh: "Nebula Core 星空主题：深空黑层次与极光青强调，完整覆盖官方 110 个语义 token（含侧边栏）。"

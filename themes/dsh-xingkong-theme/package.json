@@ -1,0 +1,46 @@
+{
+  "name": "dsh-xingkong-theme",
+  "version": "1.0.0",
+  "description": "Nebula Core: a deep-space observatory theme for the DeepSeek Harness Web GUI with Void-Black layers, aurora-cyan accents, and full 110-token coverage.",
+  "license": "MIT",
+  "author": "石岩",
+  "type": "module",
+  "main": "bundle/host.js",
+  "exports": {
+    ".": "./bundle/host.js",
+    "./client": "./bundle/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "bundle",
+    "cordis.patch.yml",
+    "README.md",
+    "README.en.md",
+    "screenshots.json"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [],
+      "immediately": true
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sayzwx/DSH-desktop.git",
+    "directory": "themes/dsh-xingkong-theme"
+  },
+  "homepage": "https://github.com/sayzwx/DSH-desktop/tree/main/themes/dsh-xingkong-theme#readme",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "theme",
+    "xingkong",
+    "nebula",
+    "dark-theme"
+  ]
+}
