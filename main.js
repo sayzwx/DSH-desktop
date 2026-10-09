@@ -1645,7 +1645,9 @@ function readCredentialPlaintext(ref) {
 // 模型能力探测：上下文窗口 / 输出上限 / 可用思考档位。
 // llm-pi-ai 把这三样写死在路由配置里，而厂商会上下线模型、调整档位、放宽窗口，
 // 所以必须能随时重新问一遍（详见 lib/model-probe.js 的注释）。
-ipcMain.handle('llm:probeCapabilities', async (event, { baseURL, api, apiKey, apiKeyEnv, models, concurrency } = {}) => {
+// `aliveOnly` 是「刷新模型」筛查候选用的轻量模式：每个模型只发一次 max_tokens=1 判死活，
+// 跳过一次最多 8 请求的档位探测 —— 几百个候选里筛出能用的那几个，不该付完整的档位代价。
+ipcMain.handle('llm:probeCapabilities', async (event, { baseURL, api, apiKey, apiKeyEnv, models, concurrency, aliveOnly } = {}) => {
   const list = Array.isArray(models)
     ? models.filter((m) => typeof m === 'string' && m.length > 0).slice(0, 200)
     : [];
@@ -1664,6 +1666,7 @@ ipcMain.handle('llm:probeCapabilities', async (event, { baseURL, api, apiKey, ap
       apiKey: key,
       models: list,
       concurrency,
+      aliveOnly: aliveOnly === true,
       onProgress: (line) => {
         try { if (!event.sender.isDestroyed()) event.sender.send('llm:probeProgress', line); } catch { /* 窗口已关 */ }
       },

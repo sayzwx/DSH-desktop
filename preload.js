@@ -88,6 +88,8 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('llm:discoverModels', { settingsNs, provider, apiKey, api, baseURL }),
   // 模型能力探测：现场问出上下文窗口 / 输出上限 / 可用思考档位。
   // 只传凭据的**引用名**（apiKeyEnv），明文密钥由主进程在本机读取后用于出站请求，不跨 IPC。
+  // payload.aliveOnly=true 时只判死活（每个模型一次 max_tokens=1 的请求）—— 全量刷新
+  // 在几百个候选里筛出能用的那几个用这个轻量模式，存活的少数再做一次完整探测补齐档位。
   probeCapabilities: (payload) => ipcRenderer.invoke('llm:probeCapabilities', payload),
   // 引擎档位名 + 线上拼写映射，供「配置仓库」画出思考档位点选控件。
   // 单一事实来源是主进程的 lib/model-probe.js，界面不另抄一份。

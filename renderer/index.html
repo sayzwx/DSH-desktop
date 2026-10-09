@@ -389,9 +389,11 @@
             <div class="provider-stats" id="providerStats"></div>
             <div class="model-group-list" id="modelGroupList"></div>
             <div class="row-actions">
-              <button class="mini-btn" id="refreshModelsBtn">刷新</button>
+              <button class="mini-btn primary-btn" id="refreshModelsBtn" type="button"
+                title="向每个已添加的提供商重新问一遍模型清单（pi-ai 内置目录的路由由目录作答，网关/自建服务走 GET {baseURL}/models），把清单里新增的可用模型写回配置，并移除厂商已下线的模型；对话框的模型列表会同步更新">↻ 刷新模型</button>
               <button class="mini-btn" id="openSettingsDocBtn">打开配置文档</button>
             </div>
+            <div class="mg-discover-output sync" id="modelSyncOutput"></div>
           </div>
         </div>
 

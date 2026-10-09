@@ -1032,6 +1032,28 @@
     return m?.name || cur.model;
   }
 
+  /**
+   * 模型面板底部的刷新提示。
+   *
+   * 为什么存在模块变量里而不是直接写 DOM：刷新一完成就会广播 `dsh:models-refreshed`，
+   * 那个事件会重读模型列表（loadModels → renderModelPicker），把面板整段重画 ——
+   * 直接写在 DOM 上的提示会被自己触发的重画擦掉。所以由渲染函数负责把提示贴回去。
+   * @type {{ text: string, kind: string } | null}
+   */
+  let modelSyncMsg = null;
+
+  function paintModelSyncMsg() {
+    const el = ctModelPanel.querySelector('.ct-mg-actions-msg');
+    if (!el) return;
+    el.textContent = modelSyncMsg ? modelSyncMsg.text : '';
+    el.className = 'ct-mg-actions-msg' + (modelSyncMsg && modelSyncMsg.kind ? ' ' + modelSyncMsg.kind : '');
+  }
+
+  function setModelSyncMsg(text, kind) {
+    modelSyncMsg = { text, kind: kind || '' };
+    paintModelSyncMsg();
+  }
+
   function renderModelPicker() {
     if (!currentSessionId && !modelState) {
       ctModelName.textContent = '模型…';
@@ -1046,7 +1068,15 @@
       return;
     }
     const cur = modelState.current;
-    ctModelPanel.innerHTML = (modelState.groups || [])
+    const groups = modelState.groups || [];
+    // 当前选中的模型已经不在清单里（多半是被「刷新模型」按厂商下线移除了）：
+    // 引擎侧这条选择还在，但请求发出去只会失败。与其让用户对着一个点不动的模型发呆，
+    // 不如把这件事直接说出来，并请他另选一个。
+    const stale = !!cur && !groups.some((g) => g.id === cur.provider && (g.models || []).some((m) => m.id === cur.model));
+    ctModelPanel.innerHTML = (stale
+      ? `<div class="ct-mi-stale">当前模型 <code>${esc(cur.model)}</code> 已不在可用清单中（提供商可能已下线它）——请另选一个</div>`
+      : '')
+      + groups
       .map(
         (g) => `<div class="ct-mg">
           <div class="ct-mg-head">${esc(g.name || g.id)}</div>
@@ -1062,10 +1092,51 @@
             .join('')}
         </div>`
       )
-      .join('');
+      .join('')
+      // 刷新入口放在对话框里：模型清单变长的时候，用户正是在这里发现「想要的模型不在列表里」，
+      // 让他为这一个动作跳到设置页是没必要的往返。
+      + '<div class="ct-mg-actions">'
+      + '<button type="button" class="mini-btn ct-model-refresh">↻ 刷新模型列表</button>'
+      + '<span class="ct-mg-actions-msg"></span>'
+      + '</div>';
     ctModelPanel.querySelectorAll('.ct-mi').forEach((btn) => {
       btn.onclick = () => chooseModel(btn.dataset.provider, btn.dataset.model);
     });
+    const refreshBtn = ctModelPanel.querySelector('.ct-model-refresh');
+    if (refreshBtn) refreshBtn.onclick = () => refreshModelList(refreshBtn);
+    paintModelSyncMsg();
+  }
+
+  /**
+   * 对话框里的「刷新模型列表」：复用设置页那套全量刷新（window.__providers.syncModels），
+   * 只是把逐行进度收进工具栏这一行 —— 设置页的进度框此刻多半不可见。
+   * 写配置、重读、广播都在 syncModels 里，这里只负责按钮状态与提示文案。
+   * @param {HTMLButtonElement} btn 触发按钮，用于禁用与「刷新中…」文案。
+   */
+  async function refreshModelList(btn) {
+    if (!window.__providers || typeof window.__providers.syncModels !== 'function') {
+      setModelSyncMsg('设置模块尚未就绪，请到「配置 → 模型配置」里刷新', 'bad');
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = '刷新中…';
+    setModelSyncMsg('正在向各提供商获取最新模型清单…');
+    try {
+      const r = await window.__providers.syncModels({ onLine: (t) => setModelSyncMsg(t) });
+      setModelSyncMsg(
+        r && r.ok
+          ? `已刷新 ${r.providers} 个提供商：新增 ${r.added} 个可用模型`
+            + (r.removed ? `，移除 ${r.removed} 个已下线模型` : '')
+            + (r.failed ? `，${r.failed} 个失败（详见设置页）` : '')
+          : '刷新失败：' + ((r && r.error) || 'unknown'),
+        r && r.ok ? 'ok' : 'bad',
+      );
+    } catch (e) {
+      setModelSyncMsg('刷新出错：' + ((e && e.message) || String(e)), 'bad');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '↻ 刷新模型列表';
+    }
   }
 
   function renderEffort() {
@@ -1353,6 +1424,13 @@
     if (!ctModelPanel.hidden && !e.target.closest('#ctModel')) ctModelPanel.hidden = true;
   });
 
+  // 「刷新模型」写完配置后广播：可用模型清单变了，对话框里的选择器要立刻跟着重读。
+  // 不重读的话，用户刚刷新出来的模型要等切一次会话才出现 —— 而设置页那边看起来已经「成功了」。
+  // 沿用本仓库既有的跨模块约定（同 dsh:settings-saved）：只读事件 + 各自重读，不做互调。
+  window.addEventListener('dsh:models-refreshed', () => {
+    if (currentSessionId) loadModels(currentSessionId);
+  });
+
   // ---------------- 消息渲染（带身份去重） ----------------
   // 每个会话维护"已渲染消息身份"集合：user/message 与 assistant/message 携带 id/seq，
   // 同一身份的事件只渲染一次（重连/重复投递时复用已有元素，而不是追加第二个框）。
@@ -1466,6 +1544,7 @@
   /** 用当前会话缓冲渲染 dock；无当前会话时清空并隐藏。 */
   function renderPanels() {
     if (!dockEl) return;
+    const wasHidden = dockEl.hidden;
     const b = currentSessionId ? buf(currentSessionId) : null;
     window.__panels.render(b ? {
       todos: b.todos,
@@ -1475,6 +1554,14 @@
       jobs: b.jobs,
       turnFiles: b.lastTurnFiles,
     } : null);
+    // 任务清单 / 产物等内容**第一次出现**时，自动打开右侧栏并切到「任务与产物」——
+    // 用户反馈"侧边栏的意义没有体现出来"：这些上下文本来就该住在侧栏里，
+    // 而不是压在输入区上（旧位置在消息区和工具条之间，半透明面板叠着壁纸，观感很差）。
+    if (wasHidden && dockEl.hidden === false) {
+      if (window.__quickActions && typeof window.__quickActions.openContext === 'function') {
+        window.__quickActions.openContext();
+      }
+    }
   }
 
   /** Plan 模式芯片：激活时显示，点击执行 /plan off 退出；同时切换输入框提示语。 */
@@ -1895,14 +1982,16 @@ function renderAssistantContent(container, content, meta) {
           d.className = 'msg-reasoning';
           d.innerHTML = '<summary>🧠 思考过程</summary><div></div>';
           const txt = d.querySelector('div');
-          txt.textContent = blk.text;
+          txt.__dshRaw = blk.text || '';
           txt.__dshLen = (blk.text || '').length;
+          txt.innerHTML = mdBlock(txt.__dshRaw);   // 重建也走 Markdown（与流式/定稿一致）
           streamMsg.appendChild(d);
           domBlocks.set(i, txt);
         } else {
           const el = document.createElement('div');
-          el.textContent = blk.text;
+          el.__dshRaw = blk.text || '';
           el.__dshLen = (blk.text || '').length;
+          el.innerHTML = mdBlock(el.__dshRaw);
           streamMsg.appendChild(el);
           domBlocks.set(i, el);
         }
@@ -2718,6 +2807,32 @@ class ReferencePanel {
     }
   }
 
+  // ---------------- 流式期间的增量 Markdown 渲染 ----------------
+  // 用户反馈：流式阶段 `##`、`-`、代码围栏等**原始标记直接露出来**（观感像"没过编译"）。
+  // 原实现 delta 直接写 textContent（纯文本）。现在：增量写入 __dshRaw 缓冲，
+  // DOM 用**节流**（120ms）重渲染 Markdown；定稿（block-end / renderAssistantContent）仍是完整渲染。
+  // 块元素自身挂 .stream-caret，重渲染 innerHTML 不影响光标（::after 实现的）。
+  const mdPending = new Set();
+  let mdFlushTimer = null;
+  function flushMdRender() {
+    mdFlushTimer = null;
+    for (const el of mdPending) {
+      mdPending.delete(el);
+      if (!el.isConnected) continue;
+      const raw = el.__dshRaw || '';
+      el.innerHTML = raw ? mdBlock(raw) : '';
+    }
+  }
+  function scheduleMdRender(el) {
+    mdPending.add(el);
+    if (!mdFlushTimer) mdFlushTimer = setTimeout(flushMdRender, 120);
+  }
+  function setStreamText(el, raw) {
+    el.__dshRaw = raw;
+    el.__dshLen = raw.length;   // 兼容既有"只补增量"的去重逻辑（按长度判断）
+    scheduleMdRender(el);
+  }
+
   function renderChunk(chunk) {
     const index = chunk.index;
     if (chunk.type === 'block-start') {
@@ -2731,10 +2846,12 @@ class ReferencePanel {
         streamMsg.appendChild(el);
         const txt = d.querySelector('div');
         txt.__dshLen = 0;
+        txt.__dshRaw = '';
         domBlocks.set(index, txt);
       } else {
         el.className = 'stream-caret';
         el.__dshLen = 0;
+        el.__dshRaw = '';
         streamMsg.appendChild(el);
         domBlocks.set(index, el);
       }
@@ -2755,22 +2872,24 @@ class ReferencePanel {
           streamMsg.appendChild(el);
         }
         el.__dshLen = 0;
+        el.__dshRaw = '';
         domBlocks.set(index, el);
       }
       // 只追加"尚未写入"的增量：若 renderLiveBuffer/历史已重建过同 index 文本，跳过重复部分
       const base = el.__dshLen || 0;
-      el.textContent = el.textContent.slice(0, base) + chunk.text;
-      el.__dshLen = el.textContent.length;
+      let raw = (el.__dshRaw || '').slice(0, base) + chunk.text;
       const blk = buf(currentSessionId)?.blocks?.get(index);
-      if (blk && typeof blk.text === 'string' && el.textContent.length < blk.text.length) {
+      if (blk && typeof blk.text === 'string' && raw.length < blk.text.length) {
         // 缓冲里还有更长文本（renderLiveBuffer 重建过）→ 直接补全到一致
-        el.textContent = blk.text;
-        el.__dshLen = el.textContent.length;
+        raw = blk.text;
       }
+      setStreamText(el, raw);
     } else if (chunk.type === 'block-end') {
       const el = domBlocks.get(index);
-      if (el && chunk.block?.text) el.textContent = chunk.block.text;
+      if (el && chunk.block?.text) setStreamText(el, chunk.block.text);
       domBlocks.delete(index);
+      // 定稿：立即渲染（不走节流），避免收尾时还压着未渲染的增量
+      if (el) { mdPending.delete(el); el.innerHTML = mdBlock(el.__dshRaw || ''); }
       const caret = streamMsg?.querySelectorAll('.stream-caret');
       if (caret && caret.length) caret[caret.length - 1].classList.remove('stream-caret');
     }

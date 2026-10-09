@@ -168,6 +168,14 @@ async function main() {
       drawer: !!document.getElementById('inspectDrawer'),
       tabs: document.querySelectorAll('#inspectTabs .inspect-tab').length,
     }))()`), { btn: true, drawer: true, tabs: 2 });
+    // 模型刷新入口（设置页）：本轮新增能力的落点检查。
+    // 「刷新模型」不再是「重读一遍引擎当前加载了什么」—— 它要向已添加的提供商重新问清单
+    // 并把差异写回配置，所以可编程入口（syncModels）与进度框必须都在。
+    check('__providers.syncModels 已挂载', await evalJs(`typeof window.__providers?.syncModels`), 'function');
+    check('设置页「刷新模型」按钮文案', await evalJs(`document.querySelector('#refreshModelsBtn')?.textContent.trim()`), '↻ 刷新模型');
+    check('刷新按钮说明会写回配置', await evalJs(`/写回配置/.test(document.querySelector('#refreshModelsBtn')?.title || '')`), true);
+    check('设置页刷新进度框就位', await evalJs(`!!document.getElementById('modelSyncOutput')`), true);
+
     // 轨道 G：工具卡降级计数 + 设置页通知/诊断骨架（确定性，不依赖引擎）
     check('__toolcards.getDowngrades 已挂载', await evalJs(`typeof window.__toolcards?.getDowngrades`), 'function');
     check('降级计数返回 {count,kinds} 形状', await evalJs(`(() => { const d = window.__toolcards.getDowngrades(); return { isCount: typeof d.count === 'number', kindsIsArray: Array.isArray(d.kinds) }; })()`), { isCount: true, kindsIsArray: true });
@@ -508,6 +516,35 @@ async function main() {
       check('搜索框 placeholder 取自 i18n',
         await evalJs(`document.getElementById('csSearchInput')?.placeholder`), '搜索会话内容…');
 
+      // 对话框里的模型面板要带「刷新模型列表」入口（与设置页共用 __providers.syncModels）。
+      // 只验证入口渲染到位，**不点它** —— 点了会真的把清单写回 ~/.dsh/settings.yaml，
+      // 那是用户配置，测试不该动。
+      const modelPanelProbe = await evalJs(`(async () => {
+        const waitFor = async (fn, ms) => { const d = Date.now() + ms; for (;;) { if (fn()) return true; if (Date.now() > d) return false; await new Promise((r) => setTimeout(r, 150)); } };
+        const row = document.querySelector('#chatSessions .chat-session');
+        if (row) row.click();
+        const loaded = await waitFor(() => /个模型|·/.test(document.getElementById('ctModelName')?.textContent || '') || !!document.querySelector('#ctModelPanel .ct-mg'), 6000);
+        document.getElementById('ctModelBtn')?.click();
+        const panel = document.getElementById('ctModelPanel');
+        const opened = await waitFor(() => panel && !panel.hidden, 3000);
+        const btn = panel && panel.querySelector('.ct-model-refresh');
+        const out = {
+          loaded,
+          opened,
+          btnText: btn ? btn.textContent.trim() : null,
+          msgSlot: !!(panel && panel.querySelector('.ct-mg-actions-msg')),
+          groups: panel ? panel.querySelectorAll('.ct-mg').length : 0,
+        };
+        document.getElementById('ctModelBtn')?.click();   // 收起，恢复原状
+        return out;
+      })()`);
+      if (modelPanelProbe?.__error) failures.push(`模型面板探针抛错: ${modelPanelProbe.__error}`);
+      else if (!modelPanelProbe?.opened) failures.push(`对话框模型面板未展开: ${JSON.stringify(modelPanelProbe)}`);
+      else {
+        check('对话框模型面板带「刷新模型列表」入口', modelPanelProbe.btnText, '↻ 刷新模型列表');
+        check('对话框刷新入口带提示位', modelPanelProbe.msgSlot, true);
+      }
+
       const sidebar = await evalJs(`(() => {
         const rows = [...document.querySelectorAll('#chatSessions .chat-session')];
         return {
@@ -777,6 +814,21 @@ async function main() {
       check('卡片带图标', panels.fileIcons, true);
       check('卡片有两个悬停操作', panels.fileActs, true);
       check('产物列表可滚动（产物多时不截断）', panels.fileListScrolls, true);
+    }
+
+    // --- 侧栏标签页 + 流式 Markdown（2026-10-09 用户报"面板叠在一起/## 没过编译"）---
+    {
+      const qa = fs.readFileSync(path.join(ROOT, 'renderer', 'quick-actions.js'), 'utf8');
+      const chatSrc = fs.readFileSync(path.join(ROOT, 'renderer', 'chat.js'), 'utf8');
+      const cssSrc = fs.readFileSync(path.join(ROOT, 'renderer', 'styles.css'), 'utf8');
+      check('上下文面板搬进侧栏（quick-actions 采纳 #chatContextDock）', /chatContextDock/.test(qa) && /viewContext/.test(qa), true);
+      check('侧栏有两个标签（任务与产物 / 动作）', /data-qatab="context"/.test(qa) && /data-qatab="actions"/.test(qa), true);
+      check('chat.js 在内容出现时自动打开侧栏', /openContext\(\)/.test(chatSrc) && /wasHidden && dockEl\.hidden === false/.test(chatSrc), true);
+      check('流式渲染走 Markdown（不再裸文本）', /setStreamText/.test(chatSrc) && /el\.innerHTML = mdBlock\(el\.__dshRaw/.test(chatSrc), true);
+      check('流式渲染有节流（不是每个 delta 都重排）', /mdFlushTimer/.test(chatSrc) && /setTimeout\(flushMdRender, 120\)/.test(chatSrc), true);
+      check('定稿立即渲染（不走节流）', /mdPending\.delete\(el\); el\.innerHTML = mdBlock/.test(chatSrc), true);
+      check('重建缓冲也走 Markdown', /innerHTML = mdBlock\(txt\.__dshRaw\)/.test(chatSrc), true);
+      check('侧栏里的上下文面板实底化（不透出壁纸）', /qa-view-context \.cd-section/.test(cssSrc), true);
     }
 
     // --- 市场页：未就绪时的状态区分与自动重试（2026-10-01 用户报"更新后市场加载不出来"）---

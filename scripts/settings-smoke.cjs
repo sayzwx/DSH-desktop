@@ -7,6 +7,8 @@
  *  3) 保存密钥 → credentials.set + settings.mutate 顺序调用
  *  4) 测试连接 → llm.discoverModels 携带输入框密钥
  *  5) 已启用且有模型的提供商不出现密钥编辑器
+ *  6) 「刷新模型」→ discoverModels 带路由的 api/baseURL、差异写回 llm-pi-ai，
+ *     并广播 dsh:models-refreshed（对话框靠它同步重读模型列表）
  * 用法: node scripts/settings-smoke.cjs   （需要 :3080 有 live harness）
  */
 const fs = require('node:fs');
@@ -70,7 +72,11 @@ function parseKeyBlocks(html) {
 }
 
 // ---------- 记录型 api stub ----------
-const calls = { setCredential: [], mutate: [], discover: [] };
+const calls = { setCredential: [], mutate: [], discover: [], probe: [] };
+// 渲染层广播的事件（providers.js 靠它通知对话框重读模型列表）
+const events = [];
+// live harness 当前真的在服务的模型分组（用于「全部视图」的数据驱动断言）
+const liveGroupIds = [];
 const rawApi = {
   getPresets: async () => ({ ok: true, presets: [] }),
   readPreset: async () => ({ ok: false }),
@@ -89,29 +95,80 @@ const rawApi = {
       body: JSON.stringify({ type: 'client-request', rpcId: 'smoke-2', method: 'llm.models', payload: {} }),
     });
     const b = await r.json();
-    return b.result.ok ? { ok: true, groups: b.result.value.groups, failures: b.result.value.failures } : { ok: false, error: 'bad' };
+    if (b.result.ok) {
+      liveGroupIds.length = 0;
+      for (const g of b.result.value.groups || []) liveGroupIds.push(g.id);
+      return { ok: true, groups: b.result.value.groups, failures: b.result.value.failures };
+    }
+    return { ok: false, error: 'bad' };
   },
   getSettingsDescribe: async () => ({
     ok: true,
     writable: true,
     hasDocument: true,
     namespaces: [
+      // 两个「已添加」的提供商，正好覆盖「刷新模型」的两条路径：
+      //  - opencode-go：只有 apiKeyEnv，没有端点 → 清单由目录/内置目录作答，不做筛查
+      //  - ali：手写路由（api + baseURL + 已有模型清单）→ 走端点清单 + 两段体检 + 差异写回
       { ns: 'llm-pi-ai', applies: 'live', revision: 1,
-        value: { providers: { 'opencode-go': { apiKeyEnv: 'OPENCODE_GO_API_KEY' } } },
-        user: { providers: { 'opencode-go': { apiKeyEnv: 'OPENCODE_GO_API_KEY' } } } },
+        value: {
+          providers: {
+            'opencode-go': { apiKeyEnv: 'OPENCODE_GO_API_KEY' },
+            ali: {
+              apiKeyEnv: 'ALI_API_KEY',
+              displayName: '阿里云百炼',
+              api: 'openai-completions',
+              baseURL: 'https://dashscope.example/v1',
+              models: [
+                { id: 'qwen-a', name: 'Qwen A', contextWindow: 100000 },
+                { id: 'qwen-gone', name: 'Qwen Gone' },
+              ],
+            },
+          },
+        },
+        user: {
+          providers: {
+            'opencode-go': { apiKeyEnv: 'OPENCODE_GO_API_KEY' },
+            ali: {
+              apiKeyEnv: 'ALI_API_KEY',
+              displayName: '阿里云百炼',
+              api: 'openai-completions',
+              baseURL: 'https://dashscope.example/v1',
+              models: [
+                { id: 'qwen-a', name: 'Qwen A', contextWindow: 100000 },
+                { id: 'qwen-gone', name: 'Qwen Gone' },
+              ],
+            },
+          },
+        } },
       { ns: 'llm-deepseek', applies: 'live', revision: 0, value: { apiKeyEnv: 'DEEPSEEK_API_KEY' } },
     ],
   }),
   describeCredentials: async (refs) => {
     const credentials = {};
-    for (const ref of refs || []) credentials[ref] = { configured: ref === 'DEEPSEEK_API_KEY', writable: true };
+    for (const ref of refs || []) credentials[ref] = { configured: ref === 'DEEPSEEK_API_KEY' || ref === 'ALI_API_KEY', writable: true };
     return { ok: true, credentials };
   },
   setCredential: async (ref, value) => { calls.setCredential.push([ref, value]); return { ok: true }; },
-  mutateSettings: async (ns, ops, expectedRevision) => { calls.mutate.push([ns, ops, expectedRevision]); return { ok: true }; },
-  discoverModels: async (settingsNs, provider, apiKey) => {
-    calls.discover.push([settingsNs, provider, apiKey]);
+  mutateSettings: async (ns, ops, expectedRevision) => { calls.mutate.push([ns, ops, expectedRevision]); return { ok: true, revision: 2 }; },
+  discoverModels: async (settingsNs, provider, apiKey, api, baseURL) => {
+    calls.discover.push([settingsNs, provider, apiKey, api, baseURL]);
+    // ali 的端点「现在」列出了 qwen-new（新上线，故意排在清单最前）与 qwen-a（已在配置里），
+    // 且已不列 qwen-gone（下线）。端点顺序与配置顺序不同是有意的：用来钉住
+    // 「刷新只增删条目，不按清单重排用户已有的顺序」这条约定。
+    if (provider === 'ali') {
+      return { ok: true, models: [{ id: 'qwen-new', name: 'Qwen New', contextWindow: 200000 }, { id: 'qwen-a', name: 'Qwen A' }] };
+    }
     return { ok: true, models: [{ id: 'claude-x', name: 'Claude X' }] };
+  },
+  // 体检分两段：先 aliveOnly 筛查，再对存活的做完整探测（补齐思考档位）
+  probeCapabilities: async (payload) => {
+    calls.probe.push(payload);
+    const ids = payload.models || [];
+    if (payload.aliveOnly) {
+      return { ok: true, hadKey: true, results: ids.map((id) => (id === 'qwen-new' ? { id, alive: true, contextWindow: 200000 } : { id, alive: false, error: 'HTTP 400 not activated' })) };
+    }
+    return { ok: true, hadKey: true, results: ids.map((id) => ({ id, alive: true, contextWindow: 200000, maxTokens: 65536, reasoningEfforts: { off: 'none', medium: 'medium' } })) };
   },
   getPluginCatalog: async () => ({ ok: true, plugins: [] }),
   getPresetDefault: async () => ({ ok: true, default: null }),
@@ -151,7 +208,9 @@ const sandbox = {
     __i18n: { t: (key) => key },
     addEventListener() {},
     removeEventListener() {},
-    dispatchEvent() { return true; },
+    // 「刷新模型」完成时要广播 dsh:models-refreshed（对话框靠它重读模型列表），
+    // 所以这里记下事件类型而不只是吞掉。
+    dispatchEvent(e) { events.push(e && e.type); return true; },
   },
   document: {
     querySelector: (s) => el(s),
@@ -282,16 +341,120 @@ const lastListHtml = () => blocksCacheFor;
   if (!dsHtml.includes('deepseek-v4-flash')) failures.push('deepseek-official 模型未渲染');
 
   // 6) 全部视图恢复
+  //    判据用**当前引擎真的在服务的分组**（llm.models），不写死某个提供商：
+  //    写死会随本机配置漂移 —— 例如把某个提供商的清单清空后它就不再分组，
+  //    于是断言会在代码没坏的时候失败（这正是它此前红着的原因）。
   provEl.value = '';
   provEl.fire('change');
   const allHtml = el('#modelGroupList').innerHTML;
-  if (!allHtml.includes('opencode-go') || !allHtml.includes('deepseek-official')) failures.push('全部视图恢复失败');
+  if (liveGroupIds.length === 0) failures.push('live harness 没有任何模型分组，无法验证全部视图');
+  for (const gid of liveGroupIds) {
+    if (!allHtml.includes(gid)) failures.push('全部视图缺少分组 ' + gid);
+  }
   if (hasKeyEditor(allHtml)) failures.push('全部视图不应出现密钥编辑器（无失败提供商）');
+
+  // 7) 「刷新模型」：向已添加的提供商重新问一遍清单，把差异写回配置，并广播给对话框。
+  //    这是本次新增的能力 —— 旧实现只是重读一遍引擎当前加载了什么，清单本身不会因此变长。
+  if (typeof sandbox.window.__providers.syncModels !== 'function') {
+    failures.push('providers.js 没有暴露 window.__providers.syncModels（对话框刷新入口与设置页共用它）');
+  }
+  calls.discover.length = 0;
+  calls.mutate.length = 0;
+  calls.probe.length = 0;
+  events.length = 0;
+
+  const refreshBtn = el('#refreshModelsBtn');
+  const syncOut = el('#modelSyncOutput');
+  if (!syncOut || !('textContent' in syncOut)) {
+    failures.push('index.html 缺少 #modelSyncOutput 进度框');
+  }
+  refreshBtn.fire('click');
+  // 刷新要打真实引擎（读提供商/模型目录）+ 两轮 stub 探测，等它写出「刷新完成」再断言
+  const syncDeadline = Date.now() + 15000;
+  while (Date.now() < syncDeadline && !/刷新完成/.test(syncOut.textContent || '')) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  if (!/刷新完成/.test(syncOut.textContent || '')) {
+    failures.push('「刷新模型」未在 15s 内完成：' + String(syncOut.textContent || '').slice(0, 300));
+  }
+
+  // 7a) 每个已添加的提供商都要被问到；手写路由必须带上路由自己的 api/baseURL ——
+  //     引擎不会自己去读路由配置，漏传就只会回 "pi-ai ships no catalog for provider ali"。
+  const aliDisc = calls.discover.find((c) => c[1] === 'ali');
+  if (!aliDisc) failures.push('ali 未被刷新（已添加的提供商必须都问到）');
+  else if (aliDisc[3] !== 'openai-completions' || aliDisc[4] !== 'https://dashscope.example/v1') {
+    failures.push('ali 的 discoverModels 未带路由 api/baseURL：' + JSON.stringify(aliDisc));
+  }
+  if (!calls.discover.some((c) => c[1] === 'opencode-go')) failures.push('opencode-go 未被刷新');
+
+  // 7b) 两段体检：先 aliveOnly 筛查（并发 8），再对存活的补齐能力
+  const screen = calls.probe.find((p) => p.aliveOnly === true);
+  if (!screen) failures.push('未做 aliveOnly 候选筛查');
+  else {
+    if (screen.baseURL !== 'https://dashscope.example/v1') failures.push('筛查未带端点地址');
+    if (screen.apiKeyEnv !== 'ALI_API_KEY') failures.push('筛查未传凭据引用名（明文不该出主进程）');
+    if (!(screen.models || []).includes('qwen-new')) failures.push('新上线的 qwen-new 未进入筛查');
+    if ((screen.models || []).includes('qwen-a')) failures.push('已在配置里的 qwen-a 不该被当候选筛查');
+    if (screen.concurrency !== 8) failures.push('筛查并发度不是 8：' + screen.concurrency);
+  }
+  const deep = calls.probe.find((p) => p.aliveOnly !== true && (p.models || []).includes('qwen-new'));
+  if (!deep) failures.push('筛查通过的 qwen-new 未做完整能力探测');
+
+  // 7c) 差异写回：新上线的收进来（带探测到的能力）、已下线的移除、已有的原样保留。
+  //     基线必须取用户层，且只发真正变化的 set。
+  const aliMut = calls.mutate.map((c) => (c[1] || []).find((op) => op.path && op.path[1] === 'ali' && op.path[2] === 'models')).find(Boolean);
+  if (!aliMut) failures.push('ali 的模型清单没有写回 llm-pi-ai：' + JSON.stringify(calls.mutate));
+  else {
+    const ids = (aliMut.value || []).map((m) => m.id);
+    // 顺序断言：qwen-a 是原有条目，qwen-new 是新收的 —— 端点把 qwen-new 排在最前，
+    // 但写回必须保持「原有在前、新增追加在后」，否则每次刷新都会把用户的模型列表重排一遍。
+    if (JSON.stringify(ids) !== JSON.stringify(['qwen-a', 'qwen-new'])) {
+      failures.push('写回的模型清单不符（原有条目顺序应保持、新增追加在后）：' + JSON.stringify(ids));
+    }
+    if (ids.includes('qwen-gone')) failures.push('已下线的 qwen-gone 应被移除');
+    const kept = (aliMut.value || []).find((m) => m.id === 'qwen-a');
+    if (!kept || kept.contextWindow !== 100000 || kept.name !== 'Qwen A') {
+      failures.push('已有条目 qwen-a 的元数据未原样保留：' + JSON.stringify(kept));
+    }
+    const added = (aliMut.value || []).find((m) => m.id === 'qwen-new');
+    if (!added || added.contextWindow !== 200000 || added.maxTokens !== 65536 || !added.reasoningEfforts) {
+      failures.push('新条目 qwen-new 未带上探测到的能力：' + JSON.stringify(added));
+    }
+  }
+  // 无端点的目录型提供商也要写回，但不做筛查（清单本身就是权威）
+  const ogMut = calls.mutate.map((c) => (c[1] || []).find((op) => op.path && op.path[1] === 'opencode-go' && op.path[2] === 'models')).find(Boolean);
+  if (!ogMut || ogMut.value[0].id !== 'claude-x') failures.push('opencode-go 的清单未写回：' + JSON.stringify(calls.mutate));
+  if (calls.probe.some((p) => (p.models || []).some((m) => m.startsWith('claude')))) {
+    failures.push('没有 baseURL 的目录型路由不该发探测请求');
+  }
+
+  // 7d) 写回只发 models，不能把 schema 默认值一起固化（同「保存」路径的约定）
+  for (const [ns, ops] of calls.mutate) {
+    if (ns !== 'llm-pi-ai') failures.push('写回了错误的命名空间：' + ns);
+    for (const op of ops || []) {
+      if (op.op !== 'set' || op.path.length !== 3 || op.path[2] !== 'models') {
+        failures.push('刷新只应写 providers.<id>.models：' + JSON.stringify(op));
+      }
+    }
+  }
+  // 乐观并发：带上当前 revision，否则会被 settings.mutate 挡下
+  if (calls.mutate.some((c) => c[2] !== 1 && c[2] !== 2)) {
+    failures.push('mutate 未带 revision：' + JSON.stringify(calls.mutate.map((c) => c[2])));
+  }
+
+  // 7e) 广播：对话框（chat.js）的模型选择器靠这个事件同步重读 session.models
+  if (!events.includes('dsh:models-refreshed')) {
+    failures.push('刷新完成后未广播 dsh:models-refreshed：' + JSON.stringify(events));
+  }
+  if (!/新增 1 个可用模型/.test(syncOut.textContent || '')) {
+    failures.push('进度总结未报出新增数量：' + String(syncOut.textContent || '').slice(-200));
+  }
 
   if (failures.length) {
     console.error('\nFAILURES:\n' + failures.join('\n'));
     process.exit(1);
   }
   console.log('\nALL CHECKS PASSED  (providers=' + optCount + ', credentials.set=' + calls.setCredential.length
-    + ', mutate=' + calls.mutate.length + ', discover=' + calls.discover.length + ')');
+    + ', refresh: discover=' + calls.discover.length + ', probe=' + calls.probe.length
+    + ', mutate=' + calls.mutate.length + ', events=' + JSON.stringify(events) + ')');
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -28,7 +28,17 @@
    * 现在它跟左侧会话列表一样是 `.chat-shell` 里的一列：同一套面板底色/边框/圆角，
    * 开关按钮也搬进工具条（不再有右下角那颗悬浮 ＋）。
    */
-  let dock = null;
+  /**
+   * 右侧栏的两个标签页：
+   *   · 任务与产物 —— 对话的上下文面板（#chatContextDock：任务清单/目标/队列/后台任务/本回合产物）
+   *   · 动作       —— 打开工作区文件 / 侧边任务 / 内置浏览器 / 审阅 / 终端
+   * 用户反馈：① 上下文面板原先挤在消息区和输入框之间，半透明面板叠着壁纸"叠在一起观感很差"；
+   *          ② 侧边栏"意义没有体现出来"。所以把上下文**搬进侧栏**作为一个正式标签页，
+   *          内容出现时自动打开侧栏并切过去（像 WorkBuddy 的侧栏那样承接产物与任务）。
+   */
+  let contextDock = document.getElementById('chatContextDock');
+  let viewContext = null;
+  let viewActions = null;
   const shell = document.querySelector('.chat-shell');
   const toolbar = document.getElementById('chatToolbar');
   if (shell) {
@@ -37,18 +47,47 @@
     dock.id = 'qaDock';
     dock.hidden = true;
     dock.innerHTML = `<div class="qa-dock-head">
-        <span class="qa-dock-title">侧边预览</span>
+        <div class="qa-dock-tabs" role="tablist">
+          <button type="button" class="qa-tab" data-qatab="context" role="tab">任务与产物</button>
+          <button type="button" class="qa-tab" data-qatab="actions" role="tab">动作</button>
+        </div>
         <button type="button" class="mini-btn qa-dock-close" title="收起">✕</button>
       </div>
       <div class="qa-dock-body"></div>`;
     shell.appendChild(dock);
     const body = dock.querySelector('.qa-dock-body');
-    body.appendChild(panel);
-    body.appendChild(review);
-    body.appendChild(browser);
+    viewContext = document.createElement('div');
+    viewContext.className = 'qa-view qa-view-context';
+    viewActions = document.createElement('div');
+    viewActions.className = 'qa-view qa-view-actions';
+    if (contextDock) viewContext.appendChild(contextDock);   // 整体搬进侧栏（chat.js 继续往里渲染）
+    body.appendChild(viewContext);
+    body.appendChild(viewActions);
+    viewActions.appendChild(panel);
+    viewActions.appendChild(review);
+    viewActions.appendChild(browser);
     dock.querySelector('.qa-dock-close').addEventListener('click', () => closeAll());
+    dock.querySelector('.qa-dock-tabs').addEventListener('click', (e) => {
+      const b = e.target.closest('.qa-tab');
+      if (b) switchTab(b.dataset.qatab);
+    });
   }
   if (toolbar && toggleBtn) toolbar.appendChild(toggleBtn);   // 工具条按钮（配合 .qa-toggle 的静态定位）
+
+  let activeTab = 'context';
+  function switchTab(tab) {
+    activeTab = tab === 'actions' ? 'actions' : 'context';
+    if (dock) {
+      dock.querySelectorAll('.qa-tab').forEach((b) => b.classList.toggle('active', b.dataset.qatab === activeTab));
+    }
+    if (viewContext) viewContext.hidden = activeTab !== 'context';
+    if (viewActions) viewActions.hidden = activeTab !== 'actions';
+  }
+  /** 打开侧栏并切到指定标签（chat.js 在任务/产物出现时会调 openContext()） */
+  function openContext() {
+    ensureDock();
+    switchTab('context');
+  }
 
   let dir = '';
   let browserOpen = false;
@@ -216,7 +255,7 @@
 
   /** 审阅/浏览器都在这一列里 —— 用它之前先把列打开，否则"点了没反应" */
   function ensureDock() {
-    if (dock && dock.hidden) { dock.hidden = false; if (shell) shell.classList.add('qa-open'); syncToggle(); }
+    if (dock && dock.hidden) { dock.hidden = false; if (shell) shell.classList.add('qa-open'); switchTab(activeTab); syncToggle(); }
   }
 
   function closeAll() {
@@ -232,7 +271,8 @@
     if (dock && dock.hidden) {
       dock.hidden = false;
       shell && shell.classList.add('qa-open');
-      panel.hidden = false;
+      switchTab(activeTab);
+      panel.hidden = activeTab === 'actions' ? false : true;
       review.hidden = true;
       // 打开时顺带刷新一下目录（可能刚切过会话）
       dir = '';
@@ -304,5 +344,5 @@
     if (!review.hidden) renderReview();
   });
 
-  window.__quickActions = { open: () => { panel.hidden = false; }, close: closeAll, openReview: () => { ensureDock(); review.hidden = false; renderReview(); }, openBrowser: actBrowser };
+  window.__quickActions = { open: () => { ensureDock(); switchTab('actions'); panel.hidden = false; }, close: closeAll, openReview: () => { ensureDock(); switchTab('actions'); review.hidden = false; renderReview(); }, openBrowser: actBrowser, openContext };
 })();

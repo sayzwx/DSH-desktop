@@ -31,6 +31,7 @@
   let nsViews = {};    // ns -> settings.describe 命名空间视图
   let credStates = {}; // ref -> { configured, writable }
   let settingsWritable = true;
+  let syncRunning = false; // 「刷新模型」互斥：设置页与对话框两个入口可能被同时点到
 
   function providerOf(id) {
     return providersAll.find((p) => p.provider === id);
@@ -56,20 +57,23 @@
       : undefined;
   }
 
-  async function refreshModels() {
-    const stats = $('#providerStats');
-    const sel = $('#providerSelect');
+  /**
+   * 读一遍模型配置的全部外部事实：提供商目录、引擎当前在服务的模型目录、命名空间视图，
+   * 再补一次凭据状态。
+   *
+   * 抽成独立函数是因为「刷新模型」不能只靠 refreshModels()：那边只是**重读**引擎当前
+   * 加载了什么，而引擎加载什么完全由 settings.yaml 里写死的 `providers.<id>.models` 决定。
+   * 厂商上线新模型时那串 id 不会自己变长，于是重读永远拿到旧清单 —— 这正是「刷新」按钮
+   * 曾经点了没反应的原因。全量刷新需要同一份事实，但要多做一步「写回配置」。
+   *
+   * @returns {Promise<{ lp: object, lm: object }>} 两个目录调用的原始回执，调用方据此决定如何报错。
+   */
+  async function loadModelConfigState() {
     const [lp, lm, sd] = await Promise.all([
       api.getLlmProviders(),
       api.getLlmModels(),
       api.getSettingsDescribe(),
     ]);
-    if (!lp.ok && !lm.ok) {
-      sel.innerHTML = '<option value="">（获取失败）</option>';
-      stats.innerHTML = `<div class="empty">模型目录获取失败：${esc(lp.error || lm.error)}</div>`;
-      $('#modelGroupList').innerHTML = '';
-      return;
-    }
     providersAll = lp.ok ? lp.providers || [] : [];
     modelGroupsAll = lm.ok ? lm.groups || [] : [];
     modelFailures = lm.ok ? lm.failures || [] : [];
@@ -96,8 +100,21 @@
     }
     // 批量查询每个提供商实际使用的密钥引用状态（一个往返）
     const refs = [...new Set(providersAll.map((p) => apiKeyEnvOf(p.provider) || deriveKeyRef(p.provider)))];
-    const cr = await api.describeCredentials(refs);
+    const cr = refs.length > 0 ? await api.describeCredentials(refs) : { ok: true, credentials: {} };
     credStates = cr.ok ? cr.credentials || {} : {};
+    return { lp, lm };
+  }
+
+  async function refreshModels() {
+    const stats = $('#providerStats');
+    const sel = $('#providerSelect');
+    const { lp, lm } = await loadModelConfigState();
+    if (!lp.ok && !lm.ok) {
+      sel.innerHTML = '<option value="">（获取失败）</option>';
+      stats.innerHTML = `<div class="empty">模型目录获取失败：${esc(lp.error || lm.error)}</div>`;
+      $('#modelGroupList').innerHTML = '';
+      return;
+    }
     renderProviderSelect(sel);
     renderModelGroups();
     const active = providersAll.filter((p) => p.active).length;
@@ -601,8 +618,9 @@
       discoverOut.className = 'mg-discover-output' + (kind ? ' ' + kind : '');
       discoverOut.textContent = text;
     };
-    // 主进程逐行推进度（注册前会清掉上一次的监听，反复开编辑器不会堆积）
-    api.onProbeProgress((line) => { if (probeBtn.disabled) probeOutput(line); });
+    // 主进程逐行推进度。编辑器的输出框不再是常驻消费者：探测只在点击后跑，
+    // 所以认领发生在点击里，跑完就交还（真正的订阅在 wire() 里只做一次 ——
+    // 每次打开编辑器都重订会把全量刷新的订阅顶掉）。
     probeBtn.addEventListener('click', async () => {
       const url = urlMode.value === 'custom' ? urlInput.value.trim() : (baseURL || '');
       if (!/^https?:\/\//.test(url)) { probeOutput('请先填写 API 地址（baseURL）再刷新', 'bad'); return; }
@@ -611,6 +629,7 @@
       const key = currentTypedKey();
       probeBtn.disabled = true; probeBtn.textContent = '刷新中…';
       probeOutput('正在向端点获取模型清单…');
+      const releaseProbe = claimProbeSink((t) => { if (probeBtn.disabled) probeOutput(t); });
       try {
         // ① 清单：端点当前列出的模型
         const disc = await api.discoverModels(p.settingsNs, provider, key || undefined, api2, url);
@@ -671,6 +690,7 @@
       } catch (e) {
         probeOutput('刷新出错：' + (e.message || String(e)), 'bad');
       } finally {
+        releaseProbe();
         probeBtn.disabled = false; probeBtn.textContent = '↻ 更新模型与能力';
       }
     });
@@ -1037,11 +1057,364 @@
     wireGroupCardOps();
   }
 
+  // ---------------- 模型刷新：把端点/目录的最新清单写回配置 ----------------
+
+  /**
+   * 「刷新模型」筛查新候选的预算：一次动作最多对多少个新候选判死活。
+   *
+   * 端点清单动辄几百条（阿里云百炼的 compatible-mode 端点一次列出 262 个模型，实测约六分之一
+   * 对该密钥可用），逐个做**完整**能力探测会让一次点击变成几分钟的等待。所以分两段：
+   * 筛查只发一次 `max_tokens=1`（实测约 0.4s/模型，这一档能覆盖上百个），存活的少数再补齐档位
+   * （每个模型最多 8 次请求，但数量小）。一屏筛不完的留给下次刷新 —— 本轮通过写回后就不再是
+   * 候选，于是每点一次都往前走一步。
+   */
+  const SYNC_SCREEN_BUDGET = 120;
+
+  /** 筛查通过后做完整探测（上下文窗口 / 输出上限 / 思考档位）的预算，按存活数量自然收敛。 */
+  const SYNC_DEEP_BUDGET = 40;
+
+  /** 筛查的并发度：请求都只有 max_tokens=1，比默认值开高一点，几百个候选才跑得动。 */
+  const SYNC_SCREEN_CONCURRENCY = 8;
+
+  /** 进度输出的保留行数：全量刷新要「一眼看结果」，不需要回放几百行探测细节。 */
+  const SYNC_LOG_TAIL = 200;
+
+  /**
+   * 探测进度的**唯一**订阅点（值 = 此刻接收进度的消费者）。
+   *
+   * 主进程的 `llm:probeProgress` 是全局通道，而 preload 的 `onProbeProgress` 每次订阅都会
+   * 先 `removeAllListeners` —— 编辑器探测与全量刷新各自订阅一次，后订阅的会把先订阅的顶掉。
+   * 所以本模块只订阅一次（见 wire()），再按「此刻谁在跑」把进度转发给它。
+   * @type {((line: string) => void) | null}
+   */
+  let probeSink = null;
+
+  /**
+   * 认领探测进度通道，返回「交还」函数。
+   *
+   * 为什么是认领/交还而不是直接赋值：编辑器探测与全量刷新是两个独立入口，可能同时开着。
+   * 直接赋值再在结束时置 null，先结束的那个会把还在跑的那个的进度一起关掉。
+   * @param {(line: string) => void} sink 接收进度行的回调。
+   * @returns {() => void} 交还函数；只在自己仍是当前消费者时恢复上一个。
+   */
+  function claimProbeSink(sink) {
+    const fn = typeof sink === 'function' ? sink : null;
+    const prev = probeSink;
+    probeSink = fn;
+    return () => { if (probeSink === fn) probeSink = prev; };
+  }
+
+  /**
+   * 「已添加」的提供商：llm-pi-ai 里真的存了 profile 的那些。
+   *
+   * 为什么不拿 providersAll 整份当目标：目录里有 30 多个内置提供商，用户一个都没配过。
+   * 它们既没有端点可问（pi-ai 目录作答），也没有配置可写 —— 写进去只会凭空造出一批
+   * 「看起来配过」的 profile，把 routes 从「跟随内置目录」变成「钉死一份清单」。
+   */
+  function syncTargets() {
+    const ns = nsViews['llm-pi-ai'];
+    const profiles = (ns && ns.value && ns.value.providers) || {};
+    return providersAll.filter((p) => p.settingsNs === 'llm-pi-ai'
+      && !!profiles[p.provider] && typeof profiles[p.provider] === 'object');
+  }
+
+  /** 把探测/目录给出的元数据补进既有条目：既有值优先，只补空缺。 */
+  function fillModelEntry(prev, found) {
+    const out = { ...prev };
+    if (out.name === undefined && found.name) out.name = found.name;
+    if (out.contextWindow === undefined && found.contextWindow) out.contextWindow = found.contextWindow;
+    if (out.maxTokens === undefined && found.maxTokens) out.maxTokens = found.maxTokens;
+    return out;
+  }
+
+  /**
+   * 端点目录项 → 配置条目。探测结果优先于清单：清单通常只给 id/name，
+   * 而探测（厂商目录 + 现场问）才知道上下文窗口、输出上限和可用思考档位。
+   * 只带真的问到的字段，其余留给引擎按内置目录解析 —— 写 undefined 会把继承关系切断。
+   */
+  function modelEntryFrom(found, probed) {
+    const contextWindow = (probed && probed.contextWindow) || found.contextWindow;
+    const maxTokens = (probed && probed.maxTokens) || found.maxTokens;
+    return {
+      id: found.id,
+      ...(found.name ? { name: found.name } : {}),
+      ...(contextWindow ? { contextWindow } : {}),
+      ...(maxTokens ? { maxTokens } : {}),
+      ...(probed && probed.reasoningEfforts !== undefined ? { reasoningEfforts: probed.reasoningEfforts } : {}),
+    };
+  }
+
+  /**
+   * 「刷新模型」：把每个已添加提供商的模型清单重新问一遍，把差异写回 llm-pi-ai。
+   *
+   * 一次动作做四件事：
+   *   1. **问清单** —— `llm.discoverModels`。pi-ai 内置目录描述得了的路由直接由目录作答
+   *      （不走网络，且带上下文窗口/输出上限）；网关、自建服务这类目录里没有的路由走
+   *      `GET {baseURL}/models`。所以「自定义提供商」也能被刷到。
+   *   2. **体检新模型** —— 端点列出的清单并不区分「能用的」和「额度用尽/未开通」的
+   *      （阿里云百炼的 compatible-mode 端点一次列 262 个，实测约六分之一对该密钥可用），
+   *      新出现的候选必须先问一句才能收。分两段：先只判死活（每个候选一次
+   *      `max_tokens=1` 的请求，可覆盖上百个），存活的少数再补齐上下文窗口与思考档位。
+   *      没密钥时探测结果不可信，就不做过滤。
+   *   3. **写回配置** —— 以**用户层**为基线做 diff，只发真正变化的 set，避免把 schema 默认值
+   *      固化成用户数据（同 renderProviderEditor 的保存路径）。
+   *   4. **同步界面** —— 重读提供商与模型目录，并广播 `dsh:models-refreshed`，
+   *      让对话框（chat.js）的模型选择器立刻跟着重读，而不是等切会话。
+   *
+   * 「最新可用」的语义：清单里有、配置里没有的 → 收进来（筛查通过的，追加在原清单之后）；
+   * 配置里有、清单里已经没有的 → 视为厂商已下线，从配置里移除（这一步只在清单非空时做，
+   * 端点答不出来就整条跳过）；清单里仍列着、但当前密钥调用被拒的 → 不收录，也不硬删已有的
+   * （额度可能是临时的，留给编辑器里的「↻ 更新模型与能力」标记出来由用户决定）。
+   * 已有条目的相对顺序不动 —— 刷新该增删条目，不该顺手重排用户的模型列表。
+   *
+   * @param {{onLine?: (line: string) => void}} [options] 逐行进度回调。对话框里的刷新入口
+   *   用它把进度显示在自己的工具栏上（设置页的进度框此时不可见）。
+   * @returns {Promise<{ok:boolean, error?:string, providers?:number, added?:number, removed?:number, unchanged?:number, failed?:number}>}
+   */
+  async function syncAllModels(options) {
+    const opts = options || {};
+    const onLine = typeof opts.onLine === 'function' ? opts.onLine : null;
+    const out = $('#modelSyncOutput');
+    const lines = [];
+    const render = () => {
+      if (!out) return;
+      const tail = lines.length > SYNC_LOG_TAIL
+        ? [`…（前 ${lines.length - SYNC_LOG_TAIL} 行已省略）`, ...lines.slice(-SYNC_LOG_TAIL)]
+        : lines;
+      out.textContent = tail.join('\n');
+    };
+    const line = (text) => {
+      lines.push(text);
+      render();
+      if (onLine) onLine(text);
+    };
+    const finish = (kind) => {
+      if (out) out.className = 'mg-discover-output sync' + (kind ? ' ' + kind : '');
+    };
+    const summary = (extra) => Object.assign({
+      ok: true, providers: 0, added: 0, removed: 0, unchanged: 0, failed: 0,
+    }, extra || {});
+
+    if (syncRunning) return { ok: false, error: '正在刷新中，请稍候' };
+    if (out) out.className = 'mg-discover-output sync';
+    lines.length = 0;
+    syncRunning = true;
+    const btn = $('#refreshModelsBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '刷新中…'; }
+    try {
+      line('正在读取提供商与模型目录…');
+      const { lp, lm } = await loadModelConfigState();
+      if (!lp.ok && !lm.ok) {
+        // 进度框走 textContent，不转义 —— esc 一次反而会把 & < 变成实体显示出来
+        line('模型目录获取失败：' + (lp.error || lm.error || 'unknown'));
+        finish('bad');
+        return { ok: false, error: lp.error || lm.error || '模型目录获取失败' };
+      }
+      if (!settingsWritable) {
+        line('设置当前为只读（read-only settings provider），无法把模型清单写回配置。');
+        finish('bad');
+        return { ok: false, error: '设置只读' };
+      }
+      const targets = syncTargets();
+      if (targets.length === 0) {
+        line('还没有已添加的提供商：先在上面填一个 API 密钥（或「＋ 添加自定义提供商」），再来刷新。');
+        finish('bad');
+        return { ok: false, error: '没有已添加的提供商' };
+      }
+
+      // 引擎此刻真正在服务的模型：用来判断「跟随内置目录」的路由是否真的需要写回一份清单。
+      // 一份和目录一模一样的清单写进配置只是噪声 —— 它把路由从「跟随目录」变成「钉死」，
+      // 将来目录升级反倒要多刷一次才生效。
+      const servedIds = new Map(modelGroupsAll.map((g) => [g.id, new Set((g.models || []).map((m) => m.id))]));
+      const piNs = () => nsViews['llm-pi-ai'];
+
+      const stats = summary();
+      stats.providers = targets.length;
+      line(`已添加的提供商 ${targets.length} 个：${targets.map((p) => p.provider).join('、')}`);
+      for (const p of targets) {
+        const provider = p.provider;
+        const label = (p.displayName && p.displayName !== provider) ? `${p.displayName}（${provider}）` : provider;
+        const cfg = providerConfigOf(provider);
+        const userCfg = userProviderConfigOf(provider);
+        const before = Array.isArray(userCfg.models) ? userCfg.models : undefined;
+        const url = typeof cfg.baseURL === 'string' ? cfg.baseURL : '';
+        const apiProto = typeof cfg.api === 'string' && cfg.api.length > 0 ? cfg.api : undefined;
+        const ref = apiKeyEnvOf(provider) || deriveKeyRef(provider);
+        line(`── ${label}：正在获取模型清单…`);
+        try {
+          // ① 清单：不带明文密钥，主进程按 apiKeyEnv 在本机读（与「测试连接」同一约定）
+          const disc = await api.discoverModels('llm-pi-ai', provider, undefined, apiProto, url || undefined);
+          if (!disc || !disc.ok) {
+            line(`   ✗ 获取清单失败：${disc && disc.error ? disc.error : 'unknown'}（该提供商本次跳过）`);
+            stats.failed++;
+            continue;
+          }
+          const found = (disc.models || []).filter((m) => m && typeof m.id === 'string' && m.id.length > 0);
+          if (found.length === 0) {
+            // 清单为空是最危险的一种回执：照着它写回等于把该路由的模型清空。
+            // 宁可什么都不做，也不能把「端点此刻没答上来」当成「一个模型都没有」。
+            line('   ✗ 端点/目录没有返回任何模型（本次跳过，不动原配置）');
+            stats.failed++;
+            continue;
+          }
+
+          const beforeIds = new Set((before || []).map((m) => m.id));
+          const foundIds = new Set(found.map((m) => m.id));
+          // 新候选先截预算：剩下的下一轮再筛查（写回后它们不再是候选，所以每轮都往前走）
+          const freshAll = found.filter((m) => !beforeIds.has(m.id));
+          const candidates = freshAll.slice(0, SYNC_SCREEN_BUDGET);
+          const overflow = freshAll.length - candidates.length;
+
+          // ② 体检：分两段，因为「筛掉几百个候选」和「把留下的问清楚」代价差一个量级。
+          //    先只判死活（每个候选一次 max_tokens=1），再把存活的少数做完整探测
+          //    （ctx / max / 思考档位，每个模型最多 8 次请求）。厂商目录能答的 ctx/max
+          //    在筛查阶段就已回填，所以完整探测的预算按存活数量自然收敛。
+          const probed = new Map();   // id -> 探测结果（两段合并）
+          let alive = null;           // null = 没有可信的可用性结论，本次不做过滤
+          let hadKey = true;
+          const probeable = /^https?:\/\//.test(url)
+            && (apiProto === undefined || apiProto === 'openai-completions' || apiProto === 'openai-responses');
+          if (probeable && candidates.length > 0) {
+            const ids = candidates.map((m) => m.id);
+            line(`   清单 ${found.length} 个模型，新发现 ${freshAll.length} 个，正在筛查其中 ${ids.length} 个是否可用…`
+              + (overflow > 0 ? `（其余 ${overflow} 个留待下次刷新）` : ''));
+            const releaseProbe = claimProbeSink((t) => line('   ' + t));
+            try {
+              const cap = await api.probeCapabilities({
+                baseURL: url, api: apiProto, apiKeyEnv: ref, models: ids,
+                concurrency: SYNC_SCREEN_CONCURRENCY, aliveOnly: true,
+              });
+              if (cap && cap.ok) {
+                hadKey = cap.hadKey !== false;
+                for (const r of cap.results || []) if (r && r.id) probed.set(r.id, r);
+                if (hadKey) alive = new Set([...probed.values()].filter((r) => r.alive === true).map((r) => r.id));
+              } else {
+                line(`   ⚠ 筛查失败：${(cap && cap.error) || 'unknown'}，本次不做可用性过滤`);
+              }
+              if (alive && alive.size > 0) {
+                // 第二段：把筛查通过的补齐思考档位。这一步贵，但对象只剩存活的那几个。
+                const survivors = candidates.filter((m) => alive.has(m.id)).slice(0, SYNC_DEEP_BUDGET);
+                if (survivors.length > 0) {
+                  line(`   筛查通过 ${alive.size} 个，正在补齐其中 ${survivors.length} 个的上下文窗口与思考档位…`);
+                  const deep = await api.probeCapabilities({
+                    baseURL: url, api: apiProto, apiKeyEnv: ref, models: survivors.map((m) => m.id),
+                  });
+                  if (deep && deep.ok) for (const r of deep.results || []) if (r && r.id) probed.set(r.id, r);
+                  else line(`   ⚠ 能力补齐失败：${(deep && deep.error) || 'unknown'}（新增模型按清单元数据收录）`);
+                }
+              }
+            } finally {
+              releaseProbe();
+            }
+            if (!hadKey) line('   ⚠ 未取到该提供商的密钥，探测以未认证姿态进行 —— 结果不可信，本次不做可用性过滤');
+          } else if (candidates.length > 0) {
+            line(`   清单 ${found.length} 个模型，新发现 ${freshAll.length} 个（目录即权威，无需筛查）`);
+          }
+
+          // ③ 合成新清单。顺序策略：**原有条目保持原有顺序**，新收进来的按清单顺序追加在后面。
+          //    为什么不用清单顺序整体重排：模型选择器按配置顺序渲染，用户看到的是自己熟悉的排列，
+          //    而端点的排列会变（同一条路由，两次拉取的首项就从 qwen3.8-max 变成了 glm-5.3-prime），
+          //    照它重排等于让「刷新」顺手把用户的模型列表搅一遍 —— 每次点击都可能变一次顺序，
+          //    而条目内容其实没变。追加也顺带让写回的 diff 更小、新模型一眼可见。
+          const prevById = new Map((before || []).map((m) => [m.id, m]));
+          const next = [];
+          const appended = [];
+          for (const f of found) {
+            const prev = prevById.get(f.id);
+            if (prev) { next.push(fillModelEntry(prev, f)); continue; }
+            if (alive && !alive.has(f.id)) continue;   // 端点列了但当前调不通 → 不收
+            appended.push(modelEntryFrom(f, probed.get(f.id)));
+          }
+          next.push(...appended);
+          const removedIds = before ? before.filter((m) => !foundIds.has(m.id)).map((m) => m.id) : [];
+
+          // ④ 只有真的变了才写：跟随目录的路由在「目录里已有的都在服务中」时不写，
+          //    免得把路由钉死在一份等于目录的清单上。
+          const served = servedIds.get(provider) || new Set();
+          const changed = before
+            ? JSON.stringify(before) !== JSON.stringify(next)
+            : next.some((m) => !served.has(m.id));
+          if (!changed) {
+            line(`   = 已是最新（清单 ${found.length} 个，配置里没有变化的条目）`);
+            stats.unchanged++;
+            continue;
+          }
+
+          const draft = cloneJson(userCfg) || {};
+          draft.models = next;
+          const ops = settingsPathOps(['providers', provider], userCfg, draft);
+          if (ops.length === 0) { line('   = 已是最新'); stats.unchanged++; continue; }
+          const mut = await api.mutateSettings('llm-pi-ai', ops, piNs() ? piNs().revision : undefined);
+          if (!mut || !mut.ok) {
+            // 校验在写入处拦下（assertServiceable）：一条 serviceable 不了的清单会被整个拒绝，
+            // 原配置保持不动 —— 报出来让用户知道是哪一个提供商，而不是静默半成功。
+            line(`   ✗ 写入配置失败：${(mut && mut.error) || 'unknown'}（原配置未改动）`);
+            stats.failed++;
+            continue;
+          }
+          // 乐观并发：下一次写必须带新 revision，否则会被 expectedRevision 挡下
+          if (mut.revision !== undefined) {
+            nsViews['llm-pi-ai'] = Object.assign({ ns: 'llm-pi-ai' }, piNs() || {}, {
+              revision: mut.revision,
+              ...(mut.value !== undefined ? { value: mut.value } : {}),
+              ...(mut.user !== undefined ? { user: mut.user } : {}),
+            });
+          }
+          const addedCount = next.filter((m) => !beforeIds.has(m.id)).length;
+          stats.added += addedCount;
+          stats.removed += removedIds.length;
+          line(`   ✓ 已更新：清单 ${found.length} 个，新增 ${addedCount} 个可用模型`
+            + (removedIds.length ? `，移除 ${removedIds.length} 个已不在清单中的模型（${removedIds.slice(0, 6).join('、')}${removedIds.length > 6 ? ' …' : ''}）` : '')
+            + (alive && candidates.length ? `，筛查的 ${candidates.length} 个新候选中 ${candidates.length - addedCount} 个当前调不通已排除` : '')
+            + (overflow > 0 ? `，另有 ${overflow} 个新候选留待下次刷新筛查` : ''));
+        } catch (e) {
+          line(`   ✗ 刷新出错：${(e && e.message) || String(e)}`);
+          stats.failed++;
+        }
+      }
+
+      // 其它命名空间里已启用的提供商（如 deepseek-official → llm-deepseek）不归 pi-ai 目录管，
+      // 它们的模型由各自插件决定，这里只说明一句，免得用户以为漏刷了。
+      const others = providersAll.filter((x) => x.active && x.settingsNs !== 'llm-pi-ai');
+      if (others.length > 0) {
+        line(`（另有 ${others.length} 个已启用提供商不属 pi-ai 目录：${others.map((x) => x.provider).join('、')}；其模型由各自插件提供，此处不刷新）`);
+      }
+
+      // ⑤ 写回后重读一遍：引擎按新配置重新注册路由，界面与对话框都从这一份事实重建
+      await new Promise((r) => setTimeout(r, 250));
+      await refreshModels();
+      notifyChanged();
+      // 对话框（chat.js）的模型选择器听这个事件重读 session.models —— 不广播的话
+      // 用户刚刷新出来的模型要等切会话才出现。
+      window.dispatchEvent(new CustomEvent('dsh:models-refreshed', {
+        detail: { source: 'providers', added: stats.added, removed: stats.removed },
+      }));
+      const failNote = stats.failed > 0 ? `，${stats.failed} 个提供商失败（见上方逐条原因）` : '';
+      line(`✓ 刷新完成：检查 ${stats.providers} 个已添加的提供商，新增 ${stats.added} 个可用模型，`
+        + `移除 ${stats.removed} 个已下线模型，${stats.unchanged} 个已是最新${failNote}。`);
+      line('对话框的模型列表已同步更新；需要连同上下文窗口 / 输出上限 / 思考档位一起重探的，'
+        + '在对应提供商卡片里用「↻ 更新模型与能力」。');
+      finish(stats.failed > 0 ? 'bad' : 'ok');
+      return Object.assign(stats, { ok: true });
+    } catch (e) {
+      line('刷新出错：' + ((e && e.message) || String(e)));
+      finish('bad');
+      return { ok: false, error: (e && e.message) || String(e) };
+    } finally {
+      syncRunning = false;
+      if (btn) { btn.disabled = false; btn.textContent = '↻ 刷新模型'; }
+    }
+  }
+
   // ---------------- 事件绑定（原先在 settings.js 的 bind() 里） ----------------
   function wire() {
     $('#providerSelect').addEventListener('change', renderModelGroups);
-    $('#refreshModelsBtn').addEventListener('click', refreshModels);
+    // 这个按钮以前只是「重读一遍引擎当前加载了什么」—— 清单本身不会因此变长，点了像没反应。
+    // 现在它做真正的事：向每个已添加的提供商重新问一遍清单，把差异写回配置（见 syncAllModels）。
+    $('#refreshModelsBtn').addEventListener('click', () => { syncAllModels(); });
     renderCustomProviderForm();
+    // 探测进度只订阅一次（见 probeSink 的说明）
+    api.onProbeProgress((t) => { if (probeSink) probeSink(t); });
   }
 
   /**
@@ -1066,7 +1439,9 @@
 
   // index.html 里本文件排在 settings.js **之前**，所以 settings.js 的 init() 走到
   // refreshProviders() 时这个入口必然已经存在（脚本加载是同步的，IPC 回调要等下一轮事件循环）。
-  window.__providers = { refresh: refreshModels };
+  // syncModels 是「刷新模型」的可编程入口：对话框（chat.js）的模型面板也用它，
+  // 这样「写配置 + 重读 + 广播」这套语义只有一份实现，不会两边各写一套而漂移。
+  window.__providers = { refresh: refreshModels, syncModels: syncAllModels };
 
   wire();
 })();
