@@ -223,6 +223,13 @@ contextBridge.exposeInMainWorld('api', {
   browserNav: (action) => ipcRenderer.invoke('browser:nav', { action }),
   browserClose: () => ipcRenderer.invoke('browser:close'),
   browserOpenExternal: (url) => ipcRenderer.invoke('browser:openExternal', { url }),
+  // 官方界面宿主（Phase 1）：把我们界面里的一个面板变成引擎自带 WebUI 的容器
+  frontendOpen: () => ipcRenderer.invoke('frontend:open', {}),
+  frontendSetBounds: (bounds) => ipcRenderer.invoke('frontend:setBounds', bounds || {}),
+  frontendClose: () => ipcRenderer.invoke('frontend:close'),
+  frontendState: () => ipcRenderer.invoke('frontend:state'),
+  frontendOpenExternal: (url) => ipcRenderer.invoke('frontend:openExternal', { url }),
+  onFrontendEvent: (cb) => ipcRenderer.on('frontend:event', (_e, payload) => cb(payload)),
   browserState: () => ipcRenderer.invoke('browser:state'),
   onBrowserEvent: (cb) => ipcRenderer.on('browser:event', (_e, data) => cb(data)),
 });

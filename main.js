@@ -90,6 +90,7 @@ let HARNESS_DIR = '';
 
 let mainWindow = null;
 let harnessProc = null;
+let engineWebUrl = '';   // 引擎自带 WebUI 的地址（含 token）——「官方界面」宿主用
 let harnessState = 'stopped';
 let startDeadline = 0;
 let webUpAt = 0; // 本次启动进程是否曾就绪（用于区分“崩溃”与“正常退出”）
@@ -641,7 +642,14 @@ function launchHarness(found) {
       pushLog('stderr', '[本次未传 --no-open（该引擎不支持）：WebUI 就绪后它可能自己打开系统浏览器]');
     }
   }
-  harnessProc.stdout.on('data', (d) => pushLog('stdout', d.toString()));
+  harnessProc.stdout.on('data', (d) => {
+    const text = d.toString();
+    pushLog('stdout', text);
+    // 【官方界面宿主】引擎就绪时会打印带一次性 token 的 WebUI 地址；抓住它，
+    // 供「官方界面」页把引擎自带前端嵌进我们的布局（社区 UI 插件/主题在那里零改动生效）。
+    const m = /dsh web:\s*(http:\/\/\S+)/.exec(text);
+    if (m) { engineWebUrl = m[1].trim(); pushLog('stdout', `[官方界面] 已记录前端地址（token 已捕获）`); }
+  });
   harnessProc.stderr.on('data', (d) => pushLog('stderr', d.toString()));
   harnessProc.on('error', (err) => {
     pushLog('stderr', `[spawn error] ${err.message}`);
@@ -1937,6 +1945,14 @@ const gitCtl = registerGitIpc({
   openTerminal: openSystemTerminal,
 });
 
+// 「官方界面」宿主（Phase 1）：把引擎自带 WebUI 嵌进我们界面的一个面板
+// —— 社区为 WebUI 写的 UI 插件与主题在那里零改动直接可用（官方桌面端同机制）。
+const frontendCtl = registerBrowserIpc({
+  ipcMain,
+  getWindow: () => mainWindow,
+  prefix: 'frontend',
+  homeUrl: () => engineWebUrl || `http://127.0.0.1:${PORT}/`,
+});
 const browserCtl = registerBrowserIpc({
   ipcMain,
   getWindow: () => mainWindow,

@@ -48,6 +48,9 @@
       <button class="nav-btn" id="navMarket" data-page="market" title="浏览 / 搜索 / 一键安装社区插件，管理已装插件与主题">
         <span class="nav-icon">🛒</span><span class="nav-label">插件市场</span>
       </button>
+      <button class="nav-btn" id="navOfficial" data-page="official" title="引擎自带的官方 WebUI —— 社区 UI 插件与主题在这里零改动直接生效">
+        <span class="nav-icon">🌐</span><span class="nav-label">官方界面</span>
+      </button>
     </nav>
     <!-- 2026-10-09：GitHub / MCP / 技能 三个入口从左栏移除（用户反馈"过于割裂"）——
          GitHub → 右侧栏第三个标签（浏览型，自动带出当前工作区仓库）；
@@ -252,6 +255,26 @@
       </div>
     </section>
 
+    <!-- 官方界面（Phase 1）：把引擎自带 WebUI 嵌进来的一块面板。
+         社区为 WebUI 写的 UI 插件/主题只认 harness 自己的前端；嵌进来 = 零改动直接可用。
+         视图由 main 的 WebContentsView 承载，这里只负责"留位置 + 报矩形"。 -->
+    <section class="page" id="page-official">
+      <div class="official-wrap">
+        <div class="official-bar">
+          <span class="official-title">官方界面</span>
+          <span class="official-hint" id="officialHint">引擎自带 WebUI（社区 UI 插件与主题在此零改动生效）</span>
+          <span class="official-spacer"></span>
+          <button type="button" class="mini-btn" id="officialReload">刷新</button>
+          <button type="button" class="mini-btn" id="officialExternal">在系统浏览器打开</button>
+        </div>
+        <div class="official-host" id="officialHost">
+          <div class="official-placeholder" id="officialPlaceholder">
+            <div class="big">🌐</div>
+            <div id="officialPlaceholderText">正在连接引擎…</div>
+          </div>
+        </div>
+      </div>
+    </section>
     <section class="page" id="page-settings">
     <!-- 集成：MCP 服务 / 技能（原左栏抽屉迁入；dock.js 按容器渲染） -->
     <div class="settings-integrations" id="settingsIntegrations">
@@ -771,6 +794,7 @@
        不依赖加载顺序，但放后面更贴近"消费 chat.js 状态"的定位。 -->
   <script src="git-bar.js"></script>
   <script src="quick-actions.js"></script>
+  <script src="official-ui.js"></script>
   <script src="theme-studio.js"></script>
   <script src="market.js"></script>
 </body>
