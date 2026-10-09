@@ -39,7 +39,9 @@ const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
 const PORT = 3080;
 const LOG_LIMIT = 5000;
 
-// 解析 Node 可执行文件：显式 DSH_NODE_EXE → 安装布局 tools/node（安装根目录）→ 与 app 同级 tools/node → PATH 上的 node
+// 解析 Node 可执行文件：显式 DSH_NODE_EXE → 安装布局 tools/node（安装根目录）→ 与 app 同级 tools/node
+// → 与 app 同级 extras/node → PATH 上的 node → **最后兜底：用 Electron 自身当 Node**
+// （ELECTRON_RUN_AS_NODE=1 跑 process.execPath —— 官方社区版同款技巧，用户机器零 Node 依赖）。
 // node 二进制名按平台取（Windows 是 node.exe，mac/linux 是 node）。
 function resolveNodeExe() {
   const bin = process.platform === 'win32' ? 'node.exe' : 'node';
@@ -47,9 +49,25 @@ function resolveNodeExe() {
     process.env.DSH_NODE_EXE || '',
     path.join(LAYOUT_ROOT, 'tools', 'node', bin),
     DSH_ROOT ? path.join(DSH_ROOT, 'tools', 'node', bin) : '',
+    path.join(__dirname, 'extras', 'node', bin),   // P1：随安装包分发的 node
   ];
   for (const c of cands) if (c && fs.existsSync(c)) return c;
-  return 'node';
+  // 🔴 兜底：返回 Electron 主程序路径；调用方用 nodeChildEnv() 自动追加 ELECTRON_RUN_AS_NODE=1。
+  //    （之前直接返回 'node' → 用户没装 Node 时引擎完全起不来。）
+  return process.execPath;
+}
+
+/** 该 Node 路径是否是"Electron 自身当 Node"（需要在 env 里设 ELECTRON_RUN_AS_NODE=1） */
+function nodeExeNeedsAsNode(exe) {
+  return !!exe && path.resolve(exe) === path.resolve(process.execPath);
+}
+
+/** 组装子进程 env：按需追加 ELECTRON_RUN_AS_NODE=1（其余原样） */
+function nodeChildEnv(exe, base) {
+  const env = { ...(base || process.env) };
+  if (nodeExeNeedsAsNode(exe)) env.ELECTRON_RUN_AS_NODE = '1';
+  else delete env.ELECTRON_RUN_AS_NODE;   // 不带标记时绝不能继承（否则 electron 退化成 node）
+  return env;
 }
 
 // 首启兜底：确保桌面快捷方式存在（安装器已创建；这里防止安装器异常/手改布局后缺失时补上）。
@@ -204,11 +222,15 @@ function npmCmd() {
   if (!nodeExe || nodeExe === 'node') return null;
   const cli = path.join(path.dirname(nodeExe), 'node_modules', 'npm', 'bin', 'npm-cli.js');
   if (fs.existsSync(cli)) return { nodeExe, cli };
+  // 🔴 P1 兜底：安装包没带 npm 目录时，用 **Electron 当 Node** 直接跑 npm-cli
+  //    （npm-cli.js 也能从 npm 包内解析；这里从 app 打包的 npm 依赖里找）。
+  const alt = path.join(__dirname, 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  if (fs.existsSync(alt)) return { nodeExe, cli: alt };
   return null;
 }
 function npmSpawnSync(args, opts = {}) {
   const n = npmCmd();
-  if (n) return spawnSync(n.nodeExe, [n.cli, ...args], { windowsHide: true, encoding: 'utf8', ...opts });
+  if (n) return spawnSync(n.nodeExe, [n.cli, ...args], { windowsHide: true, encoding: 'utf8', env: nodeChildEnv(n.nodeExe), ...opts });
   const win = process.platform === 'win32';
   const cmd = win ? 'cmd.exe' : 'npm';
   const params = win ? ['/c', 'npm', ...args] : args;
@@ -216,7 +238,7 @@ function npmSpawnSync(args, opts = {}) {
 }
 function npmSpawn(args, opts = {}) {
   const n = npmCmd();
-  if (n) return spawn(n.nodeExe, [n.cli, ...args], { windowsHide: true, ...opts });
+  if (n) return spawn(n.nodeExe, [n.cli, ...args], { windowsHide: true, env: nodeChildEnv(n.nodeExe), ...opts });
   const win = process.platform === 'win32';
   const cmd = win ? 'cmd.exe' : 'npm';
   const params = win ? ['/c', 'npm', ...args] : args;
@@ -440,6 +462,36 @@ function engineSupportsNoOpen(dir) {
   return false;
 }
 
+/**
+ * 【P2 · 实验开关 DSH_UTILITY_ENGINE=1】用 Electron `utilityProcess` 跑引擎（官方社区版同款机制）。
+ * 好处：引擎进程由应用自己的二进制派生（用户机器无需 Node）；生命周期与主进程同舱管理。
+ * 回退：启动抛错，或 90 秒内 :3080 未就绪 → 自动退回 spawn 路径（既有逻辑），不把用户卡死。
+ */
+function utilityEngineEnabled() {
+  return process.env.DSH_UTILITY_ENGINE === '1';
+}
+
+function startViaUtilityProcess(found, env, webArgs) {
+  const child = utilityProcess.fork(found.bin, webArgs, {
+    cwd: found.dir,
+    env: { ...env, ELECTRON_RUN_AS_NODE: '' },   // utilityProcess 本身就是 Node 环境，清掉标记避免干扰
+    serviceName: 'dsh-engine',
+    stdio: 'pipe',
+  });
+  // 适配成 harnessProc 的既有接口（pid/stdout/stderr/on('exit')/kill）
+  return {
+    pid: child.pid,
+    stdout: child.stdout,
+    stderr: child.stderr,
+    on(ev, fn) {
+      if (ev === 'exit') child.on('exit', (code) => fn(code, null));
+      // utilityProcess 没有 'error' 事件：启动失败表现为立即 exit，由 exit 分支兜底
+    },
+    kill() { try { child.kill(); } catch { /* ignore */ } },
+    __utility: true,
+  };
+}
+
 function launchHarness(found) {
   HARNESS_DIR = found.dir;
   setState('starting');
@@ -453,18 +505,35 @@ function launchHarness(found) {
   const harnessEnv = loadDotEnv();
   const env = { ...process.env, ...harnessEnv, DSH_HOME };
   if (harnessEnv.DEEPSEEK_API_KEY) delete env.DEEPSEEK_API_KEY;
-  const nodeExe = resolveNodeExe();
-  // 静默启动：不让引擎自己弹浏览器（桌面端有「打开 Web 端」按钮按需打开）
   const noOpen = engineSupportsNoOpen(found.dir);
   const webArgs = [found.bin, 'web'].concat(noOpen ? ['--no-open'] : []);
-  harnessProc = spawn(nodeExe, webArgs, {
-    cwd: found.dir,
-    env,
-    windowsHide: true,
-  });
-  pushLog('stdout', `[启动 harness: ${nodeExe} ${found.bin} web${noOpen ? ' --no-open' : ''} (${found.kind})]`);
-  if (!noOpen) {
-    pushLog('stderr', '[本次未传 --no-open（该引擎不支持）：WebUI 就绪后它可能自己打开系统浏览器]');
+
+  // 【P2 · 实验路径】DSH_UTILITY_ENGINE=1 时优先用 Electron utilityProcess 跑引擎；
+  // 90 秒未就绪由既有 startDeadline 兜底杀掉，并在 exit 分支回退到下面的 spawn 路径。
+  let harnessProcWasUtility = false;
+  if (utilityEngineEnabled()) {
+    try {
+      harnessProc = startViaUtilityProcess(found, env, webArgs);
+      pushLog('stdout', `[实验] 引擎以 Electron utilityProcess 运行（pid=${harnessProc.pid}，DSH_UTILITY_ENGINE=1）`);
+      harnessProc.__p2 = true;
+      harnessProcWasUtility = true;
+    } catch (e) {
+      pushLog('stderr', `[utilityProcess 启动失败，回退到 spawn：${e.message}]`);
+      harnessProc = null;
+    }
+  }
+
+  if (!harnessProc) {
+    const nodeExe = resolveNodeExe();
+    harnessProc = spawn(nodeExe, webArgs, {
+      cwd: found.dir,
+      env: nodeChildEnv(nodeExe, env),
+      windowsHide: true,
+    });
+    pushLog('stdout', `[启动 harness: ${nodeExe} ${found.bin} web${noOpen ? ' --no-open' : ''} (${found.kind})]`);
+    if (!noOpen) {
+      pushLog('stderr', '[本次未传 --no-open（该引擎不支持）：WebUI 就绪后它可能自己打开系统浏览器]');
+    }
   }
   harnessProc.stdout.on('data', (d) => pushLog('stdout', d.toString()));
   harnessProc.stderr.on('data', (d) => pushLog('stderr', d.toString()));
@@ -483,6 +552,16 @@ function launchHarness(found) {
     // 启动后从未就绪就退出：多半是引擎不完整（ERR_MODULE_NOT_FOUND / plugin tree failed）。
     // 给出明确提示与修复指引，不自动重装（避免死循环，用户可点启动触发自动修复）。
     if (!everUp && code !== 0) {
+      // 【P2 回退】utilityProcess 路径失败 → 自动用 spawn 再试一次（同一台机器上这是确定可行的路径）
+      if (harnessProcWasUtility && utilityEngineEnabled() && !startHarness.__retriedWithSpawn) {
+        startHarness.__retriedWithSpawn = true;
+        pushLog('stderr', '[utilityProcess 引擎未能就绪：自动回退 spawn 路径重试一次]');
+        process.env.DSH_UTILITY_ENGINE = '';
+        try {
+          const r = startHarness();
+          if (r && r.ok) return;
+        } catch { /* 落到下面的常规处理 */ }
+      }
       pushLog('stderr', '[引擎未能就绪：可能依赖不完整。正在检测本机引擎完整性…]');
       const found = discoverHarness();
       if (!found) {
