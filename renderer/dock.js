@@ -73,7 +73,7 @@
   // 设置页激活时刷新两个集成面板（懒加载：切到那页才拉数据）
   document.querySelectorAll('.nav-btn[data-page="settings"]').forEach((b) => {
     b.addEventListener('click', () => {
-      setTimeout(() => { renderMcp(); renderSkill(); }, 350);
+      setTimeout(() => { renderMcp(); renderSkill(); renderEngine(); }, 350);
     });
   });
 
@@ -482,6 +482,49 @@
             <div class="dock-repo-name">🔌 ${esc(s.serverName)}</div>
             <div class="dock-repo-desc">${esc(s.command || '（未声明启动命令）')}</div>
           </div>`).join(''));
+  }
+
+  // ================= 引擎（版本 / 官方更新检测 / 一键升级） =================
+  /**
+   * 官方把引擎发布在 npm（@deepseek-ai/dsh）。这里显示：
+   *   本机引擎版本 · 官方最新版 · 是否需要更新；npm 形态的引擎可一键升级（升级后重启引擎生效）。
+   * 用户 2026-10-09 要求："加入对官方的更新检测（比如已经更新到了 0.1.7-rc2）"。
+   */
+  async function renderEngine() {
+    const body = $('#enginePanelRoot');
+    if (!body) return;
+    body.innerHTML = '<div class="dock-loading">正在检测引擎版本…</div>';
+    const r = await api.engineVersions(false).catch((e) => ({ ok: false, error: e.message }));
+    if (!r || !r.ok) { body.innerHTML = `<div class="dock-empty">⚠ ${esc((r && r.error) || '检测失败')}</div>`; return; }
+    const kindText = { npm: 'npm 依赖（官方同款）', dist: '发行包', source: '源码构建' }[r.kind] || (r.kind || '未知');
+    const up = r.updateAvailable;
+    body.innerHTML = `
+      <div class="dock-mcp">
+        <div class="dock-repo-name">⚙️ 本机引擎 v${esc(r.installed || '未知')}
+          <span class="dock-badge">${esc(kindText)}</span>
+          ${up ? '<span class="dock-badge" style="color:var(--gold)">有新版本</span>' : ''}</div>
+        <div class="dock-repo-desc">官方最新：v${esc(r.latest || '（未取到）')}${r.error ? ` · ${esc(r.error)}` : ''}
+          ${r.checkedAt ? ` · 检测于 ${new Date(r.checkedAt).toLocaleString()}` : ''}</div>
+        <div class="dock-skill-when" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+          <button type="button" class="mini-btn" id="engCheck">重新检测</button>
+          ${up && r.upgradableInPlace ? `<button type="button" class="mini-btn primary-btn" id="engUp" data-v="${esc(r.latest)}">升级到 v${esc(r.latest)}</button>` : ''}
+          ${up && !r.upgradableInPlace ? '<span class="dock-repo-desc">（源码形态引擎不支持一键升级；重装时 setup.ps1 会用官方最新版重建）</span>' : ''}
+        </div>
+      </div>`;
+    $('#engCheck').onclick = () => renderEngine();
+    const upBtn = $('#engUp');
+    if (upBtn) upBtn.onclick = async () => {
+      upBtn.disabled = true;
+      upBtn.textContent = '升级中…（会先停引擎）';
+      const res = await api.engineUpgrade(upBtn.dataset.v).catch((e) => ({ ok: false, error: e.message }));
+      if (res && res.ok) {
+        body.innerHTML = `<div class="dock-mcp"><div class="dock-repo-name">✅ 已升级到 v${esc(res.installed || upBtn.dataset.v)}</div>
+          <div class="dock-repo-desc">${esc(res.note || '')}</div></div>`;
+      } else {
+        renderEngine();
+        alertBox((res && res.error) || '升级失败', '引擎升级');
+      }
+    };
   }
 
   // ================= 技能 =================

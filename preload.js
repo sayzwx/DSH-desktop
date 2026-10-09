@@ -4,6 +4,9 @@ contextBridge.exposeInMainWorld('api', {
   startHarness: () => ipcRenderer.invoke('harness:start'),
   stopHarness: () => ipcRenderer.invoke('harness:stop'),
   getStatus: () => ipcRenderer.invoke('harness:status'),
+  // 引擎版本与官方更新检测（P0 配套：知道官方发到哪个版本，npm 形态可一键升级）
+  engineVersions: (force) => ipcRenderer.invoke('engine:versions', { force: !!force }),
+  engineUpgrade: (version) => ipcRenderer.invoke('engine:upgrade', { version }),
   getLogs: () => ipcRenderer.invoke('harness:logs'),
   openWeb: () => ipcRenderer.invoke('harness:openWeb'),
   setNativeTheme: (mode) => ipcRenderer.invoke('app:nativeTheme', mode),

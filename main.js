@@ -284,7 +284,9 @@ function checkHarnessIntegrity(dir, kind) {
   }
   // 依赖作用域：源码形态在仓库内 node_modules（pnpm workspace 链接）；发行包形态
   // 依赖可能与其同级、或被 npm hoist 到上级 node_modules 根（全局安装典型场景），全部覆盖。
-  const scopes = kind === 'dist'
+  // 【P0】npm 形态（引擎=普通 npm 依赖，官方同款）与 dist 形态作用域相同：
+  //   f.dir = <安装根>/node_modules/@deepseek-ai/dsh → 依赖在 dir/../@deepseek-ai ✓
+  const scopes = (kind === 'dist' || kind === 'npm')
     ? [
         path.join(dir, 'node_modules', '@deepseek-ai'),   // 嵌套安装（包自带 node_modules）
         path.join(dir, '..', '@deepseek-ai'),             // 与 dsh 同级（@deepseek-ai 目录内）
@@ -393,6 +395,14 @@ function discoverHarness() {
     if (fs.existsSync(srcBin)) found.push({ dir, bin: srcBin, kind: 'source' });
     const distBin = path.join(dir, 'lib', 'bin.js');                  // 发行包形态
     if (fs.existsSync(distBin) && !found.some((f) => f.dir === dir)) found.push({ dir, bin: distBin, kind: 'dist' });
+    // 【P0 · npm 形态】引擎目录 = 一个 npm install 根：node_modules/@deepseek-ai/dsh/lib/bin.js
+    // 官方社区版就是这么放引擎的（引擎=普通 npm 依赖），**没有任何 pnpm 链接问题**。
+    // cwd 用包目录自己（它的依赖在上级 node_modules 里，Node 逐级向上解析）。
+    const npmDir = path.join(dir, 'node_modules', '@deepseek-ai', 'dsh');
+    const npmBin = path.join(npmDir, 'lib', 'bin.js');
+    if (fs.existsSync(npmBin) && !found.some((f) => f.dir === npmDir)) {
+      found.push({ dir: npmDir, bin: npmBin, kind: 'npm' });
+    }
   }
   for (const f of found) {
     const chk = checkHarnessIntegrity(f.dir, f.kind);
@@ -402,6 +412,102 @@ function discoverHarness() {
   if (found.length > 0) pushLog('stderr', '[本机引擎均不完整，将尝试自动修复/给出手动指引]');
   return null;
 }
+
+/**
+ * 官方引擎版本检测（用户 2026-10-09 要求：能知道官方发到哪个版本了）。
+ * - installed：本机引擎版本（npm 形态读包 package.json；源码/发行形态读 package.json 的 version）
+ * - latest：官方 npm registry 上 @deepseek-ai/dsh 的 latest（24h 缓存，避免每次开页面都打网络）
+ * - upgradable：仅 **npm 形态**支持原地升级（npm install @deepseek-ai/dsh@<latest>）——
+ *   源码形态从源码构建，不走这条路（界面只提示版本差）。
+ */
+const ENGINE_NPM_PKG = '@deepseek-ai/dsh';
+let engineVerCache = { at: 0, installed: '', latest: '', error: '' };
+
+function readInstalledEngineVersion() {
+  const dir = HARNESS_DIR || (() => { const f = discoverHarness(); return f ? f.dir : ''; })();
+  if (!dir) return '';
+  const cands = [
+    path.join(dir, 'package.json'),                                  // npm 形态（f.dir=dsh 包目录）/ 发行形态
+    path.join(dir, 'apps', 'cli', 'package.json'),                    // 源码形态
+  ];
+  for (const p of cands) {
+    try {
+      const v = JSON.parse(fs.readFileSync(p, 'utf8')).version;
+      if (v) return String(v);
+    } catch { /* 下一个 */ }
+  }
+  return '';
+}
+
+async function fetchLatestEngineVersion() {
+  const url = `https://registry.npmjs.org/${ENGINE_NPM_PKG.replace('/', '%2f')}/latest`;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 12000);
+  try {
+    const res = await fetch(url, { signal: ctl.signal, headers: { accept: 'application/json' } });
+    if (!res.ok) return { error: `HTTP ${res.status}` };
+    const j = await res.json();
+    return { latest: j && j.version ? String(j.version) : '', error: j && j.version ? '' : '响应缺 version' };
+  } catch (e) {
+    return { error: (e && e.name === 'AbortError') ? '请求超时' : ((e && e.message) || '网络错误') };
+  } finally { clearTimeout(timer); }
+}
+
+ipcMain.handle('engine:versions', async (_e, { force } = {}) => {
+  const now = Date.now();
+  const fresh = now - engineVerCache.at < 24 * 3600 * 1000;
+  const needNet = force || !fresh || !engineVerCache.latest;
+  if (needNet) {
+    const r = await fetchLatestEngineVersion();
+    engineVerCache = { at: now, installed: readInstalledEngineVersion(), latest: r.latest || '', error: r.error || '' };
+  } else {
+    engineVerCache.installed = readInstalledEngineVersion();
+  }
+  const found = discoverHarness();
+  return {
+    ok: true,
+    installed: engineVerCache.installed,
+    latest: engineVerCache.latest,
+    error: engineVerCache.error,
+    updateAvailable: !!(engineVerCache.latest && engineVerCache.installed && engineVerCache.latest !== engineVerCache.installed),
+    kind: found ? found.kind : '',
+    engineDir: found ? found.dir : '',
+    upgradableInPlace: !!(found && found.kind === 'npm'),   // 只有 npm 形态能原地升级
+    checkedAt: engineVerCache.at,
+  };
+});
+
+// 一键升级（仅 npm 形态）：在 npm 安装根执行 `npm install @deepseek-ai/dsh@<ver>`
+ipcMain.handle('engine:upgrade', async (_e, { version } = {}) => {
+  try {
+    const want = String(version || '').trim();
+    if (!/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(want)) return { ok: false, error: `版本号不合法：${want}` };
+    const found = discoverHarness();
+    if (!found || found.kind !== 'npm') return { ok: false, error: '只有 npm 形态引擎支持一键升级（源码形态请用 setup.ps1 修复/重建）' };
+    // npm 安装根 = <root>/node_modules/@deepseek-ai/dsh 向上三层
+    const installRoot = path.dirname(path.dirname(path.dirname(found.dir)));
+    if (harnessProc) { try { spawnSync('taskkill', ['/PID', String(harnessProc.pid), '/T', '/F'], { windowsHide: true }); } catch { } harnessProc = null; setState('stopped'); }
+    pushLog('stdout', `[引擎升级] npm install ${ENGINE_NPM_PKG}@${want} @ ${installRoot}`);
+    const env = nodeChildEnv(resolveNodeExe(), { ...process.env, CI: 'true' });
+    const r = await new Promise((resolve) => {
+      const n = npmCmd();
+      const child = n
+        ? spawn(n.nodeExe, [n.cli, 'install', `${ENGINE_NPM_PKG}@${want}`, '--omit=dev', '--no-audit', '--no-fund'], { cwd: installRoot, env, windowsHide: true })
+        : spawn('npm', ['install', `${ENGINE_NPM_PKG}@${want}`, '--omit=dev', '--no-audit', '--no-fund'], { cwd: installRoot, env, windowsHide: true, shell: true });
+      let out = '';
+      child.stdout.on('data', (d) => { out += d.toString(); pushLog('stdout', d.toString().trim()); });
+      child.stderr.on('data', (d) => { out += d.toString(); pushLog('stderr', d.toString().trim()); });
+      child.on('error', (e) => resolve({ ok: false, error: e.message }));
+      child.on('close', (code) => resolve({ ok: code === 0, code, tail: out.slice(-600) }));
+    });
+    engineVerCache.at = 0;   // 失效缓存
+    if (!r.ok) return { ok: false, error: `npm 升级失败（exit=${r.code}）：${String(r.tail || '').slice(-300)}` };
+    const now = readInstalledEngineVersion();
+    return { ok: true, installed: now, note: '升级完成，请点「启动 Harness」重启引擎生效' };
+  } catch (e) {
+    return { ok: false, error: (e && e.message) || '升级失败' };
+  }
+});
 
 // 让 chat/上传等默认工作区落到一个真实存在的目录
 function defaultWorkspaceDir() {

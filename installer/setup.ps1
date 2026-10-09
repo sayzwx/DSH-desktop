@@ -160,6 +160,13 @@ function Install-Harness([string]$NodeExe) {
   $webDist    = Join-Path $harnessDir 'apps\web\dist\index.html'
   $got = $false
   $build = $false
+  # 【P0】npm 形态引擎：引擎目录 = 普通 npm install 根（node_modules/@deepseek-ai/dsh）
+  # —— 官方社区版同款。这种形态**不需要源码构建**，有入口包即视为完整。
+  $npmBin = Join-Path $harnessDir 'node_modules\@deepseek-ai\dsh\lib\bin.js'
+  if (Test-Path $npmBin) {
+    Write-Host '  检测到 npm 形态引擎（官方同款 npm 依赖）——跳过源码构建'
+    return
+  }
   if (Test-Path (Join-Path $harnessDir 'package.json')) {
     # “已存在即跳过”必须以【CLI + web 前端 dist 都齐全】为前提；只差 web dist 的
     # 旧安装（rc.7 时代曾出现 lib 构建成功而 web 未构建，导致打开就报 “frontend dist not built”）

@@ -145,15 +145,15 @@ Write-Host '=== Bundling portable Node.js (tools\\node) ==='
 # P0 离线引擎包：dist\engine\harness（由 scripts\build-engine-bundle.ps1 产出的**无链接自包含树**）
 # 整树放进 stage\harness —— setup.ps1 的「已存在即跳过」逻辑直接复用，安装时零网络零编译。
 # 这就是官方"一个安装包装完即用"的本质：把不确定性从用户机器挪到构建机。
-$engineStageSrc = Join-Path $root 'dist\engine\harness'
-if (Test-Path (Join-Path $engineStageSrc 'apps\cli\lib\bin.js')) {
+$engineStageSrc = Join-Path $root 'dist\engine-npm'
+if (Test-Path (Join-Path $engineStageSrc 'node_modules\@deepseek-ai\dsh\lib\bin.js')) {
   Write-Host '=== Bundling prebuilt harness engine (stage\harness) ==='
   $engineDst = Join-Path $stage 'harness'
   robocopy $engineStageSrc $engineDst /E /MT:16 /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
   if ($LASTEXITCODE -ge 8) { throw 'staging bundled engine failed' }
   Write-Host ("  bundled engine: {0:N0} MB" -f ((Get-ChildItem $engineDst -Recurse -File | Measure-Object Length -Sum).Sum / 1MB))
 } else {
-  Write-Host '  (无离线引擎包 dist\engine\harness —— 安装时回退在线拉取；生成方式：scripts\build-engine-bundle.ps1)' -ForegroundColor Yellow
+  Write-Host '  (无离线引擎包 dist\engine-npm —— 安装时回退在线拉取；生成方式：scripts\build-engine-bundle.ps1)' -ForegroundColor Yellow
 }
 
 $nodeExe = Get-BundledNode $NodeVersion
