@@ -1,0 +1,20 @@
+# 换行与文件类型规范化。
+# 独立插件仓库里只有文本与壁纸资源两类，不需要桌面端那套 BOM 规则。
+
+* text=auto
+
+# 代码与文档：统一 LF
+*.js     text eol=lf
+*.mjs    text eol=lf
+*.cjs    text eol=lf
+*.json   text eol=lf
+*.md     text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.sh     text eol=lf
+
+# 二进制：不做换行转换
+*.jpg    binary
+*.jpeg   binary
+*.png    binary
+*.mp4    binary

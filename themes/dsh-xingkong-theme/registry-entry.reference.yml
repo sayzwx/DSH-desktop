@@ -1,50 +1,46 @@
 # 收录用条目（PR 到 awesome-dsh-plugin 的 data/plugins/ 下）
 #
-# 目标文件：awesome-dsh-plugin/awesome-dsh-plugin → data/plugins/sayzwx__DSH-desktop.yml
+# 目标文件：awesome-dsh-plugin/awesome-dsh-plugin → data/plugins/sayzwx__dsh-xingkong-theme.yml
 #   （文件名规则：<owner>__<repo>.yml，owner/repo 与仓库完全一致）
 #
-# ⚠️ 这是一次**更新**而不是新增：沿用同一个文件名（sayzwx__DSH-desktop.yml）与同样的
-# url/name 身份，市场的 key 就是这个文件名。若改成 contributing.md 里 monorepo 子包的
-# <owner>__<repo>--<子目录>.yml 写法，会变成另一条记录，列表里就会出现两条 ——
-# 那不叫「替代」。
+# ⚠️ 这一版换成了**独立仓库** `sayzwx/dsh-xingkong-theme`（原先是
+# DSH-desktop 的子目录）。所以：
+#   · 文件名从 sayzwx__DSH-desktop.yml 改成 sayzwx__dsh-xingkong-theme.yml
+#   · 市场里会是一条**新条目**，不是对旧条目的更新 —— 这是换仓库的必然结果。
+#     旧条目需要一并删除或改名，否则列表里会留下一个指向旧路径的死条目。
+#   · 若之后又搬回 monorepo，文件名要跟着改回去（名字即身份）。
 #
 # 规则要点（来自 contributing.md）：
 #   · 一个 PR 只改一个文件；README 由脚本生成，**不要手工编辑**
 #   · category 必须用 theme（会自动进 dsh-market 的「主题 Tab」，可一键安装/切换/卸载）
-#   · 只有 description.en 必填；zh 可选（写不了维护者会补）
+#   · 只有 description.en 必填；zh 可选
 #   · ⚠️ 描述里含 ": " 必须加引号，否则 YAML 会把冒号当键值分隔
 #   · 描述只说功能、不带营销词；**必须属实**（评审会对着代码核）
-#   · 仓库需声明 dsh.bundle（本主题有），并加 dsh-plugin topic
+#   · 仓库需声明 dsh.bundle ✓（本包根目录的 package.json 有）并加 dsh-plugin topic
+#   · 仓库需创建满 1 天、有真实可运行代码
 #
-# screenshots 字段（依据 market 前端 client.js 的实际消费方式）：
-#   · 卡片上的缩略图**只认这个字段**；没有它，卡片会显示「正在查找预览…」
-#   · README 里的图片只会出现在安装详情弹窗里（只有弹窗才会去抓 README）
-#   · 必须 https，且域名在白名单内：raw.githubusercontent.com /
-#     user-images.githubusercontent.com / camo.githubusercontent.com / github.com
-#   · .svg 会被丢弃（那是 logo / 徽章的形状），最多 6 张
-#   · 用 HEAD 而非分支名或 tag：HEAD 永远指向默认分支，不会腐烂
-#     ⚠️ 所以主题必须先合进默认分支，否则这几张图会 404。
+# ⚠️ 截图**不在这个条目里**声明（这条最容易踩错）：
+# 规范要求截图放在**插件自己的仓库** —— 与 package.json 并列的 screenshots.json，
+# 路径相对该文件，1-8 张。往本条目里写 screenshots: 是**无效字段**：
+#   · 上游 4500 条现有条目里，screenshots: 字段使用数为 0
+#   · PR 模板原文："Screenshots go in your own repository now... Nothing to add here"
+#   · 绝对 URL 写在这边只会静默腐烂（已发布的 773 张截图里有 41 张因此变 404），
+#     相对路径则在你自己的仓库里改名就能立刻发现
+# 我们仓库里的 screenshots.json：
+#   ["docs/screenshots/light.jpg", "docs/screenshots/dark.jpg",
+#    "docs/screenshots/model-probe.jpg"]
 #
 # tarball 字段（预编译包，市场会优先给下载链接而不是源码构建命令）：
-#   · 必须是 GitHub Release 托管的 https .tgz —— 列表不会给无法担保来源的链接
-#   · ⚠️ 标签**故意不叫 v1.13.0**：仓库的 release 工作流监听 `tags: ['v*']`，
-#     用 v 开头会触发一次「桌面端应用」的三平台打包，白白跑一轮还发错产物。
-#     这里用 theme-v1.13.0，release 工作流不会匹配。
-#   · URL 钉在具体 tag 上（不是 latest/download），所以文件名带版本号也没问题，
-#     不会像 latest/download 那样在下一版发布时静默 404。
-#   · ⚠️ 提交顺序：先建好这个 Release 并上传 tgz，再提本条目的 PR，
-#     否则 tarball 链接在评审期间是死的。
-#     包在本地已打好：themes/dsh-xingkong-theme/dsh-xingkong-theme-1.13.0.tgz（11.4MB）
+#   · 必须是该仓库 GitHub Release 托管的 https .tgz
+#   · 标签钉在具体版本上（不是 latest/download）—— latest/download 只在请求时
+#     解析 latest、文件名照字面取，文件名带版本号就会在下一版静默 404
+#   · ⚠️ 提交顺序：先建 Release 并上传 tgz，再提本条目的 PR，否则链接在评审期间是死的
 #
 # ---- 以下为可提交内容（复制到目标文件即可）----
-url: https://github.com/sayzwx/DSH-desktop/tree/main/themes/dsh-xingkong-theme
-name: sayzwx/DSH-desktop
+url: https://github.com/sayzwx/dsh-xingkong-theme
+name: sayzwx/dsh-xingkong-theme
 category: theme
-tarball: https://github.com/sayzwx/DSH-desktop/releases/download/theme-v1.13.0/dsh-xingkong-theme-1.13.0.tgz
+tarball: https://github.com/sayzwx/dsh-xingkong-theme/releases/download/v1.13.0/dsh-xingkong-theme-1.13.0.tgz
 description:
   en: "Deep-space theme for the Harness Web GUI: two fully designed light and dark palettes over a seamless cross-dissolve nebula wallpaper, plus a model probe that reports which configured models actually answer and their real context window."
   zh: "深空观测站主题：浅色与深色两套完整设计，衬在无痕交叉溶解的星云动态壁纸之上；附带模型检验面板，告诉你哪些模型真的可用、真实上下文窗口有多大。"
-screenshots:
-  - https://raw.githubusercontent.com/sayzwx/DSH-desktop/HEAD/themes/dsh-xingkong-theme/docs/screenshots/light.jpg
-  - https://raw.githubusercontent.com/sayzwx/DSH-desktop/HEAD/themes/dsh-xingkong-theme/docs/screenshots/dark.jpg
-  - https://raw.githubusercontent.com/sayzwx/DSH-desktop/HEAD/themes/dsh-xingkong-theme/docs/screenshots/model-probe.jpg

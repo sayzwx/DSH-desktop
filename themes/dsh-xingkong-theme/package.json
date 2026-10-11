@@ -36,10 +36,9 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sayzwx/DSH-desktop.git",
-    "directory": "themes/dsh-xingkong-theme"
+    "url": "git+https://github.com/sayzwx/dsh-xingkong-theme.git"
   },
-  "homepage": "https://github.com/sayzwx/DSH-desktop/tree/main/themes/dsh-xingkong-theme#readme",
+  "homepage": "https://github.com/sayzwx/dsh-xingkong-theme#readme",
   "keywords": [
     "dsh",
     "deepseek-harness",
