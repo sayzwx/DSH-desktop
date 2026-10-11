@@ -14,3 +14,6 @@ bundle/assets/*.orig.jpg
 # 临时产物
 bundle/_tmp_*
 bundle/*.bmp
+
+# 打包产物（11MB），发 Release 时手动上传，不入库
+*.tgz

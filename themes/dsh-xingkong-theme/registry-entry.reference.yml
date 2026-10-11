@@ -25,10 +25,22 @@
 #   · 用 HEAD 而非分支名或 tag：HEAD 永远指向默认分支，不会腐烂
 #     ⚠️ 所以主题必须先合进默认分支，否则这几张图会 404。
 #
+# tarball 字段（预编译包，市场会优先给下载链接而不是源码构建命令）：
+#   · 必须是 GitHub Release 托管的 https .tgz —— 列表不会给无法担保来源的链接
+#   · ⚠️ 标签**故意不叫 v1.13.0**：仓库的 release 工作流监听 `tags: ['v*']`，
+#     用 v 开头会触发一次「桌面端应用」的三平台打包，白白跑一轮还发错产物。
+#     这里用 theme-v1.13.0，release 工作流不会匹配。
+#   · URL 钉在具体 tag 上（不是 latest/download），所以文件名带版本号也没问题，
+#     不会像 latest/download 那样在下一版发布时静默 404。
+#   · ⚠️ 提交顺序：先建好这个 Release 并上传 tgz，再提本条目的 PR，
+#     否则 tarball 链接在评审期间是死的。
+#     包在本地已打好：themes/dsh-xingkong-theme/dsh-xingkong-theme-1.13.0.tgz（11.4MB）
+#
 # ---- 以下为可提交内容（复制到目标文件即可）----
 url: https://github.com/sayzwx/DSH-desktop/tree/main/themes/dsh-xingkong-theme
 name: sayzwx/DSH-desktop
 category: theme
+tarball: https://github.com/sayzwx/DSH-desktop/releases/download/theme-v1.13.0/dsh-xingkong-theme-1.13.0.tgz
 description:
   en: "Deep-space theme for the Harness Web GUI: two fully designed light and dark palettes over a seamless cross-dissolve nebula wallpaper, plus a model probe that reports which configured models actually answer and their real context window."
   zh: "深空观测站主题：浅色与深色两套完整设计，衬在无痕交叉溶解的星云动态壁纸之上；附带模型检验面板，告诉你哪些模型真的可用、真实上下文窗口有多大。"

@@ -12,10 +12,17 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "bundle",
+    "bundle/host.js",
+    "bundle/client.js",
+    "bundle/probe-core.js",
+    "bundle/assets/nebula.jpg",
+    "bundle/assets/nebula-light.jpg",
+    "bundle/assets/nebula-web.mp4",
+    "bundle/assets/nebula-light.mp4",
     "cordis.patch.yml",
     "README.md",
-    "README.en.md"
+    "README.en.md",
+    "docs/screenshots/*.jpg"
   ],
   "dsh": {
     "bundle": {

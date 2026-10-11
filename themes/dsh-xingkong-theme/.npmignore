@@ -1,0 +1,17 @@
+# npm 包里不要的东西。
+# 注意：.gitignore 管不了 npm pack —— "files" 字段是白名单，目录一旦列进去
+# 里面所有文件都会进包（实测 .gitignore 里排除的 *.orig.jpg 照样进了 tgz）。
+
+# 调色前的壁纸原件，仅供本机回退
+bundle/assets/*.orig.jpg
+
+# 开发脚本：它们带本机路径，且不属于运行时
+deploy.sh
+verify.sh
+diagnose.cmd
+
+# 本地状态与原始素材
+source/
+.profile-recovery/
+.disabled-registry/
+
