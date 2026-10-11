@@ -2,16 +2,37 @@
 #
 # 目标文件：awesome-dsh-plugin/awesome-dsh-plugin → data/plugins/sayzwx__DSH-desktop.yml
 #   （文件名规则：<owner>__<repo>.yml，owner/repo 与仓库完全一致）
+#
+# ⚠️ 这是一次**更新**而不是新增：沿用同一个文件名（sayzwx__DSH-desktop.yml）与同样的
+# url/name 身份，市场的 key 就是这个文件名。若改成 contributing.md 里 monorepo 子包的
+# <owner>__<repo>--<子目录>.yml 写法，会变成另一条记录，列表里就会出现两条 ——
+# 那不叫「替代」。
+#
 # 规则要点（来自 contributing.md）：
-#   · 一个 PR 只加一个文件；README 由脚本生成，**不要手工编辑**
+#   · 一个 PR 只改一个文件；README 由脚本生成，**不要手工编辑**
 #   · category 必须用 theme（会自动进 dsh-market 的「主题 Tab」，可一键安装/切换/卸载）
 #   · 只有 description.en 必填；zh 可选（写不了维护者会补）
 #   · ⚠️ 描述里含 ": " 必须加引号，否则 YAML 会把冒号当键值分隔
+#   · 描述只说功能、不带营销词；**必须属实**（评审会对着代码核）
+#   · 仓库需声明 dsh.bundle（本主题有），并加 dsh-plugin topic
+#
+# screenshots 字段（依据 market 前端 client.js 的实际消费方式）：
+#   · 卡片上的缩略图**只认这个字段**；没有它，卡片会显示「正在查找预览…」
+#   · README 里的图片只会出现在安装详情弹窗里（只有弹窗才会去抓 README）
+#   · 必须 https，且域名在白名单内：raw.githubusercontent.com /
+#     user-images.githubusercontent.com / camo.githubusercontent.com / github.com
+#   · .svg 会被丢弃（那是 logo / 徽章的形状），最多 6 张
+#   · 用 HEAD 而非分支名或 tag：HEAD 永远指向默认分支，不会腐烂
+#     ⚠️ 所以主题必须先合进默认分支，否则这几张图会 404。
 #
 # ---- 以下为可提交内容（复制到目标文件即可）----
 url: https://github.com/sayzwx/DSH-desktop/tree/main/themes/dsh-xingkong-theme
 name: sayzwx/DSH-desktop
 category: theme
 description:
-  en: "Nebula Core: a deep-space observatory theme with Void-Black layers, aurora-cyan accents, and full coverage of the official 110 semantic tokens."
-  zh: "Nebula Core 星空主题：深空黑层次与极光青强调，完整覆盖官方 110 个语义 token（含侧边栏）。"
+  en: "Deep-space theme for the Harness Web GUI: two fully designed light and dark palettes over a seamless cross-dissolve nebula wallpaper, plus a model probe that reports which configured models actually answer and their real context window."
+  zh: "深空观测站主题：浅色与深色两套完整设计，衬在无痕交叉溶解的星云动态壁纸之上；附带模型检验面板，告诉你哪些模型真的可用、真实上下文窗口有多大。"
+screenshots:
+  - https://raw.githubusercontent.com/sayzwx/DSH-desktop/HEAD/themes/dsh-xingkong-theme/docs/screenshots/light.jpg
+  - https://raw.githubusercontent.com/sayzwx/DSH-desktop/HEAD/themes/dsh-xingkong-theme/docs/screenshots/dark.jpg
+  - https://raw.githubusercontent.com/sayzwx/DSH-desktop/HEAD/themes/dsh-xingkong-theme/docs/screenshots/model-probe.jpg
